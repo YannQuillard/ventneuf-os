@@ -29,7 +29,7 @@ packages/mcp-server      Local MCP and future runner bridge
 
 Requirements:
 
-- Node.js 22 or newer;
+- Node.js 24 LTS;
 - npm 11 or newer.
 
 ```bash
