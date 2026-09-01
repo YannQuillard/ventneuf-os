@@ -3,24 +3,38 @@ import type { Database } from "./client.js";
 import { conversations, messages } from "./schema.js";
 
 export class ConversationRepository {
-  constructor(private readonly database: Database) {}
+  constructor(
+    private readonly database: Database,
+    private readonly organizationId: string,
+  ) {}
 
   async create(input: {
-    organizationId: string;
     title?: string;
   } & ({ ownerMemberId: string; channelId?: never } | { channelId: string; ownerMemberId?: never })) {
-    const [conversation] = await this.database.insert(conversations).values(input).returning();
-    if (!conversation) throw new Error("Failed to create the conversation.");
-    return conversation;
+    return this.database.withOrganization(this.organizationId, async (transaction) => {
+      const [conversation] = await transaction
+        .insert(conversations)
+        .values({ ...input, organizationId: this.organizationId })
+        .returning();
+      if (!conversation) throw new Error("Failed to create the conversation.");
+      return conversation;
+    });
   }
 
-  async getAuthorized(conversationId: string, organizationId: string) {
-    const [conversation] = await this.database
-      .select()
-      .from(conversations)
-      .where(and(eq(conversations.id, conversationId), eq(conversations.organizationId, organizationId)))
-      .limit(1);
-    return conversation;
+  getAuthorized(conversationId: string) {
+    return this.database.withOrganization(this.organizationId, async (transaction) => {
+      const [conversation] = await transaction
+        .select()
+        .from(conversations)
+        .where(
+          and(
+            eq(conversations.id, conversationId),
+            eq(conversations.organizationId, this.organizationId),
+          ),
+        )
+        .limit(1);
+      return conversation;
+    });
   }
 
   async appendMessage(input: {
@@ -30,23 +44,56 @@ export class ConversationRepository {
     content: string;
     metadata?: Record<string, unknown>;
   }) {
-    const [message] = await this.database.insert(messages).values(input).returning();
-    if (!message) throw new Error("Failed to append the message.");
-    return message;
+    return this.database.withOrganization(this.organizationId, async (transaction) => {
+      const [conversation] = await transaction
+        .select({ id: conversations.id })
+        .from(conversations)
+        .where(
+          and(
+            eq(conversations.id, input.conversationId),
+            eq(conversations.organizationId, this.organizationId),
+          ),
+        )
+        .limit(1);
+      if (!conversation) throw new Error("Conversation not found or access denied.");
+
+      const [message] = await transaction
+        .insert(messages)
+        .values({ ...input, organizationId: this.organizationId })
+        .returning();
+      if (!message) throw new Error("Failed to append the message.");
+      return message;
+    });
   }
 
   listMessages(conversationId: string) {
-    return this.database
-      .select()
-      .from(messages)
-      .where(eq(messages.conversationId, conversationId))
-      .orderBy(asc(messages.createdAt), asc(messages.id));
+    return this.database.withOrganization(this.organizationId, (transaction) =>
+      transaction
+        .select()
+        .from(messages)
+        .where(
+          and(
+            eq(messages.organizationId, this.organizationId),
+            eq(messages.conversationId, conversationId),
+          ),
+        )
+        .orderBy(asc(messages.createdAt), asc(messages.id)),
+    );
   }
 
-  async setHermesContext(conversationId: string, contextId: string) {
-    await this.database
-      .update(conversations)
-      .set({ hermesContextId: contextId, updatedAt: new Date() })
-      .where(eq(conversations.id, conversationId));
+  setHermesContext(conversationId: string, contextId: string) {
+    return this.database.withOrganization(this.organizationId, async (transaction) => {
+      const updated = await transaction
+        .update(conversations)
+        .set({ hermesContextId: contextId, updatedAt: new Date() })
+        .where(
+          and(
+            eq(conversations.id, conversationId),
+            eq(conversations.organizationId, this.organizationId),
+          ),
+        )
+        .returning({ id: conversations.id });
+      if (updated.length === 0) throw new Error("Conversation not found or access denied.");
+    });
   }
 }
