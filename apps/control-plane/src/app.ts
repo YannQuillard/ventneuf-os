@@ -2,9 +2,15 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import type { NextFunction, Request, Response } from "express";
 import { bearerToken, type TokenVerifier } from "./authentication.js";
+import type { HermesClient } from "./hermes.js";
 import { createRemoteMcpServer } from "./mcp.js";
 
-export function createApp(verifier: TokenVerifier) {
+export interface AppServices {
+  verifier: TokenVerifier;
+  hermes: HermesClient;
+}
+
+export function createApp({ verifier, hermes }: AppServices) {
   const app = createMcpExpressApp({ host: "127.0.0.1" });
 
   app.get("/health", (_request, response) => {
@@ -21,7 +27,7 @@ export function createApp(verifier: TokenVerifier) {
         return;
       }
 
-      const server = createRemoteMcpServer(context);
+      const server = createRemoteMcpServer(context, { hermes });
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
         enableJsonResponse: true,
