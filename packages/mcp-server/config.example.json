@@ -1,0 +1,9 @@
+{
+  "identity": "member-name",
+  "vaults": {
+    "shared": "/absolute/path/to/shared/vault",
+    "personal": "/absolute/path/to/personal/vault"
+  },
+  "missionsFile": "/absolute/path/to/private/missions.json",
+  "hermesA2aUrl": "http://127.0.0.1:9900"
+}
