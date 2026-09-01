@@ -14,7 +14,7 @@
     "@modelcontextprotocol/sdk": "1.30.0",
     "@ventneuf/domain": "0.1.0",
     "express": "^5.1.0",
-    "zod": "^3.25.76"
+    "zod": "^4.5.2"
   },
   "devDependencies": {
     "@types/express": "^5.0.3",
