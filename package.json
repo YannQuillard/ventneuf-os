@@ -1,6 +1,9 @@
 {
   "name": "ventneuf-os",
   "private": true,
+  "engines": {
+    "node": ">=24 <25"
+  },
   "workspaces": [
     "apps/*",
     "packages/*"
