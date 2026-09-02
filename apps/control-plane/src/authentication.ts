@@ -1,10 +1,29 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { Request } from "express";
+import { CognitoJwtVerifier } from "aws-jwt-verify";
 import type { AuthorizationContext, Capability } from "@ventneuf/domain";
 
 export interface TokenVerifier {
   verify(token: string): Promise<AuthorizationContext | undefined>;
 }
+
+interface CognitoAccessClaims {
+  sub: string;
+  exp: number;
+}
+
+export interface CognitoClaimsVerifier {
+  verify(token: string): Promise<CognitoAccessClaims>;
+}
+
+const authenticatedCapabilities: Capability[] = [
+  "system:identity:read",
+  "knowledge:shared:read",
+  "knowledge:personal:read",
+  "mission:read",
+  "mission:progress:write",
+  "hermes:ask",
+];
 
 function secureEqual(left: string, right: string): boolean {
   const leftHash = createHash("sha256").update(left).digest();
@@ -17,23 +36,39 @@ export class DevelopmentTokenVerifier implements TokenVerifier {
 
   async verify(token: string): Promise<AuthorizationContext | undefined> {
     if (!secureEqual(token, this.expectedToken)) return undefined;
-    const capabilities: Capability[] = [
-      "system:identity:read",
-      "knowledge:shared:read",
-      "knowledge:personal:read",
-      "mission:read",
-      "mission:progress:write",
-      "hermes:ask",
-    ];
     return {
       organizationId: "ventneuf",
       principalId: "development-user",
       principalType: "user",
       memberId: "development-user",
       projectIds: [],
-      capabilities,
+      capabilities: authenticatedCapabilities,
       expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
     };
+  }
+}
+
+export class CognitoTokenVerifier implements TokenVerifier {
+  constructor(
+    private readonly verifier: CognitoClaimsVerifier,
+    private readonly organizationId: string,
+  ) {}
+
+  async verify(token: string): Promise<AuthorizationContext | undefined> {
+    try {
+      const claims = await this.verifier.verify(token);
+      return {
+        organizationId: this.organizationId,
+        principalId: claims.sub,
+        principalType: "user",
+        memberId: claims.sub,
+        projectIds: [],
+        capabilities: authenticatedCapabilities,
+        expiresAt: new Date(claims.exp * 1000).toISOString(),
+      };
+    } catch {
+      return undefined;
+    }
   }
 }
 
@@ -46,7 +81,21 @@ export function bearerToken(request: Pick<Request, "headers">): string | undefin
 
 export function createTokenVerifier(env: NodeJS.ProcessEnv = process.env): TokenVerifier {
   if (env.NODE_ENV === "production") {
-    throw new Error("A production OAuth token verifier has not been configured yet.");
+    const userPoolId = env.COGNITO_USER_POOL_ID;
+    const clientId = env.COGNITO_CLIENT_ID;
+    const organizationId = env.VENTNEUF_ORGANIZATION_ID;
+    if (!userPoolId || !clientId || !organizationId) {
+      throw new Error(
+        "COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID, and VENTNEUF_ORGANIZATION_ID are required in production.",
+      );
+    }
+    const verifier = CognitoJwtVerifier.create({
+      userPoolId,
+      clientId,
+      tokenUse: "access",
+      graceSeconds: 0,
+    });
+    return new CognitoTokenVerifier(verifier, organizationId);
   }
   if (!env.VENTNEUF_DEV_TOKEN) {
     throw new Error("VENTNEUF_DEV_TOKEN is required outside production.");
