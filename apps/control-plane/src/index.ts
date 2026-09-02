@@ -6,7 +6,7 @@ import { createHermesClient } from "./hermes.js";
 const port = Number.parseInt(process.env.PORT ?? "8787", 10);
 const host = process.env.HOST ?? "127.0.0.1";
 const server = createServer(
-  createApp({ verifier: createTokenVerifier(), hermes: createHermesClient() }),
+  createApp({ verifier: createTokenVerifier(), hermes: createHermesClient(), host }),
 );
 
 server.listen(port, host, () => {
