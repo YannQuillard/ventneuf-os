@@ -8,10 +8,11 @@ import { createRemoteMcpServer } from "./mcp.js";
 export interface AppServices {
   verifier: TokenVerifier;
   hermes: HermesClient;
+  host?: string;
 }
 
-export function createApp({ verifier, hermes }: AppServices) {
-  const app = createMcpExpressApp({ host: "127.0.0.1" });
+export function createApp({ verifier, hermes, host = "127.0.0.1" }: AppServices) {
+  const app = createMcpExpressApp({ host });
 
   app.get("/health", (_request, response) => {
     response.json({ service: "ventneuf-os-control-plane", status: "ok" });
