@@ -2,12 +2,21 @@ import { createServer } from "node:http";
 import { createApp } from "./app.js";
 import { createTokenVerifier } from "./authentication.js";
 import { createHermesClient } from "./hermes.js";
+import { createConversationRuntime } from "./runtime.js";
 
 const port = Number.parseInt(process.env.PORT ?? "8787", 10);
 const host = process.env.HOST ?? "127.0.0.1";
-const server = createServer(
-  createApp({ verifier: createTokenVerifier(), hermes: createHermesClient(), host }),
-);
+const hermes = createHermesClient();
+const conversations = await createConversationRuntime(hermes);
+const workerController = new AbortController();
+const server = createServer(createApp({
+  verifier: createTokenVerifier(),
+  hermes,
+  conversations,
+  host,
+}));
+
+void conversations.worker.run(workerController.signal);
 
 server.listen(port, host, () => {
   console.log(`ventneuf.os control plane listening on http://${host}:${port}`);
@@ -15,11 +24,13 @@ server.listen(port, host, () => {
 
 function shutdown(signal: string) {
   console.log(`Received ${signal}; shutting down.`);
+  workerController.abort();
   server.close((error) => {
     if (error) {
       console.error(error);
       process.exitCode = 1;
     }
+    void conversations.database.close();
   });
 }
 

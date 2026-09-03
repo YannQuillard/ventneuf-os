@@ -12,7 +12,9 @@ RUN npm ci
 
 COPY apps/control-plane apps/control-plane
 COPY packages/domain packages/domain
+COPY packages/database packages/database
 RUN npm run build --workspace @ventneuf/domain \
+  && npm run build --workspace @ventneuf/database \
   && npm run build --workspace @ventneuf/control-plane \
   && npm prune --omit=dev --workspaces
 
@@ -28,6 +30,7 @@ COPY --from=build --chown=node:node /app/package.json /app/package-lock.json ./
 COPY --from=build --chown=node:node /app/node_modules node_modules
 COPY --from=build --chown=node:node /app/apps/control-plane apps/control-plane
 COPY --from=build --chown=node:node /app/packages/domain packages/domain
+COPY --from=build --chown=node:node /app/packages/database packages/database
 
 USER node
 
