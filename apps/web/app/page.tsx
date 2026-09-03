@@ -1,4 +1,5 @@
 import { readSession } from "../lib/auth/session";
+import { HermesConversation } from "./conversation";
 
 const channels = ["ventneuf-os", "ampel", "brandstamp"];
 
@@ -81,44 +82,7 @@ export default async function Home() {
           </div>
         </header>
 
-        <div className="message-stream">
-          <div className="day-divider"><span>Today</span></div>
-          <article className="message hermes-message">
-            <div className="message-avatar">H</div>
-            <div>
-              <div className="message-meta">
-                <strong>Hermes</strong>
-                <span>Control plane</span>
-              </div>
-              <p>
-                The workspace foundation is ready. The next connection will route this
-                conversation through the authenticated ventneuf.os control plane to my private
-                A2A endpoint in the private control plane.
-              </p>
-              <div className="capability-row">
-                <span>Knowledge</span>
-                <span>Missions</span>
-                <span>Devices</span>
-                <span>Connectors</span>
-              </div>
-            </div>
-          </article>
-        </div>
-
-        <div className="composer-wrap">
-          <form className="composer">
-            <textarea
-              aria-label="Message Hermes"
-              placeholder="Ask Hermes to investigate, plan, or launch a mission…"
-              rows={2}
-              disabled
-            />
-            <div className="composer-footer">
-              <span>Authentication and A2A connection are the next implementation step.</span>
-              <button type="submit" disabled>Send</button>
-            </div>
-          </form>
-        </div>
+        <HermesConversation userInitial={initial} />
       </section>
     </main>
   );
