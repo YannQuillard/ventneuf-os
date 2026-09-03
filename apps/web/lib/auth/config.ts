@@ -4,7 +4,10 @@ export interface AuthConfig {
   logoutUri: string;
   redirectUri: string;
   sessionSecret: string;
+  sessionMaxAgeSeconds: number;
 }
+
+const DEFAULT_SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 
 function required(name: string): string {
   const value = process.env[name]?.trim();
@@ -36,5 +39,6 @@ export function getAuthConfig(): AuthConfig {
     logoutUri: required("AUTH_LOGOUT_URI"),
     redirectUri: required("AUTH_REDIRECT_URI"),
     sessionSecret,
+    sessionMaxAgeSeconds: DEFAULT_SESSION_MAX_AGE_SECONDS,
   };
 }

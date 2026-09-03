@@ -4,6 +4,7 @@ import { getAuthConfig } from "./config";
 
 export const SESSION_COOKIE = "ventneuf_session";
 export const ACCESS_TOKEN_COOKIE = "ventneuf_access_token";
+export const REFRESH_TOKEN_COOKIE = "ventneuf_refresh_token";
 
 export interface UserSession {
   sub: string;

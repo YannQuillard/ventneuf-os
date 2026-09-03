@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { getAuthConfig } from "../../../lib/auth/config";
-import { ACCESS_TOKEN_COOKIE, SESSION_COOKIE } from "../../../lib/auth/session";
+import {
+  ACCESS_TOKEN_COOKIE,
+  REFRESH_TOKEN_COOKIE,
+  SESSION_COOKIE,
+} from "../../../lib/auth/session";
 
 export async function GET() {
   const config = getAuthConfig();
@@ -11,5 +15,6 @@ export async function GET() {
   const response = NextResponse.redirect(logoutUrl);
   response.cookies.delete(SESSION_COOKIE);
   response.cookies.delete(ACCESS_TOKEN_COOKIE);
+  response.cookies.delete(REFRESH_TOKEN_COOKIE);
   return response;
 }
