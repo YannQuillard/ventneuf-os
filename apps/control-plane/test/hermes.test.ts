@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { A2AHermesClient, StaticTokenProvider } from "../src/hermes.js";
+import {
+  A2AHermesClient,
+  HermesRequestTimeoutError,
+  StaticTokenProvider,
+} from "../src/hermes.js";
 
 test("sends an authenticated A2A message and extracts the final artifact", async () => {
   let request: RequestInit | undefined;
@@ -48,4 +52,20 @@ test("rejects an A2A JSON-RPC error", async () => {
   );
 
   await assert.rejects(() => client.ask({ message: "test" }), /unauthorized/);
+});
+
+test("classifies an A2A client timeout as non-retryable", async () => {
+  const fetchMock = (async () => {
+    throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+  }) as typeof fetch;
+  const client = new A2AHermesClient(
+    "http://127.0.0.1:9900/",
+    new StaticTokenProvider("private-token"),
+    fetchMock,
+  );
+
+  await assert.rejects(
+    () => client.ask({ message: "test" }),
+    HermesRequestTimeoutError,
+  );
 });
