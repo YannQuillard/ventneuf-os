@@ -7,7 +7,7 @@ import {
 } from "@aws-sdk/client-sqs";
 import { GetSecretValueCommand, SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
 import { ConversationRuntimeRepository, createDatabase, type Database } from "@ventneuf/database";
-import type { HermesClient } from "./hermes.js";
+import { HermesRequestTimeoutError, type HermesClient } from "./hermes.js";
 
 interface DatabaseCredentials {
   username?: string;
@@ -197,7 +197,14 @@ export class MissionWorker {
             await this.queue.delete(message.ReceiptHandle);
           } catch (error) {
             console.error("Mission processing failed.", error);
-            await this.queue.release(message.ReceiptHandle);
+            if (error instanceof HermesRequestTimeoutError) {
+              await this.queue.delete(message.ReceiptHandle);
+              logMission("mission.retry_suppressed", {
+                reason: "a2a_timeout_may_still_be_running",
+              });
+            } else {
+              await this.queue.release(message.ReceiptHandle);
+            }
           }
         }
       } catch (error) {

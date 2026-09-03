@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ConversationRuntimeRepository } from "@ventneuf/database";
+import { HermesRequestTimeoutError } from "../src/hermes.js";
 import { MissionWorker, type MissionQueue } from "../src/runtime.js";
 
 function repository(overrides: Record<string, unknown> = {}) {
@@ -90,4 +91,36 @@ test("marks a mission failed before allowing SQS to retry it", async () => {
     /Hermes unavailable/,
   );
   assert.equal(failure, "Hermes unavailable");
+});
+
+test("deletes a timed-out mission instead of executing it twice", async () => {
+  const abort = new AbortController();
+  let deleted = 0;
+  let released = 0;
+  const queue = {
+    receive: async () => ({
+      Messages: [{
+        Body: JSON.stringify({ organizationId: "organization-1", missionId: "mission-1" }),
+        ReceiptHandle: "receipt-1",
+      }],
+    }),
+    delete: async () => {
+      deleted += 1;
+      abort.abort();
+    },
+    release: async () => {
+      released += 1;
+      abort.abort();
+    },
+  } as unknown as MissionQueue;
+  const worker = new MissionWorker(
+    repository(),
+    queue,
+    { ask: async () => { throw new HermesRequestTimeoutError(); } },
+  );
+
+  await worker.run(abort.signal);
+
+  assert.equal(deleted, 1);
+  assert.equal(released, 0);
 });

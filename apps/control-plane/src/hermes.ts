@@ -24,6 +24,13 @@ export interface TokenProvider {
   getToken(): Promise<string>;
 }
 
+export class HermesRequestTimeoutError extends Error {
+  constructor(cause?: unknown) {
+    super("Hermes did not reply before the A2A timeout.", { cause });
+    this.name = "HermesRequestTimeoutError";
+  }
+}
+
 export class StaticTokenProvider implements TokenProvider {
   constructor(private readonly token: string) {}
 
@@ -95,28 +102,36 @@ export class A2AHermesClient implements HermesClient {
 
   async ask(input: AskHermesInput): Promise<HermesReply> {
     const contextId = input.contextId ?? randomUUID();
-    const response = await this.fetchImplementation(this.url, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${await this.tokens.getToken()}`,
-        "content-type": "application/json",
-        "a2a-version": "1.0",
-      },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: randomUUID(),
-        method: "SendMessage",
-        params: {
-          message: {
-            role: "ROLE_USER",
-            parts: [{ text: input.message, mediaType: "text/plain" }],
-            messageId: randomUUID(),
-            contextId,
-          },
+    let response: Response;
+    try {
+      response = await this.fetchImplementation(this.url, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${await this.tokens.getToken()}`,
+          "content-type": "application/json",
+          "a2a-version": "1.0",
         },
-      }),
-      signal: AbortSignal.timeout(120_000),
-    });
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: randomUUID(),
+          method: "SendMessage",
+          params: {
+            message: {
+              role: "ROLE_USER",
+              parts: [{ text: input.message, mediaType: "text/plain" }],
+              messageId: randomUUID(),
+              contextId,
+            },
+          },
+        }),
+        signal: AbortSignal.timeout(120_000),
+      });
+    } catch (error) {
+      if (error instanceof Error && error.name === "TimeoutError") {
+        throw new HermesRequestTimeoutError(error);
+      }
+      throw error;
+    }
     if (!response.ok) throw new Error(`Hermes A2A returned HTTP ${response.status}.`);
 
     const payload = (await response.json()) as A2AResponse;
