@@ -190,6 +190,7 @@ export const missions = pgTable(
     ...timestamps,
   },
   (table) => [
+    uniqueIndex("missions_organization_id_unique").on(table.organizationId, table.id),
     foreignKey({
       columns: [table.organizationId, table.conversationId],
       foreignColumns: [conversations.organizationId, conversations.id],
@@ -206,5 +207,26 @@ export const missions = pgTable(
       name: "missions_organization_device_fk",
     }),
     index("missions_status_idx").on(table.organizationId, table.status),
+  ],
+);
+
+export const missionEvents = pgTable(
+  "mission_events",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    missionId: uuid("mission_id").notNull(),
+    type: text("type").notNull(),
+    payload: jsonb("payload").$type<Record<string, unknown>>().default({}).notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.organizationId, table.missionId],
+      foreignColumns: [missions.organizationId, missions.id],
+      name: "mission_events_organization_mission_fk",
+    }),
+    index("mission_events_mission_created_idx").on(table.missionId, table.createdAt, table.id),
   ],
 );

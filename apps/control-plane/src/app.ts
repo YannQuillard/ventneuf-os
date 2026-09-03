@@ -46,6 +46,9 @@ export function createApp({ verifier, hermes, conversations, host = "127.0.0.1" 
         conversations.repository.listPrivateMessages(query),
         conversations.repository.getLatestPrivateMission(query),
       ]);
+      const events = mission
+        ? await conversations.repository.listMissionEvents(context.organizationId, mission.id)
+        : [];
       const missionContext = mission?.context;
       response.json({
         messages: items,
@@ -57,7 +60,54 @@ export function createApp({ verifier, hermes, conversations, host = "127.0.0.1" 
             : {},
           failure: typeof missionContext?.failure === "string" ? missionContext.failure : undefined,
         } : null,
+        events,
       });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/conversations/hermes/events", async (request: Request, response: Response, next: NextFunction) => {
+    try {
+      const context = await authenticate(request, response);
+      if (!context) return;
+      assertAuthorized(context, "hermes:ask");
+      if (!conversations) return void response.status(503).json({ error: "conversation_runtime_unavailable" });
+      response.setHeader("content-type", "text/event-stream");
+      response.setHeader("cache-control", "no-cache, no-transform");
+      response.setHeader("connection", "keep-alive");
+      response.flushHeaders();
+      let closed = false;
+      response.on("close", () => { closed = true; });
+      let previous = "";
+      const deadline = Date.now() + 25_000;
+      while (!closed && Date.now() < deadline) {
+        const mission = await conversations.repository.getLatestPrivateMission({
+          organizationId: context.organizationId,
+          externalSubject: context.principalId,
+        });
+        const events = mission
+          ? await conversations.repository.listMissionEvents(context.organizationId, mission.id)
+          : [];
+        const missionContext = mission?.context;
+        const snapshot = JSON.stringify({
+          mission: mission ? {
+            id: mission.id,
+            status: mission.status,
+            timing: missionContext && typeof missionContext.timing === "object"
+              ? missionContext.timing
+              : {},
+            failure: typeof missionContext?.failure === "string" ? missionContext.failure : undefined,
+          } : null,
+          events,
+        });
+        if (snapshot !== previous) {
+          response.write(`event: snapshot\ndata: ${snapshot}\n\n`);
+          previous = snapshot;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+      if (!closed) response.end();
     } catch (error) {
       next(error);
     }

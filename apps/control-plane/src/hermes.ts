@@ -10,6 +10,15 @@ export interface AskHermesInput {
   runId?: string;
   sessionKey?: string;
   onRunStarted?: (runId: string) => Promise<void>;
+  idempotencyKey?: string;
+  onEvent?: (event: HermesRunEvent) => Promise<void>;
+}
+
+export interface HermesRunEvent {
+  event: string;
+  run_id?: string;
+  timestamp?: number;
+  [key: string]: unknown;
 }
 
 export interface HermesReply {
@@ -125,10 +134,13 @@ export class RunsHermesClient implements HermesClient {
           method: "POST",
           body: JSON.stringify({ input: input.message, session_id: contextId }),
           signal: AbortSignal.timeout(10_000),
-        }, input.sessionKey);
+        }, input.sessionKey, input.idempotencyKey);
       } catch (error) {
         if (error instanceof Error && error.name === "TimeoutError") {
-          throw new HermesRequestTimeoutError(error);
+          throw new Error(
+            "Hermes Runs API submission timed out and will be recovered with its idempotency key.",
+            { cause: error },
+          );
         }
         throw error;
       }
@@ -138,6 +150,10 @@ export class RunsHermesClient implements HermesClient {
       runId = run.run_id;
       await input.onRunStarted?.(runId);
     }
+
+    const eventStream = input.onEvent
+      ? this.streamEvents(runId, input.onEvent, input.sessionKey).catch(() => undefined)
+      : Promise.resolve();
 
     const deadline = Date.now() + this.maxWaitMs;
     while (Date.now() < deadline) {
@@ -150,6 +166,7 @@ export class RunsHermesClient implements HermesClient {
       const run = await response.json() as HermesRun;
       const status = run.status?.toLowerCase();
       if (status === "completed") {
+        await eventStream;
         if (!run.output) throw new Error("Hermes Runs API completed without output.");
         return {
           taskId: runId,
@@ -162,7 +179,9 @@ export class RunsHermesClient implements HermesClient {
       if (status === "failed") {
         throw new Error(`Hermes run failed: ${errorMessage(run.error) ?? "unknown failure"}`);
       }
-      if (status === "cancelled") throw new HermesRunCancelledError();
+      if (status === "cancelled" || status === "interrupted") {
+        throw new HermesRunCancelledError();
+      }
       await new Promise((resolve) => setTimeout(resolve, this.pollIntervalMs));
     }
     throw new Error("Hermes run is still active after the polling window.");
@@ -177,12 +196,56 @@ export class RunsHermesClient implements HermesClient {
     await this.assertOk(response, "stop");
   }
 
-  private async request(path: string, init: RequestInit, sessionKey?: string): Promise<Response> {
+  private async request(
+    path: string,
+    init: RequestInit,
+    sessionKey?: string,
+    idempotencyKey?: string,
+  ): Promise<Response> {
     const headers = new Headers(init.headers);
     headers.set("authorization", `Bearer ${await this.tokens.getToken()}`);
     headers.set("content-type", "application/json");
     if (sessionKey) headers.set("x-hermes-session-key", sessionKey);
+    if (idempotencyKey) headers.set("idempotency-key", idempotencyKey);
     return this.fetchImplementation(`${this.baseUrl}${path}`, { ...init, headers });
+  }
+
+  private async streamEvents(
+    runId: string,
+    onEvent: (event: HermesRunEvent) => Promise<void>,
+    sessionKey?: string,
+  ): Promise<void> {
+    const response = await this.request(
+      `/v1/runs/${encodeURIComponent(runId)}/events`,
+      { headers: { accept: "text/event-stream" } },
+      sessionKey,
+    );
+    await this.assertOk(response, "stream");
+    if (!response.body) return;
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      const frames = buffer.split("\n\n");
+      buffer = frames.pop() ?? "";
+      for (const frame of frames) {
+        const data = frame.split("\n")
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).trim())
+          .join("\n");
+        if (!data || data === "[DONE]") continue;
+        try {
+          const event = JSON.parse(data) as HermesRunEvent;
+          if (typeof event.event === "string") await onEvent(event);
+        } catch (error) {
+          if (error instanceof SyntaxError) continue;
+          throw error;
+        }
+      }
+      if (done) break;
+    }
   }
 
   private async assertOk(response: Response, operation: string): Promise<void> {
