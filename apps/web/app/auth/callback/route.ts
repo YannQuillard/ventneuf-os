@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAuthConfig } from "../../../lib/auth/config";
 import {
   ACCESS_TOKEN_COOKIE,
+  REFRESH_TOKEN_COOKIE,
   SESSION_COOKIE,
   authCookieOptions,
   encodeSession,
@@ -12,6 +13,7 @@ import { OAUTH_STATE_COOKIE, PKCE_VERIFIER_COOKIE } from "../login/route";
 interface TokenResponse {
   access_token?: string;
   expires_in?: number;
+  refresh_token?: string;
 }
 
 interface UserInfo {
@@ -56,7 +58,7 @@ export async function GET(request: NextRequest) {
 
   const tokens = (await tokenResponse.json()) as TokenResponse;
 
-  if (!tokenResponse.ok || !tokens.access_token || !tokens.expires_in) {
+  if (!tokenResponse.ok || !tokens.access_token || !tokens.refresh_token || !tokens.expires_in) {
     const response = NextResponse.json({ error: "Cognito rejected the authorization code." }, { status: 401 });
     clearTransientCookies(response);
     return response;
@@ -74,14 +76,19 @@ export async function GET(request: NextRequest) {
     return response;
   }
 
-  const expiresAt = Math.floor(Date.now() / 1000) + tokens.expires_in;
+  const expiresAt = Math.floor(Date.now() / 1000) + config.sessionMaxAgeSeconds;
   const response = NextResponse.redirect(new URL("/", config.redirectUri));
   response.cookies.set(
     SESSION_COOKIE,
     encodeSession({ sub: userInfo.sub, email: userInfo.email, expiresAt }, config.sessionSecret),
-    authCookieOptions(tokens.expires_in),
+    authCookieOptions(config.sessionMaxAgeSeconds),
   );
   response.cookies.set(ACCESS_TOKEN_COOKIE, tokens.access_token, authCookieOptions(tokens.expires_in));
+  response.cookies.set(
+    REFRESH_TOKEN_COOKIE,
+    tokens.refresh_token,
+    authCookieOptions(config.sessionMaxAgeSeconds),
+  );
   clearTransientCookies(response);
   return response;
 }

@@ -6,6 +6,7 @@
     "build": "next build",
     "dev": "next dev",
     "start": "next start",
+    "test": "node --test --import tsx 'test/**/*.test.ts'",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
