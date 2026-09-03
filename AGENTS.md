@@ -23,3 +23,13 @@ Use English exclusively in code, comments, tests, commit messages, user-facing p
 ## Quality
 
 Run `npm run typecheck`, `npm test`, and `npm run build` before handing off a change.
+
+<!-- ASTRYX:START -->
+## Astryx
+
+- Run `npm run astryx -- help`, `npm run astryx -- docs principles --dense`, and `npm run astryx -- docs tokens --dense` before Astryx UI work.
+- Run `npm run astryx -- component <name> --dense` before using or modifying an Astryx component.
+- Prefer Astryx components and semantic tokens over raw equivalents and hard-coded visual values.
+- Keep dense navigation as rows rather than card collections.
+- Do not run `astryx init`; preserve these repository instructions and integrate required guidance manually.
+<!-- ASTRYX:END -->

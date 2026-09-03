@@ -1,6 +1,17 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { Avatar } from "@astryxdesign/core/Avatar";
+import { Button } from "@astryxdesign/core/Button";
+import {
+  ChatComposer,
+  ChatLayout,
+  ChatMessage,
+  ChatMessageBubble,
+  ChatMessageList,
+  ChatMessageMetadata,
+} from "@astryxdesign/core/Chat";
+import { Markdown } from "@astryxdesign/core/Markdown";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 interface Message {
   id: string;
@@ -56,9 +67,8 @@ export function HermesConversation({ userInitial }: { userInitial: string }) {
     streamEnd.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [awaitingReply, messages]);
 
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    const message = content.trim();
+  async function submit(value: string) {
+    const message = value.trim();
     if (!message || sending) return;
     setSending(true);
     setError(undefined);
@@ -84,63 +94,68 @@ export function HermesConversation({ userInitial }: { userInitial: string }) {
   }
 
   return (
-    <>
-      <div className="message-stream" aria-live="polite">
-        <div className="day-divider"><span>Today</span></div>
+    <ChatLayout
+      className="conversation-chat"
+      composer={(
+        <ChatComposer
+          value={content}
+          onChange={setContent}
+          onSubmit={(value) => void submit(value)}
+          placeholder="Message Hermes"
+          isDisabled={sending}
+          isStopShown={awaitingReply}
+          footerActions={(
+            <span className={error ? "composer-error" : "composer-status"}>
+              {error ?? (awaitingReply ? "Hermes is working…" : "Private conversation")}
+            </span>
+          )}
+          status={error ? { type: "error", message: error } : undefined}
+        />
+      )}
+      emptyState={null}
+    >
+      <ChatMessageList align="top" density="spacious" isStreaming={awaitingReply}>
         {messages.length === 0 ? (
-          <article className="message hermes-message">
-            <div className="message-avatar">H</div>
-            <div>
-              <div className="message-meta"><strong>Hermes</strong><span>Control plane</span></div>
-              <p>The workspace is connected. What would you like me to work on?</p>
-            </div>
-          </article>
+          <ChatMessage sender="assistant" avatar={<Avatar name="Hermes" size="md" />} name="Hermes">
+            <ChatMessageBubble variant="ghost" width="100%">
+              <Markdown contentWidth={720}>The workspace is connected. What would you like me to work on?</Markdown>
+            </ChatMessageBubble>
+          </ChatMessage>
         ) : messages.map((message) => (
-          <article className={`message ${message.role}-message`} key={message.id}>
-            <div className="message-avatar">{message.role === "assistant" ? "H" : userInitial}</div>
-            <div>
-              <div className="message-meta">
-                <strong>{message.role === "assistant" ? "Hermes" : "You"}</strong>
-                <span>{new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
-              </div>
-              <p>{message.content}</p>
-            </div>
-          </article>
+          <ChatMessage
+            sender={message.role === "assistant" ? "assistant" : "user"}
+            avatar={message.role === "assistant" ? <Avatar name="Hermes" size="md" /> : <Avatar name={userInitial} tooltip="You" size="md" />}
+            name={message.role === "assistant" ? "Hermes" : "You"}
+            key={message.id}
+          >
+            <ChatMessageBubble variant={message.role === "assistant" ? "ghost" : "filled"} width={message.role === "assistant" ? "100%" : undefined}>
+              <Markdown density="compact" contentWidth={720}>{message.content}</Markdown>
+            </ChatMessageBubble>
+            <ChatMessageMetadata
+              timestamp={new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+              footer={(
+                <Button
+                  label="Copy"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => void navigator.clipboard.writeText(message.content)}
+                />
+              )}
+            />
+          </ChatMessage>
         ))}
         {awaitingReply ? (
-          <article className="message hermes-message pending-message" aria-label="Hermes is working">
-            <div className="message-avatar">H</div>
-            <div>
-              <div className="message-meta"><strong>Hermes</strong><span>Working</span></div>
-              <div className="typing-indicator" aria-hidden="true"><span /><span /><span /></div>
-            </div>
-          </article>
-        ) : null}
+          <ChatMessage sender="assistant" avatar={<Avatar name="Hermes" size="md" />} name="Hermes">
+            <ChatMessageBubble variant="ghost">
+              <div className="agent-activity" role="status">
+                <span className="activity-pulse" aria-hidden="true" />
+                <span>Working</span>
+              </div>
+            </ChatMessageBubble>
+          </ChatMessage>
+          ) : null}
         <div ref={streamEnd} />
-      </div>
-      <div className="composer-wrap">
-        <form className="composer" onSubmit={submit}>
-          <textarea
-            aria-label="Message Hermes"
-            placeholder="Ask Hermes to investigate, plan, or launch a mission…"
-            rows={2}
-            value={content}
-            onChange={(event) => setContent(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                event.currentTarget.form?.requestSubmit();
-              }
-            }}
-          />
-          <div className="composer-footer">
-            <span className={error ? "composer-error" : undefined}>
-              {error ?? (awaitingReply ? "Hermes is working on your request…" : "Messages are queued securely through the control plane.")}
-            </span>
-            <button type="submit" disabled={!content.trim() || sending}>{sending ? "Sending…" : "Send"}</button>
-          </div>
-        </form>
-      </div>
-    </>
+      </ChatMessageList>
+    </ChatLayout>
   );
 }

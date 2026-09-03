@@ -1,3 +1,7 @@
+@import '@astryxdesign/core/reset.css';
+@import '@astryxdesign/core/astryx.css';
+@import '@astryxdesign/theme-neutral/theme.css';
+
 :root {
   --ink: #111827;
   --muted: #6b7280;
@@ -151,6 +155,7 @@ button, textarea { font: inherit; }
 .device-card span:last-child { margin-top: 2px; color: var(--muted); font-size: 10px; }
 
 .conversation { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto 1fr auto; background: #f8fafc; }
+.conversation-chat { min-height: 0; }
 
 .conversation-header {
   min-height: 72px;
@@ -191,6 +196,10 @@ h1 { margin: 0; font-size: 17px; line-height: 1.1; }
 .user-message .message-meta strong { display: none; }
 .user-message p { border-color: var(--dark); border-radius: 17px 17px 5px 17px; background: var(--dark); color: #fff; box-shadow: none; }
 .pending-message { opacity: .78; }
+.agent-activity { min-height: 28px; display: flex; align-items: center; gap: var(--spacing-2); color: var(--color-text-secondary); font-size: var(--text-supporting-size); }
+.activity-pulse { width: 8px; height: 8px; border-radius: var(--radius-full); background: var(--color-accent); animation: activity-pulse 1.3s infinite var(--ease-standard); }
+@keyframes activity-pulse { 0%, 100% { opacity: .35; transform: scale(.85); } 50% { opacity: 1; transform: scale(1); } }
+.composer-status { color: var(--color-text-secondary); font-size: var(--text-supporting-size); }
 .typing-indicator { height: 32px; display: flex; align-items: center; gap: 5px; }
 .typing-indicator span { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); animation: typing-pulse 1.2s infinite ease-in-out; }
 .typing-indicator span:nth-child(2) { animation-delay: .15s; }
