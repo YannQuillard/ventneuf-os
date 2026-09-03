@@ -1,16 +1,36 @@
+import { readSession } from "../lib/auth/session";
+
 const channels = ["ventneuf-os", "ampel", "brandstamp"];
 
 function VentneufMark() {
   return <div className="brand-mark">29</div>;
 }
 
-export default function Home() {
+export default async function Home() {
+  const session = await readSession();
+
+  if (!session) {
+    return (
+      <main className="login-shell">
+        <section className="login-card">
+          <VentneufMark />
+          <span className="eyebrow">Agentic workspace</span>
+          <h1>Welcome to ventneuf.os</h1>
+          <p>Sign in to access your conversations, knowledge, missions, and connected devices.</p>
+          <a className="login-button" href="/auth/login">Sign in</a>
+        </section>
+      </main>
+    );
+  }
+
+  const initial = session.email.slice(0, 1).toUpperCase();
+
   return (
     <main className="workspace-shell">
       <aside className="workspace-rail" aria-label="Workspaces">
         <VentneufMark />
         <button className="rail-avatar" type="button" aria-label="Your private space">
-          Y
+          {initial}
         </button>
       </aside>
 
@@ -52,7 +72,9 @@ export default function Home() {
             <h1>Hermes</h1>
           </div>
           <div className="header-actions">
+            <span className="account-email">{session.email}</span>
             <span className="status-pill">Cloud connected</span>
+            <a className="logout-link" href="/auth/logout">Sign out</a>
             <button type="button" aria-label="Conversation settings">
               ···
             </button>

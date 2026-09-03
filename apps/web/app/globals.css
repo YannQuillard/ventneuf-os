@@ -21,6 +21,42 @@ body {
 
 button, textarea { font: inherit; }
 
+.login-shell {
+  min-height: 100vh;
+  padding: 24px;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(circle at 20% 15%, rgba(223, 255, 79, .24), transparent 32%),
+    var(--paper);
+}
+
+.login-card {
+  width: min(100%, 440px);
+  padding: 42px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, .8);
+  box-shadow: 0 24px 80px rgba(35, 35, 25, .09);
+}
+
+.login-card .brand-mark { margin-bottom: 42px; }
+.login-card h1 { margin-top: 8px; font-size: 32px; }
+.login-card p { margin: 16px 0 30px; color: var(--muted); line-height: 1.6; }
+.login-button {
+  min-height: 46px;
+  padding: 0 20px;
+  border-radius: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--dark);
+  color: white;
+  font-size: 14px;
+  font-weight: 750;
+  text-decoration: none;
+}
+
 .workspace-shell {
   min-height: 100vh;
   display: grid;
@@ -129,7 +165,9 @@ button, textarea { font: inherit; }
 .eyebrow { color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
 h1 { margin: 3px 0 0; font-size: 22px; line-height: 1.1; }
 .header-actions { display: flex; align-items: center; gap: 10px; }
+.account-email { color: var(--muted); font-size: 11px; }
 .status-pill { padding: 7px 10px; border-radius: 999px; background: #eef5df; color: #52682a; font-size: 11px; font-weight: 700; }
+.logout-link { color: var(--muted); font-size: 11px; text-decoration: none; }
 .header-actions button { width: 36px; height: 36px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--muted); }
 
 .message-stream { padding: 28px clamp(24px, 5vw, 80px); overflow-y: auto; }
@@ -157,4 +195,5 @@ h1 { margin: 3px 0 0; font-size: 22px; line-height: 1.1; }
   .conversation-header { padding-inline: 18px; }
   .message-stream, .composer-wrap { padding-left: 18px; padding-right: 18px; }
   .status-pill { display: none; }
+  .account-email { display: none; }
 }
