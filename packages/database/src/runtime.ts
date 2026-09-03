@@ -1,4 +1,4 @@
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import type { Database } from "./client.js";
 import { conversations, members, messages, missions, organizations } from "./schema.js";
 
@@ -16,6 +16,7 @@ export class ConversationRuntimeRepository {
     externalSubject: string;
     content: string;
   }) {
+    const acceptedAt = new Date();
     return this.database.withOrganization(input.organizationId, async (transaction) => {
       let [member] = await transaction
         .select()
@@ -83,6 +84,7 @@ export class ConversationRuntimeRepository {
           memberId: member.id,
           role: "user",
           content: input.content,
+          createdAt: acceptedAt,
         })
         .returning();
       if (!message) throw new Error("Failed to persist the message.");
@@ -94,7 +96,13 @@ export class ConversationRuntimeRepository {
           conversationId: conversation.id,
           requestedByMemberId: member.id,
           goal: input.content,
-          context: { sourceMessageId: message.id, type: "hermes.conversation" },
+          context: {
+            sourceMessageId: message.id,
+            type: "hermes.conversation",
+            timing: { acceptedAt: acceptedAt.toISOString() },
+          },
+          createdAt: acceptedAt,
+          updatedAt: acceptedAt,
         })
         .returning();
       if (!mission) throw new Error("Failed to create the Hermes mission.");
@@ -143,6 +151,30 @@ export class ConversationRuntimeRepository {
     });
   }
 
+  getLatestPrivateMission(input: { organizationId: string; externalSubject: string }) {
+    return this.database.withOrganization(input.organizationId, async (transaction) => {
+      const [result] = await transaction
+        .select({ mission: missions })
+        .from(missions)
+        .innerJoin(
+          members,
+          and(
+            eq(members.organizationId, missions.organizationId),
+            eq(members.id, missions.requestedByMemberId),
+          ),
+        )
+        .where(
+          and(
+            eq(missions.organizationId, input.organizationId),
+            eq(members.externalSubject, input.externalSubject),
+          ),
+        )
+        .orderBy(desc(missions.createdAt))
+        .limit(1);
+      return result?.mission;
+    });
+  }
+
   getMission(organizationId: string, missionId: string) {
     return this.database.withOrganization(organizationId, async (transaction) => {
       const [result] = await transaction
@@ -166,11 +198,20 @@ export class ConversationRuntimeRepository {
     });
   }
 
-  setMissionRunning(organizationId: string, missionId: string) {
+  setMissionQueued(organizationId: string, missionId: string, context: Record<string, unknown>) {
     return this.database.withOrganization(organizationId, (transaction) =>
       transaction
         .update(missions)
-        .set({ status: "running", updatedAt: new Date() })
+        .set({ context, updatedAt: new Date() })
+        .where(and(eq(missions.organizationId, organizationId), eq(missions.id, missionId))),
+    );
+  }
+
+  setMissionRunning(organizationId: string, missionId: string, context: Record<string, unknown>) {
+    return this.database.withOrganization(organizationId, (transaction) =>
+      transaction
+        .update(missions)
+        .set({ status: "running", context, updatedAt: new Date() })
         .where(and(eq(missions.organizationId, organizationId), eq(missions.id, missionId))),
     );
   }
@@ -182,6 +223,7 @@ export class ConversationRuntimeRepository {
     contextId: string;
     content: string;
     metadata?: Record<string, unknown>;
+    context: Record<string, unknown>;
   }) {
     return this.database.withOrganization(input.organizationId, async (transaction) => {
       await transaction.insert(messages).values({
@@ -202,16 +244,21 @@ export class ConversationRuntimeRepository {
         );
       await transaction
         .update(missions)
-        .set({ status: "completed", updatedAt: new Date() })
+        .set({ status: "completed", context: input.context, updatedAt: new Date() })
         .where(and(eq(missions.organizationId, input.organizationId), eq(missions.id, input.missionId)));
     });
   }
 
-  failMission(organizationId: string, missionId: string, reason: string) {
+  failMission(
+    organizationId: string,
+    missionId: string,
+    reason: string,
+    context: Record<string, unknown>,
+  ) {
     return this.database.withOrganization(organizationId, (transaction) =>
       transaction
         .update(missions)
-        .set({ status: "failed", context: { failure: reason }, updatedAt: new Date() })
+        .set({ status: "failed", context: { ...context, failure: reason }, updatedAt: new Date() })
         .where(and(eq(missions.organizationId, organizationId), eq(missions.id, missionId))),
     );
   }

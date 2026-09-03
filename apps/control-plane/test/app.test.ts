@@ -54,6 +54,7 @@ test("accepts platform health checks when listening on all interfaces", async ()
 
 test("persists and queues an authenticated Hermes message", async () => {
   const published: unknown[] = [];
+  let queuedContext: Record<string, unknown> | undefined;
   const app = createApp({
     verifier: {
       verify: async () => ({
@@ -71,9 +72,14 @@ test("persists and queues an authenticated Hermes message", async () => {
       repository: {
         enqueuePrivateMessage: async () => ({
           conversationId: "conversation-1",
-          message: { id: "message-1", content: "Hello Hermes" },
-          mission: { id: "mission-1", status: "queued" },
+          message: { id: "message-1", content: "Hello Hermes", createdAt: new Date() },
+          mission: { id: "mission-1", status: "queued", context: {} },
         }),
+        setMissionQueued: async (
+          _organizationId: string,
+          _missionId: string,
+          context: Record<string, unknown>,
+        ) => { queuedContext = context; },
       },
       queue: {
         publish: async (...input: unknown[]) => { published.push(input); },
@@ -105,6 +111,7 @@ test("persists and queues an authenticated Hermes message", async () => {
 
     assert.equal(result.statusCode, 202);
     assert.equal(JSON.parse(result.body).missionId, "mission-1");
+    assert.equal(typeof (queuedContext?.timing as Record<string, unknown>)?.queuedAt, "string");
     assert.deepEqual(published, [[{
       organizationId: "00000000-0000-4000-8000-000000000001",
       missionId: "mission-1",

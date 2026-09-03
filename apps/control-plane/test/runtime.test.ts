@@ -13,6 +13,12 @@ function repository(overrides: Record<string, unknown> = {}) {
         conversationId: "conversation-1",
         status: "queued",
         goal: "Investigate the issue",
+        context: {
+          timing: {
+            acceptedAt: new Date(Date.now() - 50).toISOString(),
+            queuedAt: new Date(Date.now() - 40).toISOString(),
+          },
+        },
       },
     }),
     setMissionRunning: async () => undefined,
@@ -29,7 +35,14 @@ test("processes a queued Hermes mission and persists its reply", async () => {
   const worker = new MissionWorker(
     repository({
       setMissionRunning: async () => events.push("running"),
-      completeMission: async (input: { content: string; contextId: string }) => {
+      completeMission: async (input: {
+        content: string;
+        contextId: string;
+        context: { timing?: { queueMs?: number; hermesMs?: number; totalMs?: number } };
+      }) => {
+        assert.equal(typeof input.context.timing?.queueMs, "number");
+        assert.equal(typeof input.context.timing?.hermesMs, "number");
+        assert.equal(typeof input.context.timing?.totalMs, "number");
         events.push(`completed:${input.contextId}:${input.content}`);
       },
     }),

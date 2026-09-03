@@ -11,7 +11,12 @@ import { Icon } from "@astryxdesign/core/Icon";
 import { IconButton } from "@astryxdesign/core/IconButton";
 import { Markdown } from "@astryxdesign/core/Markdown";
 import { Timestamp } from "@astryxdesign/core/Timestamp";
-import type { Message } from "../lib/conversations";
+import { formatDuration, type Message, type MissionTiming } from "../lib/conversations";
+
+function timing(message: Message): MissionTiming | undefined {
+  const value = message.metadata?.timing;
+  return value && typeof value === "object" ? value as MissionTiming : undefined;
+}
 
 export function ConversationMessage({ message }: { message: Message }) {
   if (message.role === "system" || message.role === "tool") {
@@ -42,14 +47,19 @@ export function ConversationMessage({ message }: { message: Message }) {
       <ChatMessageMetadata
         timestamp={<Timestamp value={message.createdAt} format="time" />}
         footer={(
-          <IconButton
-            label="Copy message"
-            tooltip="Copy"
-            variant="ghost"
-            size="sm"
-            icon={<Icon icon="copy" size="sm" />}
-            onClick={() => void navigator.clipboard.writeText(message.content)}
-          />
+          <div className="message-actions">
+            {formatDuration(timing(message)?.totalMs) ? (
+              <span>{formatDuration(timing(message)?.totalMs)}</span>
+            ) : null}
+            <IconButton
+              label="Copy message"
+              tooltip="Copy"
+              variant="ghost"
+              size="sm"
+              icon={<Icon icon="copy" size="sm" />}
+              onClick={() => void navigator.clipboard.writeText(message.content)}
+            />
+          </div>
         )}
       />
     </ChatMessage>
