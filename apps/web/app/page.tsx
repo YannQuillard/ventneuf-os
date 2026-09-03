@@ -1,91 +1,36 @@
+import { AppShell } from "@astryxdesign/core/AppShell";
+import { Button } from "@astryxdesign/core/Button";
+import { Card } from "@astryxdesign/core/Card";
+import { Center } from "@astryxdesign/core/Center";
+import { VStack } from "@astryxdesign/core/Layout";
+import { Heading, Text } from "@astryxdesign/core/Text";
 import { readSession } from "../lib/auth/session";
-import { HermesConversation } from "./conversation";
-
-const channels = ["ventneuf-os", "ampel", "brandstamp"];
-
-function VentneufMark() {
-  return <div className="brand-mark">29</div>;
-}
+import { VentneufMark } from "./brand";
+import { Workspace } from "./workspace";
 
 export default async function Home() {
   const session = await readSession();
 
   if (!session) {
     return (
-      <main className="login-shell">
-        <section className="login-card">
-          <VentneufMark />
-          <span className="eyebrow">Agentic workspace</span>
-          <h1>Welcome to ventneuf.os</h1>
-          <p>Sign in to access your conversations, knowledge, missions, and connected devices.</p>
-          <a className="login-button" href="/auth/login">Sign in</a>
-        </section>
-      </main>
+      <AppShell contentPadding={0}>
+        <Center height="100%" padding={6}>
+          <Card width="100%" maxWidth={440} padding={8} elevation="low">
+            <VStack gap={6}>
+              <VentneufMark />
+              <VStack gap={2}>
+                <Heading level={1}>Welcome to ventneuf.os</Heading>
+                <Text color="secondary">
+                  Sign in to access your conversations, knowledge, missions, and connected devices.
+                </Text>
+              </VStack>
+              <Button label="Sign in" variant="primary" href="/auth/login" />
+            </VStack>
+          </Card>
+        </Center>
+      </AppShell>
     );
   }
 
-  const initial = session.email.slice(0, 1).toUpperCase();
-
-  return (
-    <main className="workspace-shell">
-      <aside className="workspace-rail" aria-label="Workspaces">
-        <VentneufMark />
-        <button className="rail-avatar" type="button" aria-label="Your private space">
-          {initial}
-        </button>
-      </aside>
-
-      <aside className="channel-sidebar">
-        <header className="workspace-heading">
-          <span>ventneuf</span>
-          <span className="online-dot" title="Control plane online" />
-        </header>
-
-        <nav aria-label="Conversations">
-          <p className="section-label">Private</p>
-          <a className="channel active" href="#hermes">
-            <span className="hermes-glyph">H</span>
-            Hermes
-          </a>
-
-          <p className="section-label">Projects</p>
-          {channels.map((channel) => (
-            <a className="channel" href={`#${channel}`} key={channel}>
-              <span className="hash">#</span>
-              {channel}
-            </a>
-          ))}
-        </nav>
-
-        <div className="device-card">
-          <span className="device-status" />
-          <div>
-            <strong>This Mac</strong>
-            <span>Runner setup pending</span>
-          </div>
-        </div>
-      </aside>
-
-      <section className="conversation" id="hermes">
-        <header className="conversation-header">
-          <div className="conversation-identity">
-            <span className="conversation-avatar">H</span>
-            <div>
-              <h1>Hermes</h1>
-              <span className="conversation-presence"><i /> Cloud agent online</span>
-            </div>
-          </div>
-          <div className="header-actions">
-            <span className="account-email">{session.email}</span>
-            <a className="logout-link" href="/auth/logout">Sign out</a>
-            <button type="button" aria-label="Conversation settings">
-              ···
-            </button>
-          </div>
-        </header>
-
-        <HermesConversation userInitial={initial} />
-      </section>
-    </main>
-  );
+  return <Workspace email={session.email} />;
 }

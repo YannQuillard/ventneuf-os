@@ -9,9 +9,16 @@ import {
   ChatMessageBubble,
   ChatMessageList,
   ChatMessageMetadata,
+  ChatSystemMessage,
 } from "@astryxdesign/core/Chat";
+import { EmptyState } from "@astryxdesign/core/EmptyState";
+import { Icon } from "@astryxdesign/core/Icon";
+import { HStack, VStack } from "@astryxdesign/core/Layout";
 import { Markdown } from "@astryxdesign/core/Markdown";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Spinner } from "@astryxdesign/core/Spinner";
+import { Text } from "@astryxdesign/core/Text";
+import { Timestamp } from "@astryxdesign/core/Timestamp";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 
 interface Message {
   id: string;
@@ -20,20 +27,66 @@ interface Message {
   createdAt: string;
 }
 
-export function HermesConversation({ userInitial }: { userInitial: string }) {
+const chatLayout: CSSProperties = { flex: 1, minHeight: 0 };
+
+function ConversationMessage({ message }: { message: Message }) {
+  if (message.role === "system" || message.role === "tool") {
+    return (
+      <ChatSystemMessage icon={message.role === "tool" ? <Icon icon="wrench" size="sm" /> : undefined}>
+        {message.content}
+      </ChatSystemMessage>
+    );
+  }
+
+  if (message.role === "user") {
+    return (
+      <ChatMessage sender="user">
+        <ChatMessageBubble
+          metadata={<ChatMessageMetadata timestamp={<Timestamp value={message.createdAt} format="time" />} />}
+        >
+          {message.content}
+        </ChatMessageBubble>
+      </ChatMessage>
+    );
+  }
+
+  return (
+    <ChatMessage sender="assistant" avatar={<Avatar name="Hermes" size="md" />}>
+      <ChatMessageBubble variant="ghost" width="100%">
+        <Markdown>{message.content}</Markdown>
+      </ChatMessageBubble>
+      <ChatMessageMetadata
+        timestamp={<Timestamp value={message.createdAt} format="time" />}
+        footer={(
+          <Button
+            label="Copy"
+            variant="ghost"
+            size="sm"
+            icon={<Icon icon="copy" size="sm" />}
+            isIconOnly
+            onClick={() => void navigator.clipboard.writeText(message.content)}
+          />
+        )}
+      />
+    </ChatMessage>
+  );
+}
+
+export function HermesConversation() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [content, setContent] = useState("");
+  const [isLoaded, setIsLoaded] = useState(false);
   const [sending, setSending] = useState(false);
   const [awaitingReply, setAwaitingReply] = useState(false);
   const [error, setError] = useState<string>();
   const latestUserMessageAt = useRef<number | undefined>(undefined);
-  const streamEnd = useRef<HTMLDivElement | null>(null);
 
   const refresh = useCallback(async () => {
     const response = await fetch("/api/hermes/messages", { cache: "no-store" });
     if (!response.ok) throw new Error("Unable to load the conversation.");
     const payload = await response.json() as { messages: Message[] };
     setMessages(payload.messages);
+    setIsLoaded(true);
     const lastMessage = payload.messages.at(-1);
     if (
       latestUserMessageAt.current
@@ -63,10 +116,6 @@ export function HermesConversation({ userInitial }: { userInitial: string }) {
     };
   }, [awaitingReply, refresh]);
 
-  useEffect(() => {
-    streamEnd.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [awaitingReply, messages]);
-
   async function submit(value: string) {
     const message = value.trim();
     if (!message || sending) return;
@@ -94,68 +143,50 @@ export function HermesConversation({ userInitial }: { userInitial: string }) {
   }
 
   return (
-    <ChatLayout
-      className="conversation-chat"
-      composer={(
-        <ChatComposer
-          value={content}
-          onChange={setContent}
-          onSubmit={(value) => void submit(value)}
-          placeholder="Message Hermes"
-          isDisabled={sending}
-          isStopShown={awaitingReply}
-          footerActions={(
-            <span className={error ? "composer-error" : "composer-status"}>
-              {error ?? (awaitingReply ? "Hermes is working…" : "Private conversation")}
-            </span>
-          )}
-          status={error ? { type: "error", message: error } : undefined}
-        />
-      )}
-      emptyState={null}
-    >
-      <ChatMessageList align="top" density="spacious" isStreaming={awaitingReply}>
-        {messages.length === 0 ? (
-          <ChatMessage sender="assistant" avatar={<Avatar name="Hermes" size="md" />} name="Hermes">
-            <ChatMessageBubble variant="ghost" width="100%">
-              <Markdown contentWidth={720}>The workspace is connected. What would you like me to work on?</Markdown>
-            </ChatMessageBubble>
-          </ChatMessage>
-        ) : messages.map((message) => (
-          <ChatMessage
-            sender={message.role === "assistant" ? "assistant" : "user"}
-            avatar={message.role === "assistant" ? <Avatar name="Hermes" size="md" /> : <Avatar name={userInitial} tooltip="You" size="md" />}
-            name={message.role === "assistant" ? "Hermes" : "You"}
-            key={message.id}
-          >
-            <ChatMessageBubble variant={message.role === "assistant" ? "ghost" : "filled"} width={message.role === "assistant" ? "100%" : undefined}>
-              <Markdown density="compact" contentWidth={720}>{message.content}</Markdown>
-            </ChatMessageBubble>
-            <ChatMessageMetadata
-              timestamp={new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-              footer={(
-                <Button
-                  label="Copy"
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => void navigator.clipboard.writeText(message.content)}
-                />
-              )}
-            />
-          </ChatMessage>
-        ))}
-        {awaitingReply ? (
-          <ChatMessage sender="assistant" avatar={<Avatar name="Hermes" size="md" />} name="Hermes">
-            <ChatMessageBubble variant="ghost">
-              <div className="agent-activity" role="status">
-                <span className="activity-pulse" aria-hidden="true" />
-                <span>Working</span>
-              </div>
-            </ChatMessageBubble>
-          </ChatMessage>
-          ) : null}
-        <div ref={streamEnd} />
-      </ChatMessageList>
-    </ChatLayout>
+    <VStack height="100%">
+      <ChatLayout
+        density="spacious"
+        style={chatLayout}
+        composer={(
+          <ChatComposer
+            value={content}
+            onChange={setContent}
+            onSubmit={(value) => void submit(value)}
+            placeholder="Message Hermes"
+            isDisabled={sending}
+            status={error ? { type: "error", message: error } : undefined}
+            footerActions={(
+              <Text type="supporting" color="secondary">
+                {awaitingReply ? "Hermes is working…" : "Private conversation"}
+              </Text>
+            )}
+          />
+        )}
+        emptyState={isLoaded ? (
+          <EmptyState
+            title="Ask Hermes anything"
+            description="This conversation is private to you. Send a message to get started."
+          />
+        ) : (
+          <Spinner aria-label="Loading the conversation" />
+        )}
+      >
+        {messages.length > 0 || awaitingReply ? (
+          <ChatMessageList isStreaming={awaitingReply}>
+            {messages.map((message) => <ConversationMessage message={message} key={message.id} />)}
+            {awaitingReply ? (
+              <ChatMessage sender="assistant" avatar={<Avatar name="Hermes" size="md" />}>
+                <ChatMessageBubble variant="ghost">
+                  <HStack gap={2} vAlign="center">
+                    <Spinner size="sm" aria-label="Hermes is working" />
+                    <Text type="supporting" color="secondary">Working…</Text>
+                  </HStack>
+                </ChatMessageBubble>
+              </ChatMessage>
+            ) : null}
+          </ChatMessageList>
+        ) : null}
+      </ChatLayout>
+    </VStack>
   );
 }
