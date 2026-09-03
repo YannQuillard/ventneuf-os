@@ -14,14 +14,16 @@ import {
 import { ClickableCard } from "@astryxdesign/core/ClickableCard";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { Grid } from "@astryxdesign/core/Grid";
-import { VStack } from "@astryxdesign/core/Layout";
+import { HStack, VStack } from "@astryxdesign/core/Layout";
 import { Spinner } from "@astryxdesign/core/Spinner";
 import { Heading, Text } from "@astryxdesign/core/Text";
 import { Timestamp } from "@astryxdesign/core/Timestamp";
 import { Fragment, useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { formatDuration, type Message, type MissionState, type MissionTiming } from "../lib/conversations";
 import { ConversationMessage } from "./conversation-message";
+import { MessageDetailsPanel } from "./message-details";
 
+const chatColumn: CSSProperties = { flex: 1, minWidth: 0, height: "100%" };
 const chatLayout: CSSProperties = { flex: 1, minHeight: 0 };
 
 const suggestions = [
@@ -83,6 +85,7 @@ export function HermesConversation() {
   const [awaitingReply, setAwaitingReply] = useState(false);
   const [revealingId, setRevealingId] = useState<string>();
   const [mission, setMission] = useState<MissionState | null>(null);
+  const [selectedMessageId, setSelectedMessageId] = useState<string>();
   const [now, setNow] = useState(() => Date.now());
   const [error, setError] = useState<string>();
   const latestUserMessageAt = useRef<number | undefined>(undefined);
@@ -205,6 +208,12 @@ export function HermesConversation() {
 
   const completeReveal = useCallback(() => setRevealingId(undefined), []);
 
+  const inspect = useCallback((id: string) => {
+    setSelectedMessageId((current) => current === id ? undefined : id);
+  }, []);
+
+  const closeDetails = useCallback(() => setSelectedMessageId(undefined), []);
+
   const timeline = pending.length > 0
     ? [
       ...messages,
@@ -218,102 +227,115 @@ export function HermesConversation() {
     : messages;
   const pendingById = new Map(pending.map((entry) => [entry.id, entry]));
   const retry = lastAssistantRetry(messages);
+  const selected = selectedMessageId === undefined
+    ? undefined
+    : timeline.find(({ id }) => id === selectedMessageId);
+
+  useEffect(() => {
+    if (selectedMessageId !== undefined && selected === undefined) setSelectedMessageId(undefined);
+  }, [selected, selectedMessageId]);
 
   return (
-    <VStack height="100%">
-      <ChatLayout
-        style={chatLayout}
-        composer={(
-          <ChatComposer
-            value={content}
-            onChange={setContent}
-            onSubmit={(value) => {
-              setContent("");
-              void submit(value);
-            }}
-            placeholder="Message Hermes"
-            status={error ? { type: "error", message: error } : undefined}
-            input={<ChatComposerInput handleRef={composerInput} />}
-          />
-        )}
-        emptyState={isLoaded ? (
-          <VStack gap={6} hAlign="center" width="100%" maxWidth={560} padding={4}>
-            <EmptyState
-              title="Ask Hermes anything"
-              description="This conversation is private to you. Send a message to get started."
-            />
-            <Grid columns={{ minWidth: 200, max: 2 }} gap={3} width="100%">
-              {suggestions.map((suggestion) => (
-                <ClickableCard
-                  label={suggestion.heading}
-                  variant="muted"
-                  padding={3}
-                  onClick={() => void submit(suggestion.prompt)}
-                  key={suggestion.heading}
-                >
-                  <VStack gap={0.5}>
-                    <Heading level={4}>{suggestion.heading}</Heading>
-                    <Text type="body" color="secondary" size="xsm">{suggestion.body}</Text>
-                  </VStack>
-                </ClickableCard>
-              ))}
-            </Grid>
-          </VStack>
-        ) : (
-          <Spinner aria-label="Loading the conversation" />
-        )}
-      >
-        {timeline.length > 0 || awaitingReply ? (
-          <ChatMessageList isStreaming={awaitingReply || revealingId !== undefined}>
-            {timeline.map((message, index) => {
-              const entry = pendingById.get(message.id);
-              const previous = timeline[index - 1];
-              const isDayStart = !previous || dayKey(previous.createdAt) !== dayKey(message.createdAt);
-              const retryPrompt = entry
-                ? (entry.hasFailed ? entry.content : undefined)
-                : (retry?.id === message.id ? retry.prompt : undefined);
-              return (
-                <Fragment key={message.id}>
-                  {isDayStart ? (
-                    <ChatSystemMessage variant="divider">
-                      <Timestamp value={message.createdAt} format="date_weekday" hasTooltip={false} />
-                    </ChatSystemMessage>
-                  ) : null}
-                  <ConversationMessage
-                    message={message}
-                    status={entry ? (entry.hasFailed ? "error" : "sending") : undefined}
-                    isRevealing={message.id === revealingId}
-                    onRevealed={completeReveal}
-                    onQuote={quote}
-                    onEdit={edit}
-                    onRetry={retryPrompt === undefined
-                      ? undefined
-                      : () => resend(retryPrompt, entry?.id)}
-                    onDismiss={entry?.hasFailed ? () => dismiss(entry.id) : undefined}
-                  />
-                </Fragment>
-              );
-            })}
-            {awaitingReply ? (
-              <ChatMessage sender="assistant" avatar={<Avatar name="Hermes" size="md" />}>
-                <ChatMessageBubble variant="ghost">
-                  <div className="mission-progress" role="status">
-                    <Spinner aria-hidden="true" size="sm" />
-                    <span className="thinking-shimmer">
-                      {mission?.status === "queued" ? "Queued" : "Hermes is working"}
-                    </span>
-                    <span className="mission-elapsed">
-                      {formatDuration(mission?.timing?.acceptedAt
-                        ? Math.max(0, now - new Date(mission.timing.acceptedAt).getTime())
-                        : undefined)}
-                    </span>
-                  </div>
-                </ChatMessageBubble>
-              </ChatMessage>
+    <VStack height="100%" className="conversation-surface">
+      <HStack height="100%">
+        <VStack style={chatColumn}>
+          <ChatLayout
+            style={chatLayout}
+            composer={(
+              <ChatComposer
+                value={content}
+                onChange={setContent}
+                onSubmit={(value) => {
+                  setContent("");
+                  void submit(value);
+                }}
+                placeholder="Message Hermes"
+                status={error ? { type: "error", message: error } : undefined}
+                input={<ChatComposerInput handleRef={composerInput} />}
+              />
+            )}
+            emptyState={isLoaded ? (
+              <VStack gap={6} hAlign="center" width="100%" maxWidth={560} padding={4}>
+                <EmptyState
+                  title="Ask Hermes anything"
+                  description="This conversation is private to you. Send a message to get started."
+                />
+                <Grid columns={{ minWidth: 200, max: 2 }} gap={3} width="100%">
+                  {suggestions.map((suggestion) => (
+                    <ClickableCard
+                      label={suggestion.heading}
+                      variant="muted"
+                      padding={3}
+                      onClick={() => void submit(suggestion.prompt)}
+                      key={suggestion.heading}
+                    >
+                      <VStack gap={0.5}>
+                        <Heading level={4}>{suggestion.heading}</Heading>
+                        <Text type="body" color="secondary" size="xsm">{suggestion.body}</Text>
+                      </VStack>
+                    </ClickableCard>
+                  ))}
+                </Grid>
+              </VStack>
+            ) : (
+              <Spinner aria-label="Loading the conversation" />
+            )}
+          >
+            {timeline.length > 0 || awaitingReply ? (
+              <ChatMessageList isStreaming={awaitingReply || revealingId !== undefined}>
+                {timeline.map((message, index) => {
+                  const entry = pendingById.get(message.id);
+                  const previous = timeline[index - 1];
+                  const isDayStart = !previous || dayKey(previous.createdAt) !== dayKey(message.createdAt);
+                  const retryPrompt = entry
+                    ? (entry.hasFailed ? entry.content : undefined)
+                    : (retry?.id === message.id ? retry.prompt : undefined);
+                  return (
+                    <Fragment key={message.id}>
+                      {isDayStart ? (
+                        <ChatSystemMessage variant="divider">
+                          <Timestamp value={message.createdAt} format="date_weekday" hasTooltip={false} />
+                        </ChatSystemMessage>
+                      ) : null}
+                      <ConversationMessage
+                        message={message}
+                        status={entry ? (entry.hasFailed ? "error" : "sending") : undefined}
+                        isRevealing={message.id === revealingId}
+                        onRevealed={completeReveal}
+                        onQuote={quote}
+                        onEdit={edit}
+                        onRetry={retryPrompt === undefined
+                          ? undefined
+                          : () => resend(retryPrompt, entry?.id)}
+                        onDismiss={entry?.hasFailed ? () => dismiss(entry.id) : undefined}
+                        onInspect={() => inspect(message.id)}
+                      />
+                    </Fragment>
+                  );
+                })}
+                {awaitingReply ? (
+                  <ChatMessage sender="assistant" avatar={<Avatar name="Hermes" size="md" />}>
+                    <ChatMessageBubble variant="ghost">
+                      <div className="mission-progress" role="status">
+                        <Spinner aria-hidden="true" size="sm" />
+                        <span className="thinking-shimmer">
+                          {mission?.status === "queued" ? "Queued" : "Hermes is working"}
+                        </span>
+                        <span className="mission-elapsed">
+                          {formatDuration(mission?.timing?.acceptedAt
+                            ? Math.max(0, now - new Date(mission.timing.acceptedAt).getTime())
+                            : undefined)}
+                        </span>
+                      </div>
+                    </ChatMessageBubble>
+                  </ChatMessage>
+                ) : null}
+              </ChatMessageList>
             ) : null}
-          </ChatMessageList>
-        ) : null}
-      </ChatLayout>
+          </ChatLayout>
+        </VStack>
+        {selected ? <MessageDetailsPanel message={selected} onClose={closeDetails} /> : null}
+      </HStack>
     </VStack>
   );
 }

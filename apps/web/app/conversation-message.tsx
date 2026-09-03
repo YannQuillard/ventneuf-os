@@ -26,6 +26,7 @@ interface ConversationMessageProps {
   onEdit?: (content: string) => void;
   onRetry?: () => void;
   onDismiss?: () => void;
+  onInspect?: () => void;
 }
 
 function timing(message: Message): MissionTiming | undefined {
@@ -43,18 +44,35 @@ function RevealingMarkdown({ content, onRevealed }: { content: string; onReveale
   return <Markdown contentWidth={840} isStreaming>{displayed}</Markdown>;
 }
 
+function InspectAction({ onInspect }: { onInspect?: () => void }) {
+  if (!onInspect) return null;
+
+  return (
+    <IconButton
+      label="Inspect the details of this message"
+      tooltip="Inspect details"
+      variant="ghost"
+      size="sm"
+      icon={<Icon icon="info" size="sm" />}
+      onClick={onInspect}
+    />
+  );
+}
+
 function UserMessageActions({
   content,
   hasFailed,
   onEdit,
   onRetry,
   onDismiss,
+  onInspect,
 }: {
   content: string;
   hasFailed: boolean;
   onEdit?: (content: string) => void;
   onRetry?: () => void;
   onDismiss?: () => void;
+  onInspect?: () => void;
 }) {
   if (hasFailed) {
     return (
@@ -75,20 +93,24 @@ function UserMessageActions({
           icon={<Icon icon="close" size="sm" />}
           onClick={onDismiss}
         />
+        <InspectAction onInspect={onInspect} />
       </div>
     );
   }
 
   return (
     <div className="message-actions">
-      <IconButton
-        label="Edit this message and send it again"
-        tooltip="Edit & resend"
-        variant="ghost"
-        size="sm"
-        icon={<Icon icon={PencilSquareIcon} size="sm" />}
-        onClick={() => onEdit?.(content)}
-      />
+      {onEdit ? (
+        <IconButton
+          label="Edit this message and send it again"
+          tooltip="Edit & resend"
+          variant="ghost"
+          size="sm"
+          icon={<Icon icon={PencilSquareIcon} size="sm" />}
+          onClick={() => onEdit(content)}
+        />
+      ) : null}
+      <InspectAction onInspect={onInspect} />
     </div>
   );
 }
@@ -102,6 +124,7 @@ export function ConversationMessage({
   onEdit,
   onRetry,
   onDismiss,
+  onInspect,
 }: ConversationMessageProps) {
   if (message.role === "system" || message.role === "tool") {
     return (
@@ -126,6 +149,7 @@ export function ConversationMessage({
                   onEdit={onEdit}
                   onRetry={onRetry}
                   onDismiss={onDismiss}
+                  onInspect={onInspect}
                 />
               )}
             />
@@ -181,6 +205,7 @@ export function ConversationMessage({
                 onClick={onRetry}
               />
             ) : null}
+            <InspectAction onInspect={onInspect} />
           </div>
         )}
       />
