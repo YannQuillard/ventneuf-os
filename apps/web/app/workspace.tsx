@@ -12,15 +12,19 @@ import { SideNav, SideNavHeading, SideNavItem, SideNavSection } from "@astryxdes
 import { StatusDot } from "@astryxdesign/core/StatusDot";
 import { Heading, Text } from "@astryxdesign/core/Text";
 import { createStaticSource } from "@astryxdesign/core/Typeahead";
-import { ChatBubbleLeftRightIcon, HashtagIcon, MagnifyingGlassIcon } from "@heroicons/react/24/outline";
+import {
+  ChatBubbleLeftRightIcon,
+  HashtagIcon,
+  MagnifyingGlassIcon,
+} from "@heroicons/react/24/outline";
 import { ChatBubbleLeftRightIcon as ChatBubbleLeftRightSolidIcon } from "@heroicons/react/24/solid";
-import { useMemo, useState } from "react";
-import { HermesConversation } from "./conversation";
+import { useRouter } from "next/navigation";
+import { useMemo, useState, type ReactNode } from "react";
 
 const projectChannels = ["ventneuf-os", "ampel", "brandstamp"];
 
 const commands = [
-  { id: "#hermes", label: "Hermes", auxiliaryData: { group: "Navigate" } },
+  { id: "/", label: "Hermes", auxiliaryData: { group: "Navigate" } },
   ...projectChannels.map((channel) => ({
     id: `#${channel}`,
     label: channel,
@@ -33,9 +37,10 @@ function signOut() {
   window.location.assign("/auth/logout");
 }
 
-export function Workspace({ email }: { email: string }) {
+export function Workspace({ email, children }: { email: string; children: ReactNode }) {
   const [isPaletteOpen, setIsPaletteOpen] = useState(false);
   const searchSource = useMemo(() => createStaticSource(commands), []);
+  const router = useRouter();
 
   useHotkeys([
     { keys: "mod+p", onPress: () => setIsPaletteOpen(true), allowInInputs: true },
@@ -47,7 +52,7 @@ export function Workspace({ email }: { email: string }) {
       signOut();
       return;
     }
-    window.location.hash = id;
+    router.push(id);
   };
 
   return (
@@ -93,7 +98,7 @@ export function Workspace({ email }: { email: string }) {
             <SideNavSection title="Private">
               <SideNavItem
                 label="Hermes"
-                href="#hermes"
+                href="/"
                 icon={ChatBubbleLeftRightIcon}
                 selectedIcon={ChatBubbleLeftRightSolidIcon}
                 isSelected
@@ -122,7 +127,7 @@ export function Workspace({ email }: { email: string }) {
           )}
           content={(
             <LayoutContent padding={0}>
-              <HermesConversation />
+              {children}
             </LayoutContent>
           )}
         />

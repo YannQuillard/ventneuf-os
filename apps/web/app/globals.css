@@ -22,6 +22,32 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+.conversation-surface {
+  container-type: inline-size;
+  container-name: conversation;
+}
+
+.details-panel {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  overflow: hidden;
+  width: var(--details-panel-width);
+}
+
+.details-panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow-wrap: anywhere;
+}
+
+@container conversation (max-width: 767px) {
+  .details-panel-handle,
+  .details-panel {
+    display: none;
+  }
+}
+
 .thinking-shimmer {
   background: linear-gradient(
     90deg,

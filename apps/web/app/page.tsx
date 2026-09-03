@@ -5,6 +5,7 @@ import { Center } from "@astryxdesign/core/Center";
 import { VStack } from "@astryxdesign/core/Layout";
 import { Heading, Text } from "@astryxdesign/core/Text";
 import { readSession } from "../lib/auth/session";
+import { HermesConversation } from "./conversation";
 import { Workspace } from "./workspace";
 
 export default async function Home() {
@@ -30,5 +31,9 @@ export default async function Home() {
     );
   }
 
-  return <Workspace email={session.email} />;
+  return (
+    <Workspace email={session.email}>
+      <HermesConversation />
+    </Workspace>
+  );
 }
