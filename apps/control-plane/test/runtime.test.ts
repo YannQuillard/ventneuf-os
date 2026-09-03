@@ -33,9 +33,17 @@ const unusedQueue = {} as MissionQueue;
 
 test("processes a queued Hermes mission and persists its reply", async () => {
   const events: string[] = [];
+  let persistedRunId: unknown;
   const worker = new MissionWorker(
     repository({
-      setMissionRunning: async () => events.push("running"),
+      setMissionRunning: async (
+        _organizationId: string,
+        _missionId: string,
+        context: Record<string, unknown>,
+      ) => {
+        persistedRunId = context.hermesRunId ?? persistedRunId;
+        events.push("running");
+      },
       completeMission: async (input: {
         content: string;
         contextId: string;
@@ -52,13 +60,15 @@ test("processes a queued Hermes mission and persists its reply", async () => {
       ask: async (input) => {
         assert.equal(input.contextId, "context-before");
         assert.equal(input.message, "Investigate the issue");
+        await input.onRunStarted?.("run-1");
         return { contextId: "context-after", text: "Issue found" };
       },
     },
   );
 
   await worker.process({ organizationId: "organization-1", missionId: "mission-1" });
-  assert.deepEqual(events, ["running", "completed:context-after:Issue found"]);
+  assert.equal(persistedRunId, "run-1");
+  assert.deepEqual(events, ["running", "running", "completed:context-after:Issue found"]);
 });
 
 test("does not run an already completed mission", async () => {

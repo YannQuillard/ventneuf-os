@@ -1,4 +1,4 @@
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import type { Database } from "./client.js";
 import { conversations, members, messages, missions, organizations } from "./schema.js";
 
@@ -226,6 +226,18 @@ export class ConversationRuntimeRepository {
     context: Record<string, unknown>;
   }) {
     return this.database.withOrganization(input.organizationId, async (transaction) => {
+      const [completed] = await transaction
+        .update(missions)
+        .set({ status: "completed", context: input.context, updatedAt: new Date() })
+        .where(
+          and(
+            eq(missions.organizationId, input.organizationId),
+            eq(missions.id, input.missionId),
+            inArray(missions.status, ["queued", "running", "waiting_for_approval"]),
+          ),
+        )
+        .returning({ id: missions.id });
+      if (!completed) return false;
       await transaction.insert(messages).values({
         organizationId: input.organizationId,
         conversationId: input.conversationId,
@@ -242,11 +254,28 @@ export class ConversationRuntimeRepository {
             eq(conversations.id, input.conversationId),
           ),
         );
-      await transaction
-        .update(missions)
-        .set({ status: "completed", context: input.context, updatedAt: new Date() })
-        .where(and(eq(missions.organizationId, input.organizationId), eq(missions.id, input.missionId)));
+      return true;
     });
+  }
+
+  cancelMission(
+    organizationId: string,
+    missionId: string,
+    context: Record<string, unknown>,
+  ) {
+    return this.database.withOrganization(organizationId, (transaction) =>
+      transaction
+        .update(missions)
+        .set({ status: "cancelled", context, updatedAt: new Date() })
+        .where(
+          and(
+            eq(missions.organizationId, organizationId),
+            eq(missions.id, missionId),
+            inArray(missions.status, ["queued", "running", "waiting_for_approval"]),
+          ),
+        )
+        .returning({ id: missions.id }),
+    );
   }
 
   failMission(

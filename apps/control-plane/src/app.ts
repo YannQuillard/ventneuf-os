@@ -141,6 +141,46 @@ export function createApp({ verifier, hermes, conversations, host = "127.0.0.1" 
     }
   });
 
+  app.post("/api/conversations/hermes/missions/:missionId/cancel", async (request: Request, response: Response, next: NextFunction) => {
+    try {
+      const context = await authenticate(request, response);
+      if (!context) return;
+      assertAuthorized(context, "hermes:ask");
+      if (!conversations) return void response.status(503).json({ error: "conversation_runtime_unavailable" });
+
+      const mission = await conversations.repository.getLatestPrivateMission({
+        organizationId: context.organizationId,
+        externalSubject: context.principalId,
+      });
+      if (!mission || mission.id !== request.params.missionId) {
+        return void response.status(404).json({ error: "mission_not_found" });
+      }
+      if (!["queued", "running", "waiting_for_approval"].includes(mission.status)) {
+        return void response.status(409).json({ error: "mission_not_cancellable" });
+      }
+
+      const hermesRunId = typeof mission.context?.hermesRunId === "string"
+        ? mission.context.hermesRunId
+        : undefined;
+      if (hermesRunId) {
+        if (!hermes.stop) return void response.status(503).json({ error: "hermes_cancellation_unavailable" });
+        await hermes.stop(hermesRunId);
+      }
+      const cancelledAt = new Date().toISOString();
+      const cancelled = await conversations.repository.cancelMission(
+        context.organizationId,
+        mission.id,
+        { ...mission.context, cancelledAt },
+      );
+      if (cancelled.length === 0) {
+        return void response.status(409).json({ error: "mission_not_cancellable" });
+      }
+      response.json({ id: mission.id, status: "cancelled", cancelledAt });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post("/mcp", async (request: Request, response: Response, next: NextFunction) => {
     try {
       const context = await authenticate(request, response);
