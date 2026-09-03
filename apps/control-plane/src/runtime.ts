@@ -7,7 +7,11 @@ import {
 } from "@aws-sdk/client-sqs";
 import { GetSecretValueCommand, SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
 import { ConversationRuntimeRepository, createDatabase, type Database } from "@ventneuf/database";
-import { HermesRequestTimeoutError, type HermesClient } from "./hermes.js";
+import {
+  HermesRequestTimeoutError,
+  HermesRunCancelledError,
+  type HermesClient,
+} from "./hermes.js";
 
 interface DatabaseCredentials {
   username?: string;
@@ -124,10 +128,28 @@ export class MissionWorker {
       missionId: envelope.missionId,
       queueMs: activeTiming.queueMs,
     });
+    let activeContext: Record<string, unknown> = { ...initialContext, timing: activeTiming };
     try {
       const reply = await this.hermes.ask({
         message: record.mission.goal,
         contextId: record.hermesContextId ?? undefined,
+        runId: typeof initialContext.hermesRunId === "string"
+          ? initialContext.hermesRunId
+          : undefined,
+        sessionKey: `organization:${envelope.organizationId}:conversation:${record.mission.conversationId}`,
+        onRunStarted: async (runId) => {
+          activeContext = { ...activeContext, hermesRunId: runId };
+          await this.repository.setMissionRunning(
+            envelope.organizationId,
+            envelope.missionId,
+            activeContext,
+          );
+          logMission("hermes.run_started", {
+            organizationId: envelope.organizationId,
+            missionId: envelope.missionId,
+            hermesRunId: runId,
+          });
+        },
       });
       const hermesCompletedAt = new Date();
       const persistedAt = new Date();
@@ -138,7 +160,7 @@ export class MissionWorker {
         hermesMs: hermesCompletedAt.getTime() - hermesStartedAt.getTime(),
         totalMs: elapsedMs(activeTiming.acceptedAt, persistedAt),
       };
-      const completedContext = { ...initialContext, timing: completedTiming };
+      const completedContext = { ...activeContext, timing: completedTiming };
       await this.repository.completeMission({
         organizationId: envelope.organizationId,
         missionId: envelope.missionId,
@@ -148,6 +170,7 @@ export class MissionWorker {
         metadata: {
           hermesState: reply.state,
           hermesTaskId: reply.taskId,
+          hermesUsage: reply.usage,
           missionId: envelope.missionId,
           timing: completedTiming,
         },
@@ -161,6 +184,13 @@ export class MissionWorker {
         totalMs: completedTiming.totalMs,
       });
     } catch (error) {
+      if (error instanceof HermesRunCancelledError) {
+        logMission("mission.cancelled", {
+          organizationId: envelope.organizationId,
+          missionId: envelope.missionId,
+        });
+        return;
+      }
       const failedAt = new Date();
       const failedTiming = {
         ...activeTiming,
@@ -171,7 +201,7 @@ export class MissionWorker {
         envelope.organizationId,
         envelope.missionId,
         error instanceof Error ? error.message : "Unknown Hermes failure",
-        { ...initialContext, timing: failedTiming },
+        { ...activeContext, timing: failedTiming },
       );
       logMission("mission.failed", {
         organizationId: envelope.organizationId,
@@ -200,7 +230,7 @@ export class MissionWorker {
             if (error instanceof HermesRequestTimeoutError) {
               await this.queue.delete(message.ReceiptHandle);
               logMission("mission.retry_suppressed", {
-                reason: "a2a_timeout_may_still_be_running",
+                reason: "submission_timeout_may_still_be_running",
               });
             } else {
               await this.queue.release(message.ReceiptHandle);

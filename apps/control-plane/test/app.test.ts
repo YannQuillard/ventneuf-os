@@ -120,3 +120,68 @@ test("persists and queues an authenticated Hermes message", async () => {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
 });
+
+test("stops and cancels only the authenticated member's latest mission", async () => {
+  const stopped: string[] = [];
+  const cancelled: string[] = [];
+  const app = createApp({
+    verifier: {
+      verify: async () => ({
+        organizationId: "00000000-0000-4000-8000-000000000001",
+        principalId: "member-subject",
+        principalType: "user",
+        memberId: "00000000-0000-4000-8000-000000000002",
+        projectIds: [],
+        capabilities: ["hermes:ask"],
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      }),
+    },
+    hermes: {
+      ask: async () => ({ contextId: "unused", text: "unused" }),
+      stop: async (runId) => { stopped.push(runId); },
+    },
+    conversations: {
+      repository: {
+        getLatestPrivateMission: async () => ({
+          id: "mission-1",
+          status: "running",
+          context: { hermesRunId: "run-1" },
+        }),
+        cancelMission: async (_organizationId: string, missionId: string) => {
+          cancelled.push(missionId);
+          return [{ id: missionId }];
+        },
+      },
+    } as unknown as ConversationRuntime,
+  });
+  const server = createServer(app);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  try {
+    const address = server.address();
+    assert(address && typeof address === "object");
+    const result = await new Promise<{ body: string; statusCode?: number }>((resolve, reject) => {
+      const outgoing = request({
+        hostname: "127.0.0.1",
+        port: address.port,
+        path: "/api/conversations/hermes/missions/mission-1/cancel",
+        method: "POST",
+        headers: { authorization: "Bearer valid" },
+      }, (incoming) => {
+        let body = "";
+        incoming.setEncoding("utf8");
+        incoming.on("data", (chunk) => { body += chunk; });
+        incoming.on("end", () => resolve({ body, statusCode: incoming.statusCode }));
+      });
+      outgoing.on("error", reject);
+      outgoing.end();
+    });
+
+    assert.equal(result.statusCode, 200);
+    assert.equal(JSON.parse(result.body).status, "cancelled");
+    assert.deepEqual(stopped, ["run-1"]);
+    assert.deepEqual(cancelled, ["mission-1"]);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});

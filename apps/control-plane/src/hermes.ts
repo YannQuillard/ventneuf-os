@@ -7,6 +7,9 @@ import { randomUUID } from "node:crypto";
 export interface AskHermesInput {
   message: string;
   contextId?: string;
+  runId?: string;
+  sessionKey?: string;
+  onRunStarted?: (runId: string) => Promise<void>;
 }
 
 export interface HermesReply {
@@ -14,10 +17,12 @@ export interface HermesReply {
   contextId: string;
   state?: string;
   text: string;
+  usage?: Record<string, unknown>;
 }
 
 export interface HermesClient {
   ask(input: AskHermesInput): Promise<HermesReply>;
+  stop?(runId: string): Promise<void>;
 }
 
 export interface TokenProvider {
@@ -26,8 +31,15 @@ export interface TokenProvider {
 
 export class HermesRequestTimeoutError extends Error {
   constructor(cause?: unknown) {
-    super("Hermes did not reply before the A2A timeout.", { cause });
+    super("Hermes did not reply before the request timeout.", { cause });
     this.name = "HermesRequestTimeoutError";
+  }
+}
+
+export class HermesRunCancelledError extends Error {
+  constructor() {
+    super("The Hermes run was cancelled.");
+    this.name = "HermesRunCancelledError";
   }
 }
 
@@ -73,6 +85,110 @@ interface A2AResponse {
     };
     message?: unknown;
   };
+}
+
+interface HermesRun {
+  run_id?: string;
+  status?: string;
+  session_id?: string;
+  output?: string;
+  error?: string | { message?: string };
+  usage?: Record<string, unknown>;
+}
+
+function errorMessage(error: HermesRun["error"]): string | undefined {
+  if (typeof error === "string") return error;
+  return error?.message;
+}
+
+export class RunsHermesClient implements HermesClient {
+  private readonly baseUrl: string;
+
+  constructor(
+    url: string,
+    private readonly tokens: TokenProvider,
+    private readonly fetchImplementation: Fetch = fetch,
+    private readonly pollIntervalMs = 1_000,
+    private readonly maxWaitMs = 12 * 60_000,
+  ) {
+    this.baseUrl = url.replace(/\/$/, "");
+  }
+
+  async ask(input: AskHermesInput): Promise<HermesReply> {
+    const contextId = input.contextId ?? randomUUID();
+    let runId = input.runId;
+
+    if (!runId) {
+      let response: Response;
+      try {
+        response = await this.request("/v1/runs", {
+          method: "POST",
+          body: JSON.stringify({ input: input.message, session_id: contextId }),
+          signal: AbortSignal.timeout(10_000),
+        }, input.sessionKey);
+      } catch (error) {
+        if (error instanceof Error && error.name === "TimeoutError") {
+          throw new HermesRequestTimeoutError(error);
+        }
+        throw error;
+      }
+      await this.assertOk(response, "start");
+      const run = await response.json() as HermesRun;
+      if (!run.run_id) throw new Error("Hermes Runs API returned no run ID.");
+      runId = run.run_id;
+      await input.onRunStarted?.(runId);
+    }
+
+    const deadline = Date.now() + this.maxWaitMs;
+    while (Date.now() < deadline) {
+      const response = await this.request(
+        `/v1/runs/${encodeURIComponent(runId)}`,
+        { signal: AbortSignal.timeout(10_000) },
+        input.sessionKey,
+      );
+      await this.assertOk(response, "read");
+      const run = await response.json() as HermesRun;
+      const status = run.status?.toLowerCase();
+      if (status === "completed") {
+        if (!run.output) throw new Error("Hermes Runs API completed without output.");
+        return {
+          taskId: runId,
+          contextId: run.session_id ?? contextId,
+          state: status,
+          text: run.output,
+          usage: run.usage,
+        };
+      }
+      if (status === "failed") {
+        throw new Error(`Hermes run failed: ${errorMessage(run.error) ?? "unknown failure"}`);
+      }
+      if (status === "cancelled") throw new HermesRunCancelledError();
+      await new Promise((resolve) => setTimeout(resolve, this.pollIntervalMs));
+    }
+    throw new Error("Hermes run is still active after the polling window.");
+  }
+
+  async stop(runId: string): Promise<void> {
+    const response = await this.request(`/v1/runs/${encodeURIComponent(runId)}/stop`, {
+      method: "POST",
+      body: "{}",
+      signal: AbortSignal.timeout(10_000),
+    });
+    await this.assertOk(response, "stop");
+  }
+
+  private async request(path: string, init: RequestInit, sessionKey?: string): Promise<Response> {
+    const headers = new Headers(init.headers);
+    headers.set("authorization", `Bearer ${await this.tokens.getToken()}`);
+    headers.set("content-type", "application/json");
+    if (sessionKey) headers.set("x-hermes-session-key", sessionKey);
+    return this.fetchImplementation(`${this.baseUrl}${path}`, { ...init, headers });
+  }
+
+  private async assertOk(response: Response, operation: string): Promise<void> {
+    if (response.ok) return;
+    throw new Error(`Hermes Runs API could not ${operation} a run (HTTP ${response.status}).`);
+  }
 }
 
 function extractText(value: unknown): string {
@@ -157,6 +273,16 @@ export class A2AHermesClient implements HermesClient {
 }
 
 export function createHermesClient(env: NodeJS.ProcessEnv = process.env): HermesClient {
+  if (env.HERMES_API_URL && env.HERMES_API_SECRET_ID) {
+    const client = new SecretsManagerClient({ region: env.AWS_REGION ?? "eu-west-1" });
+    return new RunsHermesClient(
+      env.HERMES_API_URL,
+      new SecretsManagerTokenProvider(client, env.HERMES_API_SECRET_ID),
+    );
+  }
+  if (env.NODE_ENV !== "production" && env.HERMES_API_URL && env.HERMES_API_TOKEN) {
+    return new RunsHermesClient(env.HERMES_API_URL, new StaticTokenProvider(env.HERMES_API_TOKEN));
+  }
   const url = env.HERMES_A2A_URL ?? "http://127.0.0.1:9900/";
   if (env.HERMES_A2A_SECRET_ID) {
     const client = new SecretsManagerClient({ region: env.AWS_REGION ?? "eu-west-1" });
