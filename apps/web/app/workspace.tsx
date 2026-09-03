@@ -1,91 +1,139 @@
 "use client";
 
 import { AppShell } from "@astryxdesign/core/AppShell";
-import { Avatar, AvatarStatusDot } from "@astryxdesign/core/Avatar";
-import { Button } from "@astryxdesign/core/Button";
-import { HStack, Layout, LayoutContent, LayoutHeader, VStack } from "@astryxdesign/core/Layout";
+import { Avatar } from "@astryxdesign/core/Avatar";
+import { CommandPalette } from "@astryxdesign/core/CommandPalette";
+import { Divider } from "@astryxdesign/core/Divider";
+import { useHotkeys } from "@astryxdesign/core/hooks";
+import { Kbd } from "@astryxdesign/core/Kbd";
+import { HStack, Layout, LayoutContent, LayoutHeader, StackItem, VStack } from "@astryxdesign/core/Layout";
+import { MoreMenu } from "@astryxdesign/core/MoreMenu";
 import { SideNav, SideNavHeading, SideNavItem, SideNavSection } from "@astryxdesign/core/SideNav";
 import { StatusDot } from "@astryxdesign/core/StatusDot";
 import { Heading, Text } from "@astryxdesign/core/Text";
-import { ChatBubbleLeftRightIcon, HashtagIcon } from "@heroicons/react/24/outline";
+import { createStaticSource } from "@astryxdesign/core/Typeahead";
+import { ChatBubbleLeftRightIcon, HashtagIcon, MagnifyingGlassIcon } from "@heroicons/react/24/outline";
 import { ChatBubbleLeftRightIcon as ChatBubbleLeftRightSolidIcon } from "@heroicons/react/24/solid";
-import { VentneufMark } from "./brand";
+import { useMemo, useState } from "react";
 import { HermesConversation } from "./conversation";
 
 const projectChannels = ["ventneuf-os", "ampel", "brandstamp"];
 
+const commands = [
+  { id: "#hermes", label: "Hermes", auxiliaryData: { group: "Navigate" } },
+  ...projectChannels.map((channel) => ({
+    id: `#${channel}`,
+    label: channel,
+    auxiliaryData: { group: "Navigate" },
+  })),
+  { id: "sign-out", label: "Sign out", auxiliaryData: { group: "Account" } },
+];
+
+function signOut() {
+  window.location.assign("/auth/logout");
+}
+
 export function Workspace({ email }: { email: string }) {
+  const [isPaletteOpen, setIsPaletteOpen] = useState(false);
+  const searchSource = useMemo(() => createStaticSource(commands), []);
+
+  useHotkeys([
+    { keys: "mod+p", onPress: () => setIsPaletteOpen(true), allowInInputs: true },
+  ]);
+
+  const runCommand = (id: string) => {
+    setIsPaletteOpen(false);
+    if (id === "sign-out") {
+      signOut();
+      return;
+    }
+    window.location.hash = id;
+  };
+
   return (
-    <AppShell
-      contentPadding={0}
-      sideNav={(
-        <SideNav
-          header={(
-            <SideNavHeading
-              icon={<VentneufMark />}
-              heading="ventneuf.os"
-              headerEndContent={(
-                <StatusDot variant="success" label="Control plane online" tooltip="Control plane online" />
-              )}
-            />
-          )}
-          footer={(
-            <HStack gap={2} vAlign="center" padding={3}>
-              <StatusDot variant="neutral" label="Runner setup pending" />
+    <>
+      <AppShell
+        contentPadding={0}
+        sideNav={(
+          <SideNav
+            header={<SideNavHeading heading="ventneuf.os" />}
+            topContent={(
+              <SideNavItem
+                label="Search"
+                icon={MagnifyingGlassIcon}
+                endContent={<Kbd keys="mod+p" />}
+                onClick={() => setIsPaletteOpen(true)}
+              />
+            )}
+            footer={(
               <VStack gap={0}>
-                <Text type="label" weight="semibold">This Mac</Text>
-                <Text type="supporting" color="secondary">Runner setup pending</Text>
+                <HStack gap={2} vAlign="center" padding={3}>
+                  <StatusDot variant="neutral" label="Runner setup pending" />
+                  <VStack gap={0}>
+                    <Text type="label" weight="semibold">This Mac</Text>
+                    <Text type="supporting" color="secondary">Runner setup pending</Text>
+                  </VStack>
+                </HStack>
+                <Divider />
+                <HStack gap={2} vAlign="center" padding={3}>
+                  <Avatar name={email} size="sm" />
+                  <StackItem size="fill">
+                    <Text type="supporting" color="secondary" maxLines={1}>{email}</Text>
+                  </StackItem>
+                  <MoreMenu
+                    label="Account options"
+                    size="sm"
+                    placement="above"
+                    items={[{ label: "Sign out", onClick: signOut }]}
+                  />
+                </HStack>
               </VStack>
-            </HStack>
-          )}
-        >
-          <SideNavSection title="Private">
-            <SideNavItem
-              label="Hermes"
-              href="#hermes"
-              icon={ChatBubbleLeftRightIcon}
-              selectedIcon={ChatBubbleLeftRightSolidIcon}
-              isSelected
-            />
-          </SideNavSection>
-          <SideNavSection title="Projects">
-            {projectChannels.map((channel) => (
-              <SideNavItem label={channel} href={`#${channel}`} icon={HashtagIcon} key={channel} />
-            ))}
-          </SideNavSection>
-        </SideNav>
-      )}
-    >
-      <Layout
-        height="fill"
-        header={(
-          <LayoutHeader hasDivider>
-            <HStack hAlign="between" vAlign="center" width="100%">
+            )}
+          >
+            <SideNavSection title="Private">
+              <SideNavItem
+                label="Hermes"
+                href="#hermes"
+                icon={ChatBubbleLeftRightIcon}
+                selectedIcon={ChatBubbleLeftRightSolidIcon}
+                isSelected
+              />
+            </SideNavSection>
+            <SideNavSection title="Projects">
+              {projectChannels.map((channel) => (
+                <SideNavItem label={channel} href={`#${channel}`} icon={HashtagIcon} key={channel} />
+              ))}
+            </SideNavSection>
+          </SideNav>
+        )}
+      >
+        <Layout
+          height="fill"
+          header={(
+            <LayoutHeader hasDivider padding={4}>
               <HStack gap={3} vAlign="center">
-                <Avatar
-                  name="Hermes"
-                  size="md"
-                  status={<AvatarStatusDot variant="success" label="Online" />}
-                  tooltip={false}
-                />
-                <VStack gap={0}>
+                <Avatar name="Hermes" size="md" tooltip={false} />
+                <VStack gap={0.5}>
                   <Heading level={4} accessibilityLevel={1}>Hermes</Heading>
-                  <Text type="supporting" color="secondary">Cloud agent online</Text>
+                  <Text type="supporting" color="secondary">Cloud agent</Text>
                 </VStack>
               </HStack>
-              <HStack gap={3} vAlign="center">
-                <Text type="supporting" color="secondary">{email}</Text>
-                <Button label="Sign out" variant="ghost" size="sm" href="/auth/logout" />
-              </HStack>
-            </HStack>
-          </LayoutHeader>
-        )}
-        content={(
-          <LayoutContent padding={0}>
-            <HermesConversation />
-          </LayoutContent>
-        )}
+            </LayoutHeader>
+          )}
+          content={(
+            <LayoutContent padding={0}>
+              <HermesConversation />
+            </LayoutContent>
+          )}
+        />
+      </AppShell>
+      <CommandPalette
+        isOpen={isPaletteOpen}
+        onOpenChange={setIsPaletteOpen}
+        searchSource={searchSource}
+        label="Search and actions"
+        onValueChange={runCommand}
       />
-    </AppShell>
+    </>
   );
 }

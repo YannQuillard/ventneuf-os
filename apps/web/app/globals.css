@@ -8,14 +8,29 @@ body {
   font-family: var(--font-family-body);
 }
 
-.brand-mark {
-  width: var(--spacing-8);
-  height: var(--spacing-8);
-  border-radius: var(--radius-element);
-  display: grid;
-  place-items: center;
-  background: var(--color-background-inverted);
-  color: var(--color-background-surface);
-  font-size: var(--text-label-size);
-  font-weight: var(--font-weight-bold);
+.thinking-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--color-text-secondary) 35%,
+    var(--color-text-primary) 50%,
+    var(--color-text-secondary) 65%
+  );
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  animation: thinking-shimmer 2s linear infinite;
+}
+
+@keyframes thinking-shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thinking-shimmer {
+    background: none;
+    color: var(--color-text-secondary);
+    animation: none;
+  }
 }

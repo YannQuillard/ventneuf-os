@@ -1,7 +1,6 @@
 "use client";
 
 import { Avatar } from "@astryxdesign/core/Avatar";
-import { Button } from "@astryxdesign/core/Button";
 import {
   ChatComposer,
   ChatLayout,
@@ -13,10 +12,10 @@ import {
 } from "@astryxdesign/core/Chat";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { Icon } from "@astryxdesign/core/Icon";
-import { HStack, VStack } from "@astryxdesign/core/Layout";
+import { IconButton } from "@astryxdesign/core/IconButton";
+import { VStack } from "@astryxdesign/core/Layout";
 import { Markdown } from "@astryxdesign/core/Markdown";
 import { Spinner } from "@astryxdesign/core/Spinner";
-import { Text } from "@astryxdesign/core/Text";
 import { Timestamp } from "@astryxdesign/core/Timestamp";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 
@@ -53,17 +52,17 @@ function ConversationMessage({ message }: { message: Message }) {
   return (
     <ChatMessage sender="assistant" avatar={<Avatar name="Hermes" size="md" />}>
       <ChatMessageBubble variant="ghost" width="100%">
-        <Markdown>{message.content}</Markdown>
+        <Markdown contentWidth={840}>{message.content}</Markdown>
       </ChatMessageBubble>
       <ChatMessageMetadata
         timestamp={<Timestamp value={message.createdAt} format="time" />}
         footer={(
-          <Button
-            label="Copy"
+          <IconButton
+            label="Copy message"
+            tooltip="Copy"
             variant="ghost"
             size="sm"
             icon={<Icon icon="copy" size="sm" />}
-            isIconOnly
             onClick={() => void navigator.clipboard.writeText(message.content)}
           />
         )}
@@ -145,7 +144,6 @@ export function HermesConversation() {
   return (
     <VStack height="100%">
       <ChatLayout
-        density="spacious"
         style={chatLayout}
         composer={(
           <ChatComposer
@@ -155,11 +153,6 @@ export function HermesConversation() {
             placeholder="Message Hermes"
             isDisabled={sending}
             status={error ? { type: "error", message: error } : undefined}
-            footerActions={(
-              <Text type="supporting" color="secondary">
-                {awaitingReply ? "Hermes is working…" : "Private conversation"}
-              </Text>
-            )}
           />
         )}
         emptyState={isLoaded ? (
@@ -177,10 +170,7 @@ export function HermesConversation() {
             {awaitingReply ? (
               <ChatMessage sender="assistant" avatar={<Avatar name="Hermes" size="md" />}>
                 <ChatMessageBubble variant="ghost">
-                  <HStack gap={2} vAlign="center">
-                    <Spinner size="sm" aria-label="Hermes is working" />
-                    <Text type="supporting" color="secondary">Working…</Text>
-                  </HStack>
+                  <span className="thinking-shimmer" role="status">Thinking…</span>
                 </ChatMessageBubble>
               </ChatMessage>
             ) : null}

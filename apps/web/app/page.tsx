@@ -5,7 +5,6 @@ import { Center } from "@astryxdesign/core/Center";
 import { VStack } from "@astryxdesign/core/Layout";
 import { Heading, Text } from "@astryxdesign/core/Text";
 import { readSession } from "../lib/auth/session";
-import { VentneufMark } from "./brand";
 import { Workspace } from "./workspace";
 
 export default async function Home() {
@@ -17,7 +16,6 @@ export default async function Home() {
         <Center height="100%" padding={6}>
           <Card width="100%" maxWidth={440} padding={8} elevation="low">
             <VStack gap={6}>
-              <VentneufMark />
               <VStack gap={2}>
                 <Heading level={1}>Welcome to ventneuf.os</Heading>
                 <Text color="secondary">
