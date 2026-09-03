@@ -8,6 +8,20 @@ body {
   font-family: var(--font-family-body);
 }
 
+.message-actions,
+.mission-progress {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.message-actions > span,
+.mission-elapsed {
+  color: var(--color-text-secondary);
+  font-size: var(--text-supporting-size);
+  font-variant-numeric: tabular-nums;
+}
+
 .thinking-shimmer {
   background: linear-gradient(
     90deg,

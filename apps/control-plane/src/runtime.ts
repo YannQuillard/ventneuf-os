@@ -19,6 +19,34 @@ interface MissionEnvelope {
   missionId: string;
 }
 
+interface MissionTiming {
+  acceptedAt?: string;
+  queuedAt?: string;
+  workerReceivedAt?: string;
+  hermesStartedAt?: string;
+  hermesCompletedAt?: string;
+  persistedAt?: string;
+  failedAt?: string;
+  queueMs?: number;
+  hermesMs?: number;
+  totalMs?: number;
+}
+
+function missionTiming(context: Record<string, unknown> | undefined): MissionTiming {
+  const timing = context?.timing;
+  return timing && typeof timing === "object" ? timing as MissionTiming : {};
+}
+
+function elapsedMs(from: string | undefined, to: Date): number | undefined {
+  if (!from) return undefined;
+  const value = to.getTime() - new Date(from).getTime();
+  return Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function logMission(event: string, fields: Record<string, unknown>) {
+  console.info(JSON.stringify({ component: "mission-worker", event, ...fields }));
+}
+
 export interface ConversationRuntime {
   database: Database;
   repository: ConversationRuntimeRepository;
@@ -74,26 +102,84 @@ export class MissionWorker {
     const record = await this.repository.getMission(envelope.organizationId, envelope.missionId);
     if (!record || record.mission.status === "completed" || record.mission.status === "cancelled") return;
 
-    await this.repository.setMissionRunning(envelope.organizationId, envelope.missionId);
+    const workerReceivedAt = new Date();
+    const initialContext = record.mission.context ?? {};
+    const initialTiming = missionTiming(initialContext);
+    const runningContext = {
+      ...initialContext,
+      timing: {
+        ...initialTiming,
+        workerReceivedAt: workerReceivedAt.toISOString(),
+        queueMs: elapsedMs(initialTiming.queuedAt ?? initialTiming.acceptedAt, workerReceivedAt),
+      },
+    };
+    await this.repository.setMissionRunning(envelope.organizationId, envelope.missionId, runningContext);
+    const hermesStartedAt = new Date();
+    const activeTiming = {
+      ...missionTiming(runningContext),
+      hermesStartedAt: hermesStartedAt.toISOString(),
+    };
+    logMission("hermes.started", {
+      organizationId: envelope.organizationId,
+      missionId: envelope.missionId,
+      queueMs: activeTiming.queueMs,
+    });
     try {
       const reply = await this.hermes.ask({
         message: record.mission.goal,
         contextId: record.hermesContextId ?? undefined,
       });
+      const hermesCompletedAt = new Date();
+      const persistedAt = new Date();
+      const completedTiming = {
+        ...activeTiming,
+        hermesCompletedAt: hermesCompletedAt.toISOString(),
+        persistedAt: persistedAt.toISOString(),
+        hermesMs: hermesCompletedAt.getTime() - hermesStartedAt.getTime(),
+        totalMs: elapsedMs(activeTiming.acceptedAt, persistedAt),
+      };
+      const completedContext = { ...initialContext, timing: completedTiming };
       await this.repository.completeMission({
         organizationId: envelope.organizationId,
         missionId: envelope.missionId,
         conversationId: record.mission.conversationId,
         contextId: reply.contextId,
         content: reply.text,
-        metadata: { hermesState: reply.state, hermesTaskId: reply.taskId, missionId: envelope.missionId },
+        metadata: {
+          hermesState: reply.state,
+          hermesTaskId: reply.taskId,
+          missionId: envelope.missionId,
+          timing: completedTiming,
+        },
+        context: completedContext,
+      });
+      logMission("mission.completed", {
+        organizationId: envelope.organizationId,
+        missionId: envelope.missionId,
+        queueMs: completedTiming.queueMs,
+        hermesMs: completedTiming.hermesMs,
+        totalMs: completedTiming.totalMs,
       });
     } catch (error) {
+      const failedAt = new Date();
+      const failedTiming = {
+        ...activeTiming,
+        failedAt: failedAt.toISOString(),
+        totalMs: elapsedMs(activeTiming.acceptedAt, failedAt),
+      };
       await this.repository.failMission(
         envelope.organizationId,
         envelope.missionId,
         error instanceof Error ? error.message : "Unknown Hermes failure",
+        { ...initialContext, timing: failedTiming },
       );
+      logMission("mission.failed", {
+        organizationId: envelope.organizationId,
+        missionId: envelope.missionId,
+        queueMs: failedTiming.queueMs,
+        totalMs: failedTiming.totalMs,
+        error: error instanceof Error ? error.message : "Unknown Hermes failure",
+      });
       throw error;
     }
   }

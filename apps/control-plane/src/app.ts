@@ -38,11 +38,26 @@ export function createApp({ verifier, hermes, conversations, host = "127.0.0.1" 
       if (!context) return;
       assertAuthorized(context, "hermes:ask");
       if (!conversations) return void response.status(503).json({ error: "conversation_runtime_unavailable" });
-      const items = await conversations.repository.listPrivateMessages({
+      const query = {
         organizationId: context.organizationId,
         externalSubject: context.principalId,
+      };
+      const [items, mission] = await Promise.all([
+        conversations.repository.listPrivateMessages(query),
+        conversations.repository.getLatestPrivateMission(query),
+      ]);
+      const missionContext = mission?.context;
+      response.json({
+        messages: items,
+        mission: mission ? {
+          id: mission.id,
+          status: mission.status,
+          timing: missionContext && typeof missionContext.timing === "object"
+            ? missionContext.timing
+            : {},
+          failure: typeof missionContext?.failure === "string" ? missionContext.failure : undefined,
+        } : null,
       });
-      response.json({ messages: items });
     } catch (error) {
       next(error);
     }
@@ -60,15 +75,62 @@ export function createApp({ verifier, hermes, conversations, host = "127.0.0.1" 
         externalSubject: context.principalId,
         content,
       });
-      await conversations.queue.publish(
-        { organizationId: context.organizationId, missionId: queued.mission.id },
-        queued.conversationId,
+      const queuedAt = new Date();
+      const missionContext = queued.mission.context ?? {};
+      const queuedContext = {
+        ...missionContext,
+        timing: {
+          ...(missionContext.timing && typeof missionContext.timing === "object"
+            ? missionContext.timing as Record<string, unknown>
+            : {}),
+          queuedAt: queuedAt.toISOString(),
+        },
+      };
+      await conversations.repository.setMissionQueued(
+        context.organizationId,
+        queued.mission.id,
+        queuedContext,
       );
+      try {
+        await conversations.queue.publish(
+          { organizationId: context.organizationId, missionId: queued.mission.id },
+          queued.conversationId,
+        );
+      } catch (error) {
+        const failedAt = new Date();
+        await conversations.repository.failMission(
+          context.organizationId,
+          queued.mission.id,
+          "Mission dispatch failed.",
+          {
+            ...queuedContext,
+            timing: {
+              ...queuedContext.timing,
+              failedAt: failedAt.toISOString(),
+              totalMs: queued.message.createdAt instanceof Date
+                ? failedAt.getTime() - queued.message.createdAt.getTime()
+                : undefined,
+            },
+          },
+        );
+        throw error;
+      }
+      console.info(JSON.stringify({
+        component: "conversation-api",
+        event: "mission.queued",
+        organizationId: context.organizationId,
+        missionId: queued.mission.id,
+        conversationId: queued.conversationId,
+        acceptedToQueueMs: queued.message.createdAt instanceof Date
+          ? queuedAt.getTime() - queued.message.createdAt.getTime()
+          : undefined,
+      }));
       response.status(202).json({
         conversationId: queued.conversationId,
         message: queued.message,
         missionId: queued.mission.id,
         status: queued.mission.status,
+        timing: queuedContext.timing,
       });
     } catch (error) {
       if (error instanceof z.ZodError) {

@@ -7,69 +7,15 @@ import {
   ChatMessage,
   ChatMessageBubble,
   ChatMessageList,
-  ChatMessageMetadata,
-  ChatSystemMessage,
 } from "@astryxdesign/core/Chat";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
-import { Icon } from "@astryxdesign/core/Icon";
-import { IconButton } from "@astryxdesign/core/IconButton";
 import { VStack } from "@astryxdesign/core/Layout";
-import { Markdown } from "@astryxdesign/core/Markdown";
 import { Spinner } from "@astryxdesign/core/Spinner";
-import { Timestamp } from "@astryxdesign/core/Timestamp";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
-
-interface Message {
-  id: string;
-  role: "user" | "assistant" | "system" | "tool";
-  content: string;
-  createdAt: string;
-}
+import { formatDuration, type Message, type MissionState, type MissionTiming } from "../lib/conversations";
+import { ConversationMessage } from "./conversation-message";
 
 const chatLayout: CSSProperties = { flex: 1, minHeight: 0 };
-
-function ConversationMessage({ message }: { message: Message }) {
-  if (message.role === "system" || message.role === "tool") {
-    return (
-      <ChatSystemMessage icon={message.role === "tool" ? <Icon icon="wrench" size="sm" /> : undefined}>
-        {message.content}
-      </ChatSystemMessage>
-    );
-  }
-
-  if (message.role === "user") {
-    return (
-      <ChatMessage sender="user">
-        <ChatMessageBubble
-          metadata={<ChatMessageMetadata timestamp={<Timestamp value={message.createdAt} format="time" />} />}
-        >
-          {message.content}
-        </ChatMessageBubble>
-      </ChatMessage>
-    );
-  }
-
-  return (
-    <ChatMessage sender="assistant" avatar={<Avatar name="Hermes" size="md" />}>
-      <ChatMessageBubble variant="ghost" width="100%">
-        <Markdown contentWidth={840}>{message.content}</Markdown>
-      </ChatMessageBubble>
-      <ChatMessageMetadata
-        timestamp={<Timestamp value={message.createdAt} format="time" />}
-        footer={(
-          <IconButton
-            label="Copy message"
-            tooltip="Copy"
-            variant="ghost"
-            size="sm"
-            icon={<Icon icon="copy" size="sm" />}
-            onClick={() => void navigator.clipboard.writeText(message.content)}
-          />
-        )}
-      />
-    </ChatMessage>
-  );
-}
 
 export function HermesConversation() {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -77,15 +23,23 @@ export function HermesConversation() {
   const [isLoaded, setIsLoaded] = useState(false);
   const [sending, setSending] = useState(false);
   const [awaitingReply, setAwaitingReply] = useState(false);
+  const [mission, setMission] = useState<MissionState | null>(null);
+  const [now, setNow] = useState(() => Date.now());
   const [error, setError] = useState<string>();
   const latestUserMessageAt = useRef<number | undefined>(undefined);
 
   const refresh = useCallback(async () => {
     const response = await fetch("/api/hermes/messages", { cache: "no-store" });
     if (!response.ok) throw new Error("Unable to load the conversation.");
-    const payload = await response.json() as { messages: Message[] };
+    const payload = await response.json() as { messages: Message[]; mission: MissionState | null };
     setMessages(payload.messages);
+    setMission(payload.mission);
     setIsLoaded(true);
+    const active = payload.mission?.status === "queued" || payload.mission?.status === "running";
+    setAwaitingReply(active);
+    if (payload.mission?.status === "failed") {
+      setError(payload.mission.failure ?? "Hermes could not complete the request.");
+    }
     const lastMessage = payload.messages.at(-1);
     if (
       latestUserMessageAt.current
@@ -115,6 +69,12 @@ export function HermesConversation() {
     };
   }, [awaitingReply, refresh]);
 
+  useEffect(() => {
+    if (!awaitingReply) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 250);
+    return () => window.clearInterval(timer);
+  }, [awaitingReply]);
+
   async function submit(value: string) {
     const message = value.trim();
     if (!message || sending) return;
@@ -127,12 +87,19 @@ export function HermesConversation() {
         body: JSON.stringify({ content: message }),
       });
       if (!response.ok) throw new Error("Hermes could not accept the message.");
-      const payload = await response.json() as { message: Message };
+      const payload = await response.json() as {
+        message: Message;
+        missionId: string;
+        status: MissionState["status"];
+        timing: MissionTiming;
+      };
       latestUserMessageAt.current = new Date(payload.message.createdAt).getTime();
       setMessages((current) => current.some(({ id }) => id === payload.message.id)
         ? current
         : [...current, payload.message]);
       setAwaitingReply(true);
+      setMission({ id: payload.missionId, status: payload.status, timing: payload.timing });
+      setNow(Date.now());
       setContent("");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Hermes could not accept the message.");
@@ -170,7 +137,17 @@ export function HermesConversation() {
             {awaitingReply ? (
               <ChatMessage sender="assistant" avatar={<Avatar name="Hermes" size="md" />}>
                 <ChatMessageBubble variant="ghost">
-                  <span className="thinking-shimmer" role="status">Thinking…</span>
+                  <div className="mission-progress" role="status">
+                    <Spinner aria-hidden="true" size="sm" />
+                    <span className="thinking-shimmer">
+                      {mission?.status === "queued" ? "Queued" : "Hermes is working"}
+                    </span>
+                    <span className="mission-elapsed">
+                      {formatDuration(mission?.timing.acceptedAt
+                        ? Math.max(0, now - new Date(mission.timing.acceptedAt).getTime())
+                        : undefined)}
+                    </span>
+                  </div>
                 </ChatMessageBubble>
               </ChatMessage>
             ) : null}
