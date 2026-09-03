@@ -11,39 +11,24 @@ import { MoreMenu } from "@astryxdesign/core/MoreMenu";
 import { SideNav, SideNavHeading, SideNavItem, SideNavSection } from "@astryxdesign/core/SideNav";
 import { StatusDot } from "@astryxdesign/core/StatusDot";
 import { Heading, Text } from "@astryxdesign/core/Text";
-import { Token } from "@astryxdesign/core/Token";
 import { createStaticSource } from "@astryxdesign/core/Typeahead";
 import {
-  ChatBubbleLeftIcon,
   ChatBubbleLeftRightIcon,
-  ClockIcon,
   HashtagIcon,
   MagnifyingGlassIcon,
 } from "@heroicons/react/24/outline";
-import {
-  ChatBubbleLeftIcon as ChatBubbleLeftSolidIcon,
-  ChatBubbleLeftRightIcon as ChatBubbleLeftRightSolidIcon,
-  ClockIcon as ClockSolidIcon,
-} from "@heroicons/react/24/solid";
+import { ChatBubbleLeftRightIcon as ChatBubbleLeftRightSolidIcon } from "@heroicons/react/24/solid";
 import { useRouter } from "next/navigation";
 import { useMemo, useState, type ReactNode } from "react";
-import { findFixtureConversation, fixtureConversations } from "../lib/fixtures";
 
 const projectChannels = ["ventneuf-os", "ampel", "brandstamp"];
 
 const commands = [
-  { id: "/", label: "Hermes", auxiliaryData: { group: "Conversations" } },
-  ...fixtureConversations.map((conversation) => ({
-    id: `/c/${conversation.id}`,
-    label: conversation.kind === "temporary"
-      ? `${conversation.title} (temporary)`
-      : conversation.title,
-    auxiliaryData: { group: "Conversations" },
-  })),
+  { id: "/", label: "Hermes", auxiliaryData: { group: "Navigate" } },
   ...projectChannels.map((channel) => ({
     id: `#${channel}`,
     label: channel,
-    auxiliaryData: { group: "Projects" },
+    auxiliaryData: { group: "Navigate" },
   })),
   { id: "sign-out", label: "Sign out", auxiliaryData: { group: "Account" } },
 ];
@@ -52,30 +37,7 @@ function signOut() {
   window.location.assign("/auth/logout");
 }
 
-function identity(activeConversationId: string) {
-  const conversation = findFixtureConversation(activeConversationId);
-
-  if (!conversation) {
-    return { name: "Hermes", description: "Cloud agent" };
-  }
-
-  return {
-    name: conversation.title,
-    description: conversation.kind === "temporary"
-      ? "Temporary conversation"
-      : "Personal conversation",
-  };
-}
-
-export function Workspace({
-  email,
-  activeConversationId,
-  children,
-}: {
-  email: string;
-  activeConversationId: string;
-  children: ReactNode;
-}) {
+export function Workspace({ email, children }: { email: string; children: ReactNode }) {
   const [isPaletteOpen, setIsPaletteOpen] = useState(false);
   const searchSource = useMemo(() => createStaticSource(commands), []);
   const router = useRouter();
@@ -92,8 +54,6 @@ export function Workspace({
     }
     router.push(id);
   };
-
-  const active = identity(activeConversationId);
 
   return (
     <>
@@ -141,24 +101,8 @@ export function Workspace({
                 href="/"
                 icon={ChatBubbleLeftRightIcon}
                 selectedIcon={ChatBubbleLeftRightSolidIcon}
-                isSelected={activeConversationId === "hermes"}
+                isSelected
               />
-            </SideNavSection>
-            <SideNavSection title="Recent">
-              {fixtureConversations.map((conversation) => {
-                const isTemporary = conversation.kind === "temporary";
-                return (
-                  <SideNavItem
-                    label={conversation.title}
-                    href={`/c/${conversation.id}`}
-                    icon={isTemporary ? ClockIcon : ChatBubbleLeftIcon}
-                    selectedIcon={isTemporary ? ClockSolidIcon : ChatBubbleLeftSolidIcon}
-                    isSelected={activeConversationId === conversation.id}
-                    endContent={isTemporary ? <Token label="Temporary" size="sm" color="gray" /> : undefined}
-                    key={conversation.id}
-                  />
-                );
-              })}
             </SideNavSection>
             <SideNavSection title="Projects">
               {projectChannels.map((channel) => (
@@ -173,10 +117,10 @@ export function Workspace({
           header={(
             <LayoutHeader hasDivider padding={4}>
               <HStack gap={3} vAlign="center">
-                <Avatar name={active.name} size="md" tooltip={false} />
+                <Avatar name="Hermes" size="md" tooltip={false} />
                 <VStack gap={0.5}>
-                  <Heading level={4} accessibilityLevel={1}>{active.name}</Heading>
-                  <Text type="supporting" color="secondary">{active.description}</Text>
+                  <Heading level={4} accessibilityLevel={1}>Hermes</Heading>
+                  <Text type="supporting" color="secondary">Cloud agent</Text>
                 </VStack>
               </HStack>
             </LayoutHeader>

@@ -32,7 +32,7 @@ export default async function Home() {
   }
 
   return (
-    <Workspace email={session.email} activeConversationId="hermes">
+    <Workspace email={session.email}>
       <HermesConversation />
     </Workspace>
   );
