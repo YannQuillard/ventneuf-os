@@ -68,13 +68,15 @@ export default async function Home() {
 
       <section className="conversation" id="hermes">
         <header className="conversation-header">
-          <div>
-            <span className="eyebrow">Private conversation</span>
-            <h1>Hermes</h1>
+          <div className="conversation-identity">
+            <span className="conversation-avatar">H</span>
+            <div>
+              <h1>Hermes</h1>
+              <span className="conversation-presence"><i /> Cloud agent online</span>
+            </div>
           </div>
           <div className="header-actions">
             <span className="account-email">{session.email}</span>
-            <span className="status-pill">Cloud connected</span>
             <a className="logout-link" href="/auth/logout">Sign out</a>
             <button type="button" aria-label="Conversation settings">
               ···
