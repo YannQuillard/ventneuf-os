@@ -52,6 +52,22 @@ export function createApp({ verifier, hermes, conversations, host = "127.0.0.1" 
     }
   });
 
+  app.get("/api/devices", async (request: Request, response: Response, next: NextFunction) => {
+    try {
+      const context = await authenticate(request, response);
+      if (!context) return;
+      assertAuthorized(context, "device:manage");
+      if (!conversations) return void response.status(503).json({ error: "conversation_runtime_unavailable" });
+      const items = await conversations.devices.listForMember({
+        organizationId: context.organizationId,
+        externalSubject: context.principalId,
+      });
+      response.json({ devices: items });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post("/api/runner/enroll", async (request: Request, response: Response, next: NextFunction) => {
     try {
       if (!conversations) return void response.status(503).json({ error: "conversation_runtime_unavailable" });
