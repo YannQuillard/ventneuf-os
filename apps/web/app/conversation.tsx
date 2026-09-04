@@ -21,6 +21,7 @@ import { Heading, Text } from "@astryxdesign/core/Text";
 import { Timestamp } from "@astryxdesign/core/Timestamp";
 import { Fragment, useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { formatDuration, type Message, type MissionEvent, type MissionState, type MissionTiming } from "../lib/conversations";
+import { missionActivities } from "../lib/mission-activity";
 import { ConversationMessage } from "./conversation-message";
 import { MessageDetailsPanel } from "./message-details";
 
@@ -95,6 +96,8 @@ export function HermesConversation() {
   const composerInput = useRef<ChatComposerInputHandle>(null);
   const acceptedMessages = useRef<Message[]>([]);
   const pendingCount = useRef(0);
+  const activities = missionActivities(missionEvents);
+  const visibleActivities = activities.slice(-6);
 
   const refresh = useCallback(async () => {
     const response = await fetch("/api/hermes/messages", { cache: "no-store" });
@@ -377,15 +380,37 @@ export function HermesConversation() {
                           clickAction={stopMission}
                         />
                       </div>
-                      {missionEvents.slice(-3).map((event) => (
-                        <div className="mission-event" key={event.id}>
-                          <span>{event.type === "tool.started" ? "Running" : "Finished"}</span>
-                          <strong>{typeof event.payload.tool === "string" ? event.payload.tool : event.type}</strong>
-                          {typeof event.payload.duration === "number"
-                            ? <span>{formatDuration(event.payload.duration * 1_000)}</span>
-                            : null}
+                      {visibleActivities.length > 0 ? (
+                        <div className="mission-activity" aria-label="Mission activity">
+                          <div className="mission-activity-heading">
+                            <span>Activity</span>
+                            <span>{activities.length} {activities.length === 1 ? "tool" : "tools"}</span>
+                          </div>
+                          {visibleActivities.map((activity) => (
+                            <div className="mission-event" data-status={activity.status} key={activity.id}>
+                              <span className="mission-event-indicator" aria-hidden="true" />
+                              <div className="mission-event-content">
+                                <div className="mission-event-summary">
+                                  <strong>{activity.label}</strong>
+                                  <span>
+                                    {activity.status === "running"
+                                      ? "Running"
+                                      : activity.status === "failed"
+                                        ? "Failed"
+                                        : formatDuration(activity.durationMs) ?? "Done"}
+                                  </span>
+                                </div>
+                                {activity.preview ? (
+                                  <details className="mission-event-details">
+                                    <summary>Show input</summary>
+                                    <code>{activity.preview}</code>
+                                  </details>
+                                ) : null}
+                              </div>
+                            </div>
+                          ))}
                         </div>
-                      ))}
+                      ) : null}
                     </ChatMessageBubble>
                   </ChatMessage>
                 ) : null}
