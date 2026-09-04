@@ -21,6 +21,15 @@ test("creates opaque enrollment tokens containing only their routing scope", () 
   assert.equal(parseEnrollmentToken(`${first.token}.extra`), undefined);
 });
 
+test("accepts canonical PostgreSQL UUIDs without an RFC version nibble", () => {
+  const legacyOrganizationId = "4fa55520-fa01-d779-8b85-4d2b823e0abb";
+  const enrollment = createEnrollmentToken(legacyOrganizationId);
+
+  assert.deepEqual(parseEnrollmentToken(enrollment.token), {
+    organizationId: legacyOrganizationId,
+  });
+});
+
 test("creates parseable device credentials without exposing their secret", () => {
   const credential = createDeviceCredential(organizationId, deviceId);
 
