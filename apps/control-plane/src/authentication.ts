@@ -22,6 +22,7 @@ const authenticatedCapabilities: Capability[] = [
   "knowledge:personal:read",
   "mission:read",
   "mission:progress:write",
+  "device:manage",
   "hermes:ask",
 ];
 
@@ -37,7 +38,7 @@ export class DevelopmentTokenVerifier implements TokenVerifier {
   async verify(token: string): Promise<AuthorizationContext | undefined> {
     if (!secureEqual(token, this.expectedToken)) return undefined;
     return {
-      organizationId: "ventneuf",
+      organizationId: "00000000-0000-4000-8000-000000000001",
       principalId: "development-user",
       principalType: "user",
       memberId: "development-user",

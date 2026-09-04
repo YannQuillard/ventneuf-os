@@ -78,6 +78,46 @@ export const devices = pgTable(
   ],
 );
 
+export const deviceEnrollments = pgTable(
+  "device_enrollments",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    memberId: uuid("member_id").notNull(),
+    tokenHash: text("token_hash").notNull().unique(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.organizationId, table.memberId],
+      foreignColumns: [members.organizationId, members.id],
+      name: "device_enrollments_organization_member_fk",
+    }),
+    index("device_enrollments_expiry_idx").on(table.organizationId, table.expiresAt),
+  ],
+);
+
+export const deviceCredentials = pgTable(
+  "device_credentials",
+  {
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    deviceId: uuid("device_id").primaryKey(),
+    tokenHash: text("token_hash").notNull().unique(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.organizationId, table.deviceId],
+      foreignColumns: [devices.organizationId, devices.id],
+      name: "device_credentials_organization_device_fk",
+    }),
+  ],
+);
+
 export const channels = pgTable(
   "channels",
   {

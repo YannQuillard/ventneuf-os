@@ -16,7 +16,7 @@ test("verifies the development token without exposing it", async () => {
   const verifier = new DevelopmentTokenVerifier("expected-token");
   assert.equal(await verifier.verify("wrong-token"), undefined);
   const context = await verifier.verify("expected-token");
-  assert.equal(context?.organizationId, "ventneuf");
+  assert.equal(context?.organizationId, "00000000-0000-4000-8000-000000000001");
   assert.ok(context?.capabilities.includes("hermes:ask"));
 });
 

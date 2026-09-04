@@ -6,6 +6,8 @@ export type Capability =
   | "knowledge:personal:read"
   | "mission:read"
   | "mission:progress:write"
+  | "device:manage"
+  | "device:heartbeat"
   | "hermes:ask";
 
 export interface AuthorizationContext {
