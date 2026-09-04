@@ -185,3 +185,62 @@ test("stops and cancels only the authenticated member's latest mission", async (
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
 });
+
+test("streams tenant-scoped mission activity as authenticated SSE", async () => {
+  const app = createApp({
+    verifier: {
+      verify: async () => ({
+        organizationId: "00000000-0000-4000-8000-000000000001",
+        principalId: "member-subject",
+        principalType: "user",
+        memberId: "00000000-0000-4000-8000-000000000002",
+        projectIds: [],
+        capabilities: ["hermes:ask"],
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      }),
+    },
+    hermes: { ask: async () => ({ contextId: "unused", text: "unused" }) },
+    conversations: {
+      repository: {
+        getLatestPrivateMission: async () => ({
+          id: "mission-1",
+          status: "running",
+          context: { timing: { acceptedAt: "2026-09-03T20:00:00.000Z" } },
+        }),
+        listMissionEvents: async () => [{
+          id: "event-1",
+          missionId: "mission-1",
+          type: "tool.started",
+          payload: { tool: "terminal" },
+          occurredAt: new Date("2026-09-03T20:00:01.000Z"),
+        }],
+      },
+    } as unknown as ConversationRuntime,
+  });
+  const server = createServer(app);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    assert(address && typeof address === "object");
+    const body = await new Promise<string>((resolve, reject) => {
+      const outgoing = get({
+        hostname: "127.0.0.1",
+        port: address.port,
+        path: "/api/conversations/hermes/events",
+        headers: { authorization: "Bearer valid" },
+      }, (incoming) => {
+        incoming.setEncoding("utf8");
+        incoming.once("data", (chunk) => {
+          resolve(chunk);
+          incoming.destroy();
+        });
+      });
+      outgoing.on("error", reject);
+    });
+    assert.match(body, /event: snapshot/);
+    assert.match(body, /tool\.started/);
+    assert.doesNotMatch(body, /member-subject/);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});

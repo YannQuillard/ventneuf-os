@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import type { Database } from "./client.js";
-import { conversations, members, messages, missions, organizations } from "./schema.js";
+import { conversations, members, messages, missionEvents, missions, organizations } from "./schema.js";
 
 export class ConversationRuntimeRepository {
   constructor(private readonly database: Database) {}
@@ -275,6 +275,33 @@ export class ConversationRuntimeRepository {
           ),
         )
         .returning({ id: missions.id }),
+    );
+  }
+
+  appendMissionEvent(input: {
+    organizationId: string;
+    missionId: string;
+    type: string;
+    payload: Record<string, unknown>;
+    occurredAt: Date;
+  }) {
+    return this.database.withOrganization(input.organizationId, (transaction) =>
+      transaction.insert(missionEvents).values(input).returning(),
+    );
+  }
+
+  listMissionEvents(organizationId: string, missionId: string) {
+    return this.database.withOrganization(organizationId, (transaction) =>
+      transaction
+        .select()
+        .from(missionEvents)
+        .where(
+          and(
+            eq(missionEvents.organizationId, organizationId),
+            eq(missionEvents.missionId, missionId),
+          ),
+        )
+        .orderBy(asc(missionEvents.createdAt), asc(missionEvents.id)),
     );
   }
 

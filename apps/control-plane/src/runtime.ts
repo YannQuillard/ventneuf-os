@@ -51,6 +51,19 @@ function logMission(event: string, fields: Record<string, unknown>) {
   console.info(JSON.stringify({ component: "mission-worker", event, ...fields }));
 }
 
+const persistedRunEvents = new Set([
+  "tool.started",
+  "tool.completed",
+  "subagent.start",
+  "subagent.complete",
+  "approval.request",
+  "run.started",
+  "run.completed",
+  "run.failed",
+  "run.cancelled",
+  "run.interrupted",
+]);
+
 export interface ConversationRuntime {
   database: Database;
   repository: ConversationRuntimeRepository;
@@ -137,6 +150,7 @@ export class MissionWorker {
           ? initialContext.hermesRunId
           : undefined,
         sessionKey: `organization:${envelope.organizationId}:conversation:${record.mission.conversationId}`,
+        idempotencyKey: envelope.missionId,
         onRunStarted: async (runId) => {
           activeContext = { ...activeContext, hermesRunId: runId };
           await this.repository.setMissionRunning(
@@ -148,6 +162,19 @@ export class MissionWorker {
             organizationId: envelope.organizationId,
             missionId: envelope.missionId,
             hermesRunId: runId,
+          });
+        },
+        onEvent: async (event) => {
+          if (!persistedRunEvents.has(event.event)) return;
+          const { event: type, run_id: _runId, timestamp, ...payload } = event;
+          await this.repository.appendMissionEvent({
+            organizationId: envelope.organizationId,
+            missionId: envelope.missionId,
+            type,
+            payload,
+            occurredAt: new Date(
+              typeof timestamp === "number" ? timestamp * 1_000 : Date.now(),
+            ),
           });
         },
       });

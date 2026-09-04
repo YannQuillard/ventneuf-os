@@ -12,6 +12,7 @@ import {
   type ChatComposerInputHandle,
 } from "@astryxdesign/core/Chat";
 import { ClickableCard } from "@astryxdesign/core/ClickableCard";
+import { Button } from "@astryxdesign/core/Button";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { Grid } from "@astryxdesign/core/Grid";
 import { HStack, VStack } from "@astryxdesign/core/Layout";
@@ -19,7 +20,7 @@ import { Spinner } from "@astryxdesign/core/Spinner";
 import { Heading, Text } from "@astryxdesign/core/Text";
 import { Timestamp } from "@astryxdesign/core/Timestamp";
 import { Fragment, useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
-import { formatDuration, type Message, type MissionState, type MissionTiming } from "../lib/conversations";
+import { formatDuration, type Message, type MissionEvent, type MissionState, type MissionTiming } from "../lib/conversations";
 import { ConversationMessage } from "./conversation-message";
 import { MessageDetailsPanel } from "./message-details";
 
@@ -85,9 +86,11 @@ export function HermesConversation() {
   const [awaitingReply, setAwaitingReply] = useState(false);
   const [revealingId, setRevealingId] = useState<string>();
   const [mission, setMission] = useState<MissionState | null>(null);
+  const [missionEvents, setMissionEvents] = useState<MissionEvent[]>([]);
   const [selectedMessageId, setSelectedMessageId] = useState<string>();
   const [now, setNow] = useState(() => Date.now());
   const [error, setError] = useState<string>();
+  const [isStopping, setIsStopping] = useState(false);
   const latestUserMessageAt = useRef<number | undefined>(undefined);
   const composerInput = useRef<ChatComposerInputHandle>(null);
   const acceptedMessages = useRef<Message[]>([]);
@@ -96,13 +99,18 @@ export function HermesConversation() {
   const refresh = useCallback(async () => {
     const response = await fetch("/api/hermes/messages", { cache: "no-store" });
     if (!response.ok) throw new Error("Unable to load the conversation.");
-    const payload = await response.json() as { messages: Message[]; mission: MissionState | null };
+    const payload = await response.json() as {
+      messages: Message[];
+      mission: MissionState | null;
+      events: MissionEvent[];
+    };
     const knownIds = new Set(payload.messages.map(({ id }) => id));
     acceptedMessages.current = acceptedMessages.current.filter(({ id }) => !knownIds.has(id));
     setMessages(acceptedMessages.current.length > 0
       ? [...payload.messages, ...acceptedMessages.current]
       : payload.messages);
     setMission(payload.mission ?? null);
+    setMissionEvents(payload.events ?? []);
     setIsLoaded(true);
     if (payload.mission) {
       setAwaitingReply(payload.mission.status === "queued" || payload.mission.status === "running");
@@ -138,6 +146,24 @@ export function HermesConversation() {
       stopped = true;
       if (timer) window.clearTimeout(timer);
     };
+  }, [awaitingReply, refresh]);
+
+  useEffect(() => {
+    if (!awaitingReply) return;
+    const source = new EventSource("/api/hermes/events");
+    source.addEventListener("snapshot", (raw) => {
+      const payload = JSON.parse((raw as MessageEvent<string>).data) as {
+        mission: MissionState | null;
+        events: MissionEvent[];
+      };
+      setMission(payload.mission);
+      setMissionEvents(payload.events);
+      if (payload.mission && !["queued", "running", "waiting_for_approval"].includes(payload.mission.status)) {
+        setAwaitingReply(false);
+        void refresh();
+      }
+    });
+    return () => source.close();
   }, [awaitingReply, refresh]);
 
   useEffect(() => {
@@ -195,6 +221,23 @@ export function HermesConversation() {
   const dismiss = useCallback((pendingId: string) => {
     setPending((current) => current.filter(({ id }) => id !== pendingId));
   }, []);
+
+  const stopMission = useCallback(async () => {
+    if (!mission) return;
+    setIsStopping(true);
+    try {
+      const response = await fetch(`/api/hermes/missions/${encodeURIComponent(mission.id)}/cancel`, {
+        method: "POST",
+      });
+      if (!response.ok) throw new Error("Hermes could not stop this run.");
+      setAwaitingReply(false);
+      setMission((current) => current ? { ...current, status: "cancelled" } : null);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Hermes could not stop this run.");
+    } finally {
+      setIsStopping(false);
+    }
+  }, [mission]);
 
   const quote = useCallback((value: string) => {
     setContent(quoted(value));
@@ -326,7 +369,23 @@ export function HermesConversation() {
                             ? Math.max(0, now - new Date(mission.timing.acceptedAt).getTime())
                             : undefined)}
                         </span>
+                        <Button
+                          label="Stop"
+                          variant="ghost"
+                          size="sm"
+                          isLoading={isStopping}
+                          clickAction={stopMission}
+                        />
                       </div>
+                      {missionEvents.slice(-3).map((event) => (
+                        <div className="mission-event" key={event.id}>
+                          <span>{event.type === "tool.started" ? "Running" : "Finished"}</span>
+                          <strong>{typeof event.payload.tool === "string" ? event.payload.tool : event.type}</strong>
+                          {typeof event.payload.duration === "number"
+                            ? <span>{formatDuration(event.payload.duration * 1_000)}</span>
+                            : null}
+                        </div>
+                      ))}
                     </ChatMessageBubble>
                   </ChatMessage>
                 ) : null}

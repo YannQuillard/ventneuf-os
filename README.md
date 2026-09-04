@@ -10,13 +10,14 @@ The repository is under active development. Current foundations include:
 
 - an invite-only Next.js workspace authenticated through OpenID Connect;
 - private, durable Hermes conversations backed by PostgreSQL;
-- asynchronous mission dispatch and background processing;
+- idempotent asynchronous mission dispatch and background processing;
+- persisted Hermes lifecycle and tool events with authenticated live delivery;
 - a separately deployable control plane that communicates with Hermes over A2A;
 - authenticated remote and local MCP boundaries for agent tools;
 - identity, device, mission, and capability authorization primitives;
 - a messaging-oriented interface with project channels and private agent conversations.
 
-The current interface can send a request to Hermes, persist it before execution, queue the corresponding mission, and display the durable response. Device runners, live terminal sessions, project channels, and production connectors remain under development.
+The current interface can send a request to Hermes, persist it before execution, queue the corresponding mission, follow its live tool activity, stop it, and display the durable response. Device runners, live terminal sessions, project channels, and production connectors remain under development.
 
 The production infrastructure and private operational documentation are intentionally maintained outside this public repository.
 
@@ -68,6 +69,8 @@ npm run dev
 ```
 
 The control plane fails closed in production unless its token verifier is completely configured. Local development requires an explicit `VENTNEUF_DEV_TOKEN` and must never reuse production credentials.
+
+Production migrations use the compiled `apps/control-plane/dist/migrate.js` entrypoint from an isolated one-shot workload. The web runtime must retain a separate database identity without schema ownership or DDL privileges.
 
 ## Security
 

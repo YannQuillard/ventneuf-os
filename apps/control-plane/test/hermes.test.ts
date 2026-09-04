@@ -128,6 +128,47 @@ test("stops an authenticated Hermes run", async () => {
   assert.equal(request.init?.method, "POST");
 });
 
+test("streams structured run events and sends an idempotency key", async () => {
+  const events: string[] = [];
+  let submissionHeaders = new Headers();
+  const fetchMock = (async (url: string | URL | Request, init?: RequestInit) => {
+    const path = String(url);
+    if (path.endsWith("/v1/runs")) {
+      submissionHeaders = new Headers(init?.headers);
+      return Response.json({ run_id: "run-1", status: "started" }, { status: 202 });
+    }
+    if (path.endsWith("/events")) {
+      return new Response([
+        'data: {"event":"tool.started","tool":"terminal"}',
+        'data: {"event":"tool.completed","tool":"terminal","duration":0.5}',
+        "",
+      ].join("\n\n"), { headers: { "content-type": "text/event-stream" } });
+    }
+    return Response.json({
+      run_id: "run-1",
+      status: "completed",
+      session_id: "context-1",
+      output: "Done",
+    });
+  }) as typeof fetch;
+  const client = new RunsHermesClient(
+    "http://hermes.internal:8643",
+    new StaticTokenProvider("private-token"),
+    fetchMock,
+    0,
+  );
+
+  await client.ask({
+    message: "test",
+    contextId: "context-1",
+    idempotencyKey: "mission-1",
+    onEvent: async (event) => { events.push(event.event); },
+  });
+
+  assert.equal(submissionHeaders.get("idempotency-key"), "mission-1");
+  assert.deepEqual(events, ["tool.started", "tool.completed"]);
+});
+
 test("rejects an A2A JSON-RPC error", async () => {
   const fetchMock = (async () =>
     Response.json({

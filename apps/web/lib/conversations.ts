@@ -21,9 +21,17 @@ export interface MissionTiming {
 
 export interface MissionState {
   id: string;
-  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  status: "queued" | "running" | "waiting_for_approval" | "completed" | "failed" | "cancelled";
   timing: MissionTiming;
   failure?: string;
+}
+
+export interface MissionEvent {
+  id: string;
+  missionId: string;
+  type: string;
+  payload: Record<string, unknown>;
+  occurredAt: string;
 }
 
 export function formatDuration(milliseconds: number | undefined): string | undefined {

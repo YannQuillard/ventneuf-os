@@ -34,6 +34,7 @@ const unusedQueue = {} as MissionQueue;
 test("processes a queued Hermes mission and persists its reply", async () => {
   const events: string[] = [];
   let persistedRunId: unknown;
+  const runEvents: string[] = [];
   const worker = new MissionWorker(
     repository({
       setMissionRunning: async (
@@ -44,6 +45,7 @@ test("processes a queued Hermes mission and persists its reply", async () => {
         persistedRunId = context.hermesRunId ?? persistedRunId;
         events.push("running");
       },
+      appendMissionEvent: async (input: { type: string }) => { runEvents.push(input.type); },
       completeMission: async (input: {
         content: string;
         contextId: string;
@@ -61,6 +63,8 @@ test("processes a queued Hermes mission and persists its reply", async () => {
         assert.equal(input.contextId, "context-before");
         assert.equal(input.message, "Investigate the issue");
         await input.onRunStarted?.("run-1");
+        await input.onEvent?.({ event: "tool.started", tool: "terminal", timestamp: 1 });
+        await input.onEvent?.({ event: "reasoning.available", text: "private reasoning" });
         return { contextId: "context-after", text: "Issue found" };
       },
     },
@@ -68,6 +72,7 @@ test("processes a queued Hermes mission and persists its reply", async () => {
 
   await worker.process({ organizationId: "organization-1", missionId: "mission-1" });
   assert.equal(persistedRunId, "run-1");
+  assert.deepEqual(runEvents, ["tool.started"]);
   assert.deepEqual(events, ["running", "running", "completed:context-after:Issue found"]);
 });
 
