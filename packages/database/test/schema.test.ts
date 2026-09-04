@@ -1,11 +1,25 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { channels, conversations, members, messages, missionEvents, missions, organizations } from "../src/schema.js";
+import {
+  channels,
+  conversations,
+  deviceCredentials,
+  deviceEnrollments,
+  devices,
+  members,
+  messages,
+  missionEvents,
+  missions,
+  organizations,
+} from "../src/schema.js";
 import { splitMigration } from "../src/migrate.js";
 
 test("exports the initial multi-tenant conversation schema", () => {
   assert.ok(organizations);
   assert.ok(members);
+  assert.ok(devices);
+  assert.ok(deviceEnrollments);
+  assert.ok(deviceCredentials);
   assert.ok(channels);
   assert.ok(conversations);
   assert.ok(messages);

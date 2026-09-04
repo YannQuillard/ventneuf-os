@@ -1,5 +1,6 @@
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
+import { randomUUID } from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
 import { bearerToken, type TokenVerifier } from "./authentication.js";
 import type { HermesClient } from "./hermes.js";
@@ -7,6 +8,13 @@ import { createRemoteMcpServer } from "./mcp.js";
 import type { ConversationRuntime } from "./runtime.js";
 import { assertAuthorized } from "@ventneuf/domain";
 import { z } from "zod";
+import {
+  createDeviceCredential,
+  createEnrollmentToken,
+  hashDeviceToken,
+  parseDeviceCredential,
+  parseEnrollmentToken,
+} from "./device-auth.js";
 
 export interface AppServices {
   verifier: TokenVerifier;
@@ -20,6 +28,100 @@ export function createApp({ verifier, hermes, conversations, host = "127.0.0.1" 
 
   app.get("/health", (_request, response) => {
     response.json({ service: "ventneuf-os-control-plane", status: "ok" });
+  });
+
+  app.post("/api/devices/enrollments", async (request: Request, response: Response, next: NextFunction) => {
+    try {
+      const context = await authenticate(request, response);
+      if (!context) return;
+      assertAuthorized(context, "device:manage");
+      if (!conversations) return void response.status(503).json({ error: "conversation_runtime_unavailable" });
+
+      const expiresAt = new Date(Date.now() + 10 * 60_000);
+      const enrollment = createEnrollmentToken(context.organizationId);
+      await conversations.devices.createEnrollment({
+        organizationId: context.organizationId,
+        externalSubject: context.principalId,
+        tokenHash: enrollment.tokenHash,
+        expiresAt,
+      });
+      response.setHeader("cache-control", "no-store");
+      response.status(201).json({ token: enrollment.token, expiresAt: expiresAt.toISOString() });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/runner/enroll", async (request: Request, response: Response, next: NextFunction) => {
+    try {
+      if (!conversations) return void response.status(503).json({ error: "conversation_runtime_unavailable" });
+      const parsedBody = z.object({
+        token: z.string().min(1).max(256),
+        name: z.string().trim().min(1).max(100).regex(/^[^\u0000-\u001f\u007f]+$/),
+        platform: z.enum(["darwin", "linux", "win32"]),
+      }).safeParse(request.body);
+      if (!parsedBody.success) return void response.status(400).json({ error: "invalid_request" });
+      const enrollmentScope = parseEnrollmentToken(parsedBody.data.token);
+      if (!enrollmentScope) return void response.status(401).json({ error: "invalid_enrollment" });
+
+      const deviceId = randomUUID();
+      const credential = createDeviceCredential(enrollmentScope.organizationId, deviceId);
+      const device = await conversations.devices.consumeEnrollment({
+        organizationId: enrollmentScope.organizationId,
+        tokenHash: hashDeviceToken(parsedBody.data.token),
+        credentialHash: credential.tokenHash,
+        deviceId,
+        name: parsedBody.data.name,
+        platform: parsedBody.data.platform,
+        now: new Date(),
+      });
+      if (!device) return void response.status(401).json({ error: "invalid_enrollment" });
+
+      response.setHeader("cache-control", "no-store");
+      response.status(201).json({
+        device: { id: device.id, name: device.name, platform: device.platform },
+        credential: credential.token,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/runner/heartbeat", async (request: Request, response: Response, next: NextFunction) => {
+    try {
+      if (!conversations) return void response.status(503).json({ error: "conversation_runtime_unavailable" });
+      const token = bearerToken(request);
+      const scope = token ? parseDeviceCredential(token) : undefined;
+      if (!token || !scope) {
+        response.setHeader("WWW-Authenticate", "Bearer");
+        return void response.status(401).json({ error: "unauthorized" });
+      }
+
+      const now = new Date();
+      const device = await conversations.devices.heartbeat({
+        organizationId: scope.organizationId,
+        deviceId: scope.deviceId,
+        credentialHash: hashDeviceToken(token),
+        now,
+      });
+      if (!device) {
+        response.setHeader("WWW-Authenticate", "Bearer");
+        return void response.status(401).json({ error: "unauthorized" });
+      }
+      assertAuthorized({
+        organizationId: scope.organizationId,
+        principalId: device.id,
+        principalType: "device",
+        memberId: device.memberId,
+        deviceId: device.id,
+        projectIds: [],
+        capabilities: ["device:heartbeat"],
+        expiresAt: new Date(now.getTime() + 60_000).toISOString(),
+      }, "device:heartbeat", now);
+      response.json({ deviceId: device.id, status: "online", lastSeenAt: now.toISOString() });
+    } catch (error) {
+      next(error);
+    }
   });
 
   async function authenticate(request: Request, response: Response) {

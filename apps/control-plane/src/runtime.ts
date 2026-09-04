@@ -6,7 +6,12 @@ import {
   SQSClient,
 } from "@aws-sdk/client-sqs";
 import { GetSecretValueCommand, SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
-import { ConversationRuntimeRepository, createDatabase, type Database } from "@ventneuf/database";
+import {
+  ConversationRuntimeRepository,
+  createDatabase,
+  DeviceRuntimeRepository,
+  type Database,
+} from "@ventneuf/database";
 import {
   HermesRequestTimeoutError,
   HermesRunCancelledError,
@@ -67,6 +72,7 @@ const persistedRunEvents = new Set([
 export interface ConversationRuntime {
   database: Database;
   repository: ConversationRuntimeRepository;
+  devices: DeviceRuntimeRepository;
   queue: MissionQueue;
   worker: MissionWorker;
 }
@@ -301,11 +307,12 @@ export async function createConversationRuntime(hermes: HermesClient, env = proc
 
   const database = createDatabase(databaseUrl.toString());
   const repository = new ConversationRuntimeRepository(database);
+  const devices = new DeviceRuntimeRepository(database);
   await repository.ensureOrganization({
     id: organizationId,
     slug: organizationSlug,
     name: organizationName,
   });
   const queue = new MissionQueue(new SQSClient({ region }), queueUrl);
-  return { database, repository, queue, worker: new MissionWorker(repository, queue, hermes) };
+  return { database, repository, devices, queue, worker: new MissionWorker(repository, queue, hermes) };
 }

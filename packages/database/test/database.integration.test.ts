@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import postgres from "postgres";
+import { createDatabase } from "../src/client.js";
+import { DeviceRuntimeRepository } from "../src/devices.js";
 import { migrate } from "../src/migrate.js";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -54,6 +56,55 @@ test("migrations enforce tenant integrity and row isolation", { skip: !databaseU
 
     assert.equal(visibleConversations.length, 1);
     assert.equal(visibleConversations[0]?.title, "Visible conversation");
+
+    const database = createDatabase(databaseUrl!);
+    const devices = new DeviceRuntimeRepository(database);
+    try {
+      const now = new Date();
+      await devices.createEnrollment({
+        organizationId: organizationA.id,
+        externalSubject: "subject-a",
+        tokenHash: "enrollment-hash-a",
+        expiresAt: new Date(now.getTime() + 60_000),
+      });
+      const enrolled = await devices.consumeEnrollment({
+        organizationId: organizationA.id,
+        tokenHash: "enrollment-hash-a",
+        credentialHash: "credential-hash-a",
+        deviceId: "00000000-0000-4000-8000-000000000101",
+        name: "Test Mac",
+        platform: "darwin",
+        now,
+      });
+      assert.equal(enrolled?.name, "Test Mac");
+      assert.equal(await devices.consumeEnrollment({
+        organizationId: organizationA.id,
+        tokenHash: "enrollment-hash-a",
+        credentialHash: "credential-hash-b",
+        deviceId: "00000000-0000-4000-8000-000000000102",
+        name: "Duplicate Mac",
+        platform: "darwin",
+        now,
+      }), undefined);
+
+      const heartbeat = await devices.heartbeat({
+        organizationId: organizationA.id,
+        deviceId: enrolled!.id,
+        credentialHash: "credential-hash-a",
+        now: new Date(now.getTime() + 1_000),
+      });
+      assert.equal(heartbeat?.id, enrolled?.id);
+
+      await client`update devices set revoked_at = now() where id = ${enrolled!.id}`;
+      assert.equal(await devices.heartbeat({
+        organizationId: organizationA.id,
+        deviceId: enrolled!.id,
+        credentialHash: "credential-hash-a",
+        now: new Date(now.getTime() + 2_000),
+      }), undefined);
+    } finally {
+      await database.close();
+    }
   } finally {
     await client.end();
   }
