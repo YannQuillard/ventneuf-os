@@ -79,7 +79,13 @@ To run the macOS runner during development:
 VENTNEUF_CONTROL_PLANE_URL=https://control-plane.example.com npm run dev --workspace @ventneuf/runner
 ```
 
-The runner binds only to `127.0.0.1`, accepts configured web origins, stores its device credential in the macOS Keychain, and makes outbound-only requests to the control plane. Configure `VENTNEUF_WEB_ORIGINS` as a comma-separated allowlist when the web application is not running on `http://localhost:3000`.
+To install the compiled runner as a persistent per-user macOS service:
+
+```bash
+VENTNEUF_CONTROL_PLANE_URL=https://control-plane.example.com npm run install-service --workspace @ventneuf/runner
+```
+
+The installer copies the compiled runner into the current user's Application Support directory and registers a `launchd` agent that starts at login and restarts after failure. The runner binds only to `127.0.0.1`, accepts configured web origins, stores its device credential in the macOS Keychain, and makes outbound-only requests to the control plane. Configure `VENTNEUF_WEB_ORIGINS` as a comma-separated allowlist when the web application is not running on `http://localhost:3000`.
 
 Production migrations use the compiled `apps/control-plane/dist/migrate.js` entrypoint from an isolated one-shot workload. The web runtime must retain a separate database identity without schema ownership or DDL privileges.
 
