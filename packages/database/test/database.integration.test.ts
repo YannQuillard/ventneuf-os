@@ -94,6 +94,11 @@ test("migrations enforce tenant integrity and row isolation", { skip: !databaseU
         now: new Date(now.getTime() + 1_000),
       });
       assert.equal(heartbeat?.id, enrolled?.id);
+      const memberDevices = await devices.listForMember({
+        organizationId: organizationA.id,
+        externalSubject: "subject-a",
+      });
+      assert.deepEqual(memberDevices.map(({ id }) => id), [enrolled!.id]);
 
       await client`update devices set revoked_at = now() where id = ${enrolled!.id}`;
       assert.equal(await devices.heartbeat({

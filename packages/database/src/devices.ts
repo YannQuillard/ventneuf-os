@@ -1,4 +1,4 @@
-import { and, eq, gt, isNull } from "drizzle-orm";
+import { and, desc, eq, gt, isNull } from "drizzle-orm";
 import type { Database } from "./client.js";
 import { deviceCredentials, deviceEnrollments, devices, members } from "./schema.js";
 
@@ -53,6 +53,28 @@ export class DeviceRuntimeRepository {
       if (!enrollment) throw new Error("Failed to create the device enrollment.");
       return enrollment;
     });
+  }
+
+  listForMember(input: { organizationId: string; externalSubject: string }) {
+    return this.database.withOrganization(input.organizationId, (transaction) => transaction
+      .select({
+        id: devices.id,
+        name: devices.name,
+        platform: devices.platform,
+        lastSeenAt: devices.lastSeenAt,
+        revokedAt: devices.revokedAt,
+      })
+      .from(devices)
+      .innerJoin(members, and(
+        eq(members.organizationId, devices.organizationId),
+        eq(members.id, devices.memberId),
+      ))
+      .where(and(
+        eq(devices.organizationId, input.organizationId),
+        eq(members.externalSubject, input.externalSubject),
+        isNull(devices.revokedAt),
+      ))
+      .orderBy(desc(devices.lastSeenAt)));
   }
 
   consumeEnrollment(input: {

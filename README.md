@@ -13,12 +13,13 @@ The repository is under active development. Current foundations include:
 - idempotent asynchronous mission dispatch and background processing;
 - persisted Hermes lifecycle and tool events with authenticated live delivery;
 - one-time, tenant-scoped device enrollment and revocable runner credentials;
+- a macOS runner bridge with loopback-only onboarding, Keychain storage, and outbound heartbeats;
 - a separately deployable control plane that communicates with Hermes over A2A;
 - authenticated remote and local MCP boundaries for agent tools;
 - identity, device, mission, and capability authorization primitives;
 - a messaging-oriented interface with project channels and private agent conversations.
 
-The current interface can send a request to Hermes, persist it before execution, queue the corresponding mission, follow its live tool activity, stop it, and display the durable response. The control plane can securely enroll a device and authenticate its outbound heartbeat. Mission execution on device runners, live terminal sessions, project channels, and production connectors remain under development.
+The current interface can send a request to Hermes, persist it before execution, queue the corresponding mission, follow its live tool activity, stop it, and display the durable response. It can also discover a local runner, enroll the Mac without exposing credentials, and show its cloud heartbeat status. Mission execution on device runners, live terminal sessions, project channels, and production connectors remain under development.
 
 The production infrastructure and private operational documentation are intentionally maintained outside this public repository.
 
@@ -27,6 +28,7 @@ The production infrastructure and private operational documentation are intentio
 ```text
 apps/web                 Web and PWA product experience
 apps/control-plane       Remote MCP and agent control-plane service
+apps/runner              Local runner, loopback onboarding, and device heartbeat
 packages/domain          Shared identity and authorization rules
 packages/database        PostgreSQL schema and tenant-scoped repositories
 packages/mcp-server      Local MCP and runner-bridge foundations
@@ -70,6 +72,14 @@ npm run dev
 ```
 
 The control plane fails closed in production unless its token verifier is completely configured. Local development requires an explicit `VENTNEUF_DEV_TOKEN` and must never reuse production credentials.
+
+To run the macOS runner during development:
+
+```bash
+VENTNEUF_CONTROL_PLANE_URL=https://control-plane.example.com npm run dev --workspace @ventneuf/runner
+```
+
+The runner binds only to `127.0.0.1`, accepts configured web origins, stores its device credential in the macOS Keychain, and makes outbound-only requests to the control plane. Configure `VENTNEUF_WEB_ORIGINS` as a comma-separated allowlist when the web application is not running on `http://localhost:3000`.
 
 Production migrations use the compiled `apps/control-plane/dist/migrate.js` entrypoint from an isolated one-shot workload. The web runtime must retain a separate database identity without schema ownership or DDL privileges.
 

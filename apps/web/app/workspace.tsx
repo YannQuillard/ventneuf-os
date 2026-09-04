@@ -9,7 +9,6 @@ import { Kbd } from "@astryxdesign/core/Kbd";
 import { HStack, Layout, LayoutContent, LayoutHeader, StackItem, VStack } from "@astryxdesign/core/Layout";
 import { MoreMenu } from "@astryxdesign/core/MoreMenu";
 import { SideNav, SideNavHeading, SideNavItem, SideNavSection } from "@astryxdesign/core/SideNav";
-import { StatusDot } from "@astryxdesign/core/StatusDot";
 import { Heading, Text } from "@astryxdesign/core/Text";
 import { createStaticSource } from "@astryxdesign/core/Typeahead";
 import {
@@ -20,6 +19,7 @@ import {
 import { ChatBubbleLeftRightIcon as ChatBubbleLeftRightSolidIcon } from "@heroicons/react/24/solid";
 import { useRouter } from "next/navigation";
 import { useMemo, useState, type ReactNode } from "react";
+import { RunnerSetup } from "./runner-setup";
 
 const projectChannels = ["ventneuf-os", "ampel", "brandstamp"];
 
@@ -72,13 +72,7 @@ export function Workspace({ email, children }: { email: string; children: ReactN
             )}
             footer={(
               <VStack gap={0}>
-                <HStack gap={2} vAlign="center" padding={3}>
-                  <StatusDot variant="neutral" label="Runner setup pending" />
-                  <VStack gap={0}>
-                    <Text type="label" weight="semibold">This Mac</Text>
-                    <Text type="supporting" color="secondary">Runner setup pending</Text>
-                  </VStack>
-                </HStack>
+                <RunnerSetup />
                 <Divider />
                 <HStack gap={2} vAlign="center" padding={3}>
                   <Avatar name={email} size="sm" />
