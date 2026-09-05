@@ -2,7 +2,7 @@ import { lstat, opendir, readFile, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 
-export interface RegisteredRepository { id: string; name: string; path: string }
+export interface RegisteredRepository { id: string; name: string; path: string; orcaReview?: boolean }
 export const defaultRepositoriesFile = () => join(homedir(), ".config", "ventneuf.os", "repositories.json");
 
 export async function loadRepositories(path: string): Promise<RegisteredRepository[]> {
@@ -19,20 +19,27 @@ export async function loadRepositories(path: string): Promise<RegisteredReposito
   for (const entry of entries) {
     if (!entry || typeof entry.id !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(entry.id)
       || ids.has(entry.id) || typeof entry.name !== "string" || !entry.name.trim() || entry.name.length > 100
-      || typeof entry.path !== "string" || !isAbsolute(entry.path)) {
+      || typeof entry.path !== "string" || !isAbsolute(entry.path)
+      || (entry.orcaReview !== undefined && typeof entry.orcaReview !== "boolean")) {
       throw new Error("Invalid repository configuration.");
     }
     ids.add(entry.id);
     const path = await realpath(entry.path);
     if (!(await stat(path)).isDirectory()) throw new Error("A registered repository must be a directory.");
-    repositories.push({ id: entry.id, name: entry.name.trim(), path });
+    repositories.push({ id: entry.id, name: entry.name.trim(), path,
+      ...(entry.orcaReview === true ? { orcaReview: true } : {}),
+    });
   }
   return repositories;
 }
 
-export interface ReadOnlyMission { id: string; repositoryId: string; adapter: "repository-check" }
+export interface ReadOnlyMission { id: string; repositoryId: string; adapter: "repository-check" | "orca-review" }
+export interface MissionExecution {
+  leaseExpiresAt(): number;
+  progress(content: string): Promise<void>;
+}
 export interface MissionAdapter {
-  execute(mission: ReadOnlyMission, repository: RegisteredRepository, signal: AbortSignal): Promise<string>;
+  execute(mission: ReadOnlyMission, repository: RegisteredRepository, signal: AbortSignal, execution?: MissionExecution): Promise<string>;
 }
 
 // No shell, source file reads, recursive traversal, or repository-controlled code execution.

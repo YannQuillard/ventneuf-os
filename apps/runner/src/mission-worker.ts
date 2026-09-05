@@ -15,9 +15,10 @@ export interface MissionReport {
   content: string;
 }
 export interface MissionClient {
-  registerRepositories(device: StoredDevice, repositories: Array<{ id: string; name: string }>): Promise<void>;
+  registerRepositories(device: StoredDevice, repositories: Array<{ id: string; name: string; orcaReview?: boolean }>): Promise<void>;
   claimMission(device: StoredDevice, owner: string): Promise<ClaimedMission | null>;
   reportMission(device: StoredDevice, missionId: string, report: MissionReport): Promise<void>;
+  renewMission?(device: StoredDevice, missionId: string, lease: { owner: string; token: string }): Promise<string>;
 }
 
 export class RunnerMissionWorker {
@@ -28,6 +29,7 @@ export class RunnerMissionWorker {
     store: CredentialStore;
     repositories: () => Promise<RegisteredRepository[]>;
     adapter: MissionAdapter;
+    renewalIntervalMs?: number;
   }) {}
 
   async tick(): Promise<void> {
@@ -37,7 +39,8 @@ export class RunnerMissionWorker {
       const device = await this.options.store.load();
       if (!device) return;
       const repositories = await this.options.repositories();
-      await this.options.client.registerRepositories(device, repositories.map(({ id, name }) => ({ id, name })));
+      await this.options.client.registerRepositories(device, repositories.map(({ id, name, orcaReview }) =>
+        ({ id, name, ...(orcaReview ? { orcaReview } : {}) })));
       const mission = await this.options.client.claimMission(device, this.owner);
       if (!mission) return;
       const report = async (kind: MissionReport["kind"], content: string) => {
@@ -50,18 +53,52 @@ export class RunnerMissionWorker {
           }
         }
       };
-      await report("progress", "Checking the registered repository in read-only mode.");
+      await report("progress", mission.adapter === "orca-review"
+        ? "Preparing a read-only code review with Orca." : "Checking the registered repository in read-only mode.");
       let result: string;
+      const controller = new AbortController();
+      let leaseExpiresAt = Date.parse(mission.leaseExpiresAt);
+      const deadline = Date.now() + (mission.adapter === "orca-review" ? 300_000 : 10_000);
+      let stopped = false;
+      let renewal: Promise<void> = Promise.resolve();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const expiryTimer = setInterval(() => {
+        if (Date.now() >= Math.min(deadline, leaseExpiresAt)) controller.abort(new LeaseRejectedError("Execution deadline reached."));
+      }, 100);
+      const renew = async () => {
+        if (stopped || controller.signal.aborted) return;
+        try {
+          if (!this.options.client.renewMission) throw new Error("Lease renewal unavailable.");
+          const next = Date.parse(await this.options.client.renewMission(device, mission.id, { owner: this.owner, token: mission.leaseToken }));
+          if (!Number.isFinite(next) || next <= Date.now()) throw new LeaseRejectedError("Lease expired.");
+          leaseExpiresAt = next;
+          if (!stopped) timer = setTimeout(() => { renewal = renew(); }, this.options.renewalIntervalMs ?? 15_000);
+        } catch (error) { controller.abort(error); }
+      };
       try {
         const repository = repositories.find(({ id }) => id === mission.repositoryId);
         if (!repository) throw new Error("Repository unavailable.");
-        const remainingMs = Date.parse(mission.leaseExpiresAt) - Date.now();
-        if (!Number.isFinite(remainingMs) || remainingMs <= 0) throw new Error("Lease expired.");
-        result = await this.options.adapter.execute(mission, repository, AbortSignal.timeout(Math.min(10_000, remainingMs)));
+        if (!Number.isFinite(leaseExpiresAt) || leaseExpiresAt <= Date.now()) throw new LeaseRejectedError("Lease expired.");
+        if (mission.adapter === "orca-review") {
+          if (!repository.orcaReview) throw new Error("Orca review is not enabled for this repository.");
+          await renew();
+        }
+        controller.signal.throwIfAborted();
+        result = await this.options.adapter.execute(mission, repository, controller.signal, {
+          leaseExpiresAt: () => Math.min(deadline, leaseExpiresAt),
+          progress: (content) => report("progress", content),
+        });
+        controller.signal.throwIfAborted();
       } catch {
-        await report("failed", "The read-only repository check could not complete. Verify the local repository registration.");
+        await report("failed", "The read-only mission could not complete. Verify the local runner and repository configuration.");
         return;
+      } finally {
+        stopped = true;
+        if (timer) clearTimeout(timer);
+        clearInterval(expiryTimer);
+        await renewal;
       }
+      controller.signal.throwIfAborted();
       await report("completed", result);
     } finally { this.busy = false; }
   }

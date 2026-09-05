@@ -6,7 +6,8 @@ import { RunnerCloudClient } from "./cloud-client.js";
 import { MacOSKeychainCredentialStore } from "./credential-store.js";
 import { installLaunchAgent, launchAgentStatus, uninstallLaunchAgent } from "./launch-agent.js";
 import { RunnerMissionWorker } from "./mission-worker.js";
-import { defaultRepositoriesFile, loadRepositories, RepositoryCheckAdapter } from "./repositories.js";
+import { defaultRepositoriesFile, loadRepositories } from "./repositories.js";
+import { OrcaReviewAdapter, RunnerAdapters } from "./orca-review.js";
 import { LocalRunnerBridge } from "./local-bridge.js";
 
 if (process.platform !== "darwin") throw new Error("The first runner release supports macOS only.");
@@ -27,6 +28,8 @@ if (command === "install") {
     controlPlaneUrl: controlPlaneUrl(),
     webOrigins: process.env.VENTNEUF_WEB_ORIGINS ?? defaultWebOrigins,
     repositoriesFile: process.env.VENTNEUF_REPOSITORIES_FILE,
+    orcaPath: process.env.VENTNEUF_ORCA_PATH,
+    codexPath: process.env.VENTNEUF_CODEX_PATH,
   });
   console.info(`Installed ventneuf.os runner at ${paths.supportDirectory}`);
 } else if (command === "uninstall") {
@@ -54,8 +57,11 @@ if (command === "install") {
     allowedOrigins,
   });
   await bridge.start(port);
-  new RunnerMissionWorker({ client, store, adapter: new RepositoryCheckAdapter(),
-    repositories: () => loadRepositories(process.env.VENTNEUF_REPOSITORIES_FILE ?? defaultRepositoriesFile()),
+  const review = process.env.VENTNEUF_ORCA_PATH && process.env.VENTNEUF_CODEX_PATH
+    ? new OrcaReviewAdapter({ orcaPath: process.env.VENTNEUF_ORCA_PATH, codexPath: process.env.VENTNEUF_CODEX_PATH }) : undefined;
+  new RunnerMissionWorker({ client, store, adapter: new RunnerAdapters(review),
+    repositories: async () => (await loadRepositories(process.env.VENTNEUF_REPOSITORIES_FILE ?? defaultRepositoriesFile()))
+      .map((repository) => ({ ...repository, orcaReview: Boolean(review && repository.orcaReview) })),
   }).start();
   console.info(`ventneuf.os runner listening on http://127.0.0.1:${port}`);
 } else {

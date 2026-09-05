@@ -30,7 +30,7 @@ export class RunnerMissionRepository {
     if (!device) throw new RunnerAccessError("The device credential is invalid.");
   }
 
-  register(scope: DeviceScope, repositories: Array<{ id: string; name: string }>) {
+  register(scope: DeviceScope, repositories: Array<{ id: string; name: string; orcaReview?: boolean }>) {
     return this.database.withOrganization(scope.organizationId, async (transaction) => {
       await this.authenticate(transaction, scope);
       await transaction.update(devices).set({ repositories, updatedAt: new Date() }).where(and(
@@ -53,11 +53,13 @@ export class RunnerMissionRepository {
       while (true) {
         const [mission] = await transaction.select().from(missions).where(and(
           eq(missions.organizationId, scope.organizationId), eq(missions.assignedDeviceId, scope.deviceId),
-          sql`${missions.context}->>'type' = 'runner.repository-check'`,
+          sql`${missions.context}->>'type' in ('runner.repository-check', 'runner.orca-review')`,
           or(eq(missions.status, "queued"), and(eq(missions.status, "running"), lte(missions.leaseExpiresAt, now))),
         )).orderBy(asc(missions.createdAt), asc(missions.id)).for("update", { skipLocked: true }).limit(1);
         if (!mission) return null;
-        if (mission.attempts >= maxAttempts) {
+        const adapter = mission.context.type === "runner.orca-review" ? "orca-review" : "repository-check";
+        // Never automatically launch a second coding agent after an ambiguous execution.
+        if (mission.attempts >= (adapter === "orca-review" ? 1 : maxAttempts)) {
           await transaction.update(missions).set({ status: "failed", leaseExpiresAt: null, updatedAt: now,
             context: { ...mission.context, failure: "Runner lease recovery attempts exhausted." },
           }).where(eq(missions.id, mission.id));
@@ -73,8 +75,26 @@ export class RunnerMissionRepository {
           missionId: mission.id, type: "run.started",
           payload: { executor: "runner", attempt: mission.attempts + 1 }, occurredAt: now });
         return { id: mission.id, repositoryId: mission.context.repositoryId,
-          adapter: "repository-check" as const, attempt: mission.attempts + 1, leaseExpiresAt: expiresAt.toISOString() };
+          adapter, attempt: mission.attempts + 1, leaseExpiresAt: expiresAt.toISOString() };
       }
+    });
+  }
+
+  renew(scope: DeviceScope, input: { missionId: string; owner: string; tokenHash: string }) {
+    return this.database.withOrganization(scope.organizationId, async (transaction) => {
+      await this.authenticate(transaction, scope);
+      const [mission] = await transaction.select().from(missions).where(and(
+        eq(missions.organizationId, scope.organizationId), eq(missions.id, input.missionId),
+        eq(missions.assignedDeviceId, scope.deviceId), eq(missions.leaseOwner, input.owner),
+        eq(missions.leaseTokenHash, input.tokenHash),
+      )).for("update").limit(1);
+      const now = new Date();
+      if (!mission || mission.status !== "running" || !mission.leaseExpiresAt || mission.leaseExpiresAt <= now) {
+        throw new RunnerLeaseError("The runner lease expired or the mission stopped.");
+      }
+      const expiresAt = new Date(now.getTime() + leaseDurationMs);
+      await transaction.update(missions).set({ leaseExpiresAt: expiresAt, updatedAt: now }).where(eq(missions.id, mission.id));
+      return { leaseExpiresAt: expiresAt.toISOString() };
     });
   }
 
