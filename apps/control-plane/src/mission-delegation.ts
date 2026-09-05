@@ -1,7 +1,7 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
-import { SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
+import { GenerateMacCommand, KMSClient, VerifyMacCommand } from "@aws-sdk/client-kms";
 import { z } from "zod";
-import { SecretsManagerTokenProvider, StaticTokenProvider, type TokenProvider } from "./hermes.js";
+import { StaticTokenProvider, type TokenProvider } from "./hermes.js";
 
 const adapterSchema = z.enum(["repository-check", "orca-review"]);
 const repositoryIdSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/);
@@ -57,9 +57,57 @@ export class InvalidMissionDelegationError extends Error {
   }
 }
 
+export interface MissionDelegationMac {
+  sign(message: Uint8Array): Promise<Uint8Array>;
+  verify(message: Uint8Array, mac: Uint8Array): Promise<boolean>;
+}
+
+export class HmacMissionDelegationMac implements MissionDelegationMac {
+  constructor(private readonly secrets: TokenProvider) {}
+
+  async sign(message: Uint8Array): Promise<Uint8Array> {
+    return createHmac("sha256", await this.secret()).update(message).digest();
+  }
+
+  async verify(message: Uint8Array, mac: Uint8Array): Promise<boolean> {
+    const expected = await this.sign(message);
+    return expected.length === mac.length && timingSafeEqual(expected, mac);
+  }
+
+  private async secret(): Promise<string> {
+    const secret = await this.secrets.getToken();
+    if (Buffer.byteLength(secret) < 32) throw new Error("The mission delegation secret must contain at least 32 bytes.");
+    return secret;
+  }
+}
+
+export class KmsMissionDelegationMac implements MissionDelegationMac {
+  constructor(private readonly client: KMSClient, private readonly keyId: string) {}
+
+  async sign(message: Uint8Array): Promise<Uint8Array> {
+    const result = await this.client.send(new GenerateMacCommand({
+      KeyId: this.keyId,
+      MacAlgorithm: "HMAC_SHA_256",
+      Message: message,
+    }));
+    if (!result.Mac) throw new Error("AWS KMS returned no mission delegation MAC.");
+    return result.Mac;
+  }
+
+  async verify(message: Uint8Array, mac: Uint8Array): Promise<boolean> {
+    const result = await this.client.send(new VerifyMacCommand({
+      KeyId: this.keyId,
+      MacAlgorithm: "HMAC_SHA_256",
+      Message: message,
+      Mac: mac,
+    }));
+    return result.MacValid === true;
+  }
+}
+
 export class MissionDelegation implements MissionDelegationIssuer {
   constructor(
-    private readonly secrets: TokenProvider,
+    private readonly macs: MissionDelegationMac,
     private readonly lifetimeMs = 15 * 60_000,
   ) {
     if (lifetimeMs <= 0 || lifetimeMs > 20 * 60_000) {
@@ -92,7 +140,8 @@ export class MissionDelegation implements MissionDelegationIssuer {
       expiresAt: new Date(now.getTime() + this.lifetimeMs).toISOString(),
     });
     const payload = Buffer.from(JSON.stringify(claims)).toString("base64url");
-    return { claims, token: `vnd1.${payload}.${await this.signature(payload)}` };
+    const mac = await this.macs.sign(Buffer.from(payload, "utf8"));
+    return { claims, token: `vnd1.${payload}.${Buffer.from(mac).toString("base64url")}` };
   }
 
   async verify(token: string, now = new Date()): Promise<MissionDelegationClaims> {
@@ -101,9 +150,8 @@ export class MissionDelegation implements MissionDelegationIssuer {
       if (parts.length !== 3 || parts[0] !== "vnd1" || !parts[1] || !parts[2]) {
         throw new InvalidMissionDelegationError();
       }
-      const expected = Buffer.from(await this.signature(parts[1]), "base64url");
       const received = Buffer.from(parts[2], "base64url");
-      if (expected.length !== received.length || !timingSafeEqual(expected, received)) {
+      if (!await this.macs.verify(Buffer.from(parts[1], "utf8"), received)) {
         throw new InvalidMissionDelegationError();
       }
       const claims = claimsSchema.parse(JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")));
@@ -119,28 +167,24 @@ export class MissionDelegation implements MissionDelegationIssuer {
       throw new InvalidMissionDelegationError();
     }
   }
-
-  private async signature(payload: string): Promise<string> {
-    const secret = await this.secrets.getToken();
-    if (Buffer.byteLength(secret) < 32) throw new Error("The mission delegation secret must contain at least 32 bytes.");
-    return createHmac("sha256", secret).update(payload).digest("base64url");
-  }
 }
 
 export function createMissionDelegation(
   env: NodeJS.ProcessEnv = process.env,
 ): MissionDelegation | undefined {
-  if (env.HERMES_MCP_DELEGATION_SECRET_ID) {
-    return new MissionDelegation(new SecretsManagerTokenProvider(
-      new SecretsManagerClient({ region: env.AWS_REGION ?? "eu-west-1" }),
-      env.HERMES_MCP_DELEGATION_SECRET_ID,
+  if (env.HERMES_MCP_DELEGATION_KMS_KEY_ID) {
+    return new MissionDelegation(new KmsMissionDelegationMac(
+      new KMSClient({ region: env.AWS_REGION ?? "eu-west-1" }),
+      env.HERMES_MCP_DELEGATION_KMS_KEY_ID,
     ));
   }
   if (env.NODE_ENV !== "production" && env.HERMES_MCP_DELEGATION_SECRET) {
     if (Buffer.byteLength(env.HERMES_MCP_DELEGATION_SECRET) < 32) {
       throw new Error("The mission delegation secret must contain at least 32 bytes.");
     }
-    return new MissionDelegation(new StaticTokenProvider(env.HERMES_MCP_DELEGATION_SECRET));
+    return new MissionDelegation(new HmacMissionDelegationMac(
+      new StaticTokenProvider(env.HERMES_MCP_DELEGATION_SECRET),
+    ));
   }
   return undefined;
 }

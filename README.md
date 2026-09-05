@@ -80,7 +80,7 @@ npm run build
 npm run dev
 ```
 
-The control plane fails closed in production unless its token verifier is completely configured. Local development requires an explicit `VENTNEUF_DEV_TOKEN` and must never reuse production credentials. Hermes MCP authentication is optional until its connector is deployed, but its service and delegation secrets must always be configured together. Production accepts only `HERMES_MCP_SERVICE_SECRET_ID` and `HERMES_MCP_DELEGATION_SECRET_ID`; local development may instead use the explicit raw `HERMES_MCP_SERVICE_TOKEN` and `HERMES_MCP_DELEGATION_SECRET`. Both modes require `HERMES_MCP_SERVICE_ID` and `VENTNEUF_ORGANIZATION_ID`.
+The control plane fails closed in production unless its token verifier is completely configured. Local development requires an explicit `VENTNEUF_DEV_TOKEN` and must never reuse production credentials. Hermes MCP authentication is optional until its connector is deployed, but its service authentication and delegation signing must always be configured together. Production accepts `HERMES_MCP_SERVICE_SECRET_ID` plus `HERMES_MCP_DELEGATION_KMS_KEY_ID`; local development may instead use the explicit raw `HERMES_MCP_SERVICE_TOKEN` and `HERMES_MCP_DELEGATION_SECRET`. Both modes require `HERMES_MCP_SERVICE_ID` and `VENTNEUF_ORGANIZATION_ID`.
 
 To run the macOS runner during development:
 
