@@ -60,7 +60,12 @@ export class OrcaReviewAdapter implements MissionAdapter {
       }
       await writeReviewState(join(directory, "orca.json"), { missionId: mission.id, worktreeId: worktree.id, commit: snapshot.commit });
       const deadline = Date.now() + 300_000;
-      await writeReviewState(join(directory, "job.json"), { codexPath: this.options.codexPath, snapshot: snapshotPath, deadline });
+      await writeReviewState(join(directory, "job.json"), {
+        codexPath: this.options.codexPath,
+        snapshot: snapshotPath,
+        deadline,
+        objective: mission.objective,
+      });
       const writeLease = () => writeReviewState(join(directory, "lease.json"), { expiresAt: signal.aborted ? 0 : execution.leaseExpiresAt() });
       await writeLease();
       const updateLease = () => { writing = writing.then(writeLease); void writing.catch(() => {}); };

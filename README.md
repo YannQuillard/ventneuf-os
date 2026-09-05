@@ -45,6 +45,8 @@ MCP is the tool boundary for coding agents and future device runners. A2A is cur
 
 The authenticated remote `hermes.ask` tool queues a durable message in the caller's private conversation. It returns `missionId`, `conversationId`, and `status` immediately; the eventual reply appears in the conversation through the existing message and event APIs. It does not return an inline Hermes answer. An optional `contextId` must match that member's existing Hermes context; unknown or foreign contexts are rejected. Device and mission principals cannot use this private user tool. The worker supplies the conversation-scoped upstream session key. The local MCP prototype has a separate contract.
 
+The remote `mission.dispatch` tool accepts an explicit objective, enrolled device, registered repository, and bounded read-only adapter. It creates a durable mission only when the authenticated member owns that device and the runner has advertised the requested repository and adapter. The objective travels in the claimed mission and reaches the isolated Codex supervisor without shell interpolation. Hermes service authentication and delegated child-mission authority are separate work; until that identity is implemented, this tool accepts direct user principals only.
+
 ## Roadmap
 
 The next product milestones are:
@@ -118,7 +120,7 @@ Orca creates a separate mission worktree with setup hooks skipped. Codex tools c
 
 Reviews have a five-minute limit and renew the authenticated cloud lease every fifteen seconds. Renewal failure aborts local execution; a supervisor in the owned terminal independently kills its Codex process group when confirmed lease updates stop. Cancellation fences cloud results immediately and reaches the local process on the next renewal. Reviews receive one attempt: a lost or ambiguous launch is never automatically repeated. After expiry, polling marks the mission failed, and a user can explicitly request a new review.
 
-Mission records and bounded failure diagnostics remain in the user's Application Support `ventneuf.os/reviews` directory. Completed snapshots are removed; interrupted snapshots and Orca worktrees remain available for local diagnosis and manual cleanup. Terminal reattachment, automatic worktree cleanup, arbitrary prompts, repository writes, and pull request creation by the agent are future work.
+Mission records and bounded failure diagnostics remain in the user's Application Support `ventneuf.os/reviews` directory. Completed snapshots are removed; interrupted snapshots and Orca worktrees remain available for local diagnosis and manual cleanup. Read-only objectives are supported. Terminal reattachment, automatic worktree cleanup, repository writes, and pull request creation by the agent are future work.
 
 Set `TEST_DATABASE_URL` to an isolated disposable PostgreSQL database to include database and HTTP-to-runner integration tests in `npm test`.
 

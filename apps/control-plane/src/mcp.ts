@@ -7,6 +7,9 @@ import {
 } from "@ventneuf/domain";
 import type { ConversationRuntime } from "./runtime.js";
 import { submitPrivateMessage } from "./conversations.js";
+import { dispatchReadOnlyRunnerMission } from "./missions.js";
+
+const repositoryId = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/);
 
 function jsonResult(value: unknown) {
   return {
@@ -52,6 +55,24 @@ export function createRemoteMcpServer(
       assertAuthorized(context, "hermes:ask");
       if (!services.conversations) throw new Error("The conversation runtime is unavailable.");
       return jsonResult(await submitPrivateMessage(context, services.conversations, { content: message, contextId }));
+    },
+  );
+
+  server.registerTool(
+    "mission.dispatch",
+    {
+      title: "Dispatch a read-only runner mission",
+      description: "Queue a bounded read-only task on one of your enrolled devices and registered repositories.",
+      inputSchema: {
+        objective: z.string().trim().min(1).max(4_000),
+        deviceId: z.string().uuid(),
+        repositoryId,
+        adapter: z.enum(["repository-check", "orca-review"]).default("orca-review"),
+      },
+    },
+    async (input) => {
+      if (!services.conversations) throw new Error("The conversation runtime is unavailable.");
+      return jsonResult(await dispatchReadOnlyRunnerMission(context, services.conversations, input));
     },
   );
 

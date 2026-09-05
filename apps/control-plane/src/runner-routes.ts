@@ -5,6 +5,7 @@ import { RunnerAccessError, RunnerAssignmentError, RunnerLeaseError } from "@ven
 import { z } from "zod";
 import { bearerToken, type TokenVerifier } from "./authentication.js";
 import { hashDeviceToken, parseDeviceCredential } from "./device-auth.js";
+import { dispatchReadOnlyRunnerMission } from "./missions.js";
 import type { ConversationRuntime } from "./runtime.js";
 
 const repositoryId = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/);
@@ -28,11 +29,10 @@ export function registerRunnerRoutes(app: Express, verifier: TokenVerifier, runt
       const input = z.object({ deviceId: z.string().uuid(), repositoryId,
         adapter: z.enum(["repository-check", "orca-review"]).default("repository-check"),
       }).strict().parse(request.body);
-      const queued = await runtime.repository.enqueuePrivateMessage({
-        organizationId: context.organizationId, externalSubject: context.principalId,
-        content: `${input.adapter === "orca-review" ? "Review" : "Check"} registered repository ${input.repositoryId} in read-only mode.`, runner: input,
-      });
-      response.status(202).json({ missionId: queued.mission.id, status: "queued" });
+      response.status(202).json(await dispatchReadOnlyRunnerMission(context, runtime, {
+        ...input,
+        objective: `${input.adapter === "orca-review" ? "Review" : "Check"} registered repository ${input.repositoryId} in read-only mode.`,
+      }));
     } catch (error) {
       if (error instanceof z.ZodError) return void response.status(400).json({ error: "invalid_request" });
       if (error instanceof RunnerAssignmentError) return void response.status(404).json({ error: "repository_unavailable" });

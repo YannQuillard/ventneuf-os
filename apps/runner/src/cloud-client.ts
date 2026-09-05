@@ -33,7 +33,9 @@ export class RunnerCloudClient {
     if (payload.mission === null) return null;
     const mission = payload.mission;
     if (!mission || typeof mission.id !== "string" || !/^[a-f0-9-]{36}$/.test(mission.id)
-      || typeof mission.repositoryId !== "string" || !["repository-check", "orca-review"].includes(mission.adapter)
+      || typeof mission.repositoryId !== "string" || typeof mission.objective !== "string"
+      || !mission.objective.trim() || mission.objective.length > 4_000
+      || !["repository-check", "orca-review"].includes(mission.adapter)
       || typeof mission.leaseToken !== "string" || !/^[a-f0-9]{64}$/.test(mission.leaseToken)
       || !Number.isFinite(Date.parse(mission.leaseExpiresAt))) throw new Error("Invalid runner mission response.");
     return mission;

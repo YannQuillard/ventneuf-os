@@ -53,6 +53,7 @@ test("runner assignment, concurrent claims, fenced retries, cancellation and ten
     assert.equal(claims.filter(Boolean).length, 1);
     const claimed = claims.find(Boolean)!;
     assert.equal(claimed.id, queued.mission.id);
+    assert.equal(claimed.objective, "Check the repository");
     assert.equal(claimed.attempt, 1);
     const progress = { missionId: claimed.id, owner, tokenHash: "lease-one", eventId: randomUUID(), kind: "progress" as const, content: "Checking" };
     await assert.rejects(runner.report(scope, { ...progress, owner: randomUUID() }), RunnerLeaseError);

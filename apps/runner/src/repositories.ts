@@ -33,7 +33,12 @@ export async function loadRepositories(path: string): Promise<RegisteredReposito
   return repositories;
 }
 
-export interface ReadOnlyMission { id: string; repositoryId: string; adapter: "repository-check" | "orca-review" }
+export interface ReadOnlyMission {
+  id: string;
+  repositoryId: string;
+  adapter: "repository-check" | "orca-review";
+  objective: string;
+}
 export interface MissionExecution {
   leaseExpiresAt(): number;
   progress(content: string): Promise<void>;

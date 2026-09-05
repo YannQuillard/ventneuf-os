@@ -8,7 +8,8 @@ import { loadRepositories, RepositoryCheckAdapter } from "../src/repositories.js
 
 const device = { deviceId: "device-1", credential: "private-credential", name: "Test Mac", platform: "darwin" as const };
 const mission = { id: "mission-1", repositoryId: "sample", adapter: "repository-check" as const,
-  leaseToken: "lease-token", leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(), attempt: 1 };
+  objective: "Check repository metadata", leaseToken: "lease-token",
+  leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(), attempt: 1 };
 
 test("repository check uses explicit configuration and never reads source contents or follows entries", async () => {
   const temporary = await mkdtemp(join(tmpdir(), "runner-check-"));
