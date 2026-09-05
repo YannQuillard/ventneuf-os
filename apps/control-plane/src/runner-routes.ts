@@ -12,11 +12,16 @@ import {
 import { z } from "zod";
 import { bearerToken, type TokenVerifier } from "./authentication.js";
 import { hashDeviceToken, parseDeviceCredential } from "./device-auth.js";
-import { dispatchReadOnlyRunnerMission } from "./missions.js";
+import { dispatchRunnerMission } from "./missions.js";
 import type { ConversationRuntime } from "./runtime.js";
 
 const repositoryId = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/);
-const repository = z.object({ id: repositoryId, name: z.string().trim().min(1).max(100), orcaReview: z.boolean().optional() }).strict();
+const repository = z.object({
+  id: repositoryId,
+  name: z.string().trim().min(1).max(100),
+  orcaReview: z.boolean().optional(),
+  codexDevelopment: z.boolean().optional(),
+}).strict();
 const lease = z.object({ owner: z.string().uuid(), token: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 const report = z.object({
   owner: z.string().uuid(), token: z.string().regex(/^[a-f0-9]{64}$/), eventId: z.string().uuid(),
@@ -57,7 +62,7 @@ export function registerRunnerRoutes(app: Express, verifier: TokenVerifier, runt
       const input = z.object({ deviceId: z.string().uuid(), repositoryId,
         adapter: z.enum(["repository-check", "orca-review"]).default("repository-check"),
       }).strict().parse(request.body);
-      response.status(202).json(await dispatchReadOnlyRunnerMission(context, runtime, {
+      response.status(202).json(await dispatchRunnerMission(context, runtime, {
         ...input,
         objective: `${input.adapter === "orca-review" ? "Review" : "Check"} registered repository ${input.repositoryId} in read-only mode.`,
       }));
@@ -106,8 +111,8 @@ export function registerRunnerRoutes(app: Express, verifier: TokenVerifier, runt
     }
   });
 
-  for (const operation of ["repositories", "claim", "report", "renew"] as const) {
-    const path = operation === "report" || operation === "renew" ? `/api/runner/missions/:missionId/${operation}`
+  for (const operation of ["repositories", "claim", "report", "renew", "inspect"] as const) {
+    const path = operation === "report" || operation === "renew" || operation === "inspect" ? `/api/runner/missions/:missionId/${operation}`
       : operation === "claim" ? "/api/runner/missions/claim" : "/api/runner/repositories";
     app.post(path, async (request, response, next) => {
       try {
@@ -129,6 +134,9 @@ export function registerRunnerRoutes(app: Express, verifier: TokenVerifier, runt
           const leaseToken = randomBytes(32).toString("hex");
           const mission = await runtime.runnerMissions.claim(scope, input.owner, hashDeviceToken(leaseToken));
           response.json({ mission: mission ? { ...mission, leaseToken } : null });
+        } else if (operation === "inspect") {
+          const missionId = z.string().uuid().parse(("missionId" in request.params ? request.params.missionId : undefined));
+          response.json(await runtime.runnerMissions.inspect(scope, missionId) ?? {});
         } else if (operation === "renew") {
           const input = lease.parse(request.body);
           const missionId = z.string().uuid().parse(("missionId" in request.params ? request.params.missionId : undefined));

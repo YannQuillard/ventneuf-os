@@ -2,7 +2,13 @@ import { lstat, opendir, readFile, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 
-export interface RegisteredRepository { id: string; name: string; path: string; orcaReview?: boolean }
+export interface RegisteredRepository {
+  id: string;
+  name: string;
+  path: string;
+  orcaReview?: boolean;
+  codexDevelopment?: boolean;
+}
 export const defaultRepositoriesFile = () => join(homedir(), ".config", "ventneuf.os", "repositories.json");
 
 export async function loadRepositories(path: string): Promise<RegisteredRepository[]> {
@@ -20,7 +26,8 @@ export async function loadRepositories(path: string): Promise<RegisteredReposito
     if (!entry || typeof entry.id !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(entry.id)
       || ids.has(entry.id) || typeof entry.name !== "string" || !entry.name.trim() || entry.name.length > 100
       || typeof entry.path !== "string" || !isAbsolute(entry.path)
-      || (entry.orcaReview !== undefined && typeof entry.orcaReview !== "boolean")) {
+      || (entry.orcaReview !== undefined && typeof entry.orcaReview !== "boolean")
+      || (entry.codexDevelopment !== undefined && typeof entry.codexDevelopment !== "boolean")) {
       throw new Error("Invalid repository configuration.");
     }
     ids.add(entry.id);
@@ -28,28 +35,71 @@ export async function loadRepositories(path: string): Promise<RegisteredReposito
     if (!(await stat(path)).isDirectory()) throw new Error("A registered repository must be a directory.");
     repositories.push({ id: entry.id, name: entry.name.trim(), path,
       ...(entry.orcaReview === true ? { orcaReview: true } : {}),
+      ...(entry.codexDevelopment === true ? { codexDevelopment: true } : {}),
     });
   }
   return repositories;
 }
 
-export interface ReadOnlyMission {
+export interface RunnerMission {
   id: string;
   repositoryId: string;
-  adapter: "repository-check" | "orca-review";
+  adapter: "repository-check" | "orca-review" | "codex-development";
   objective: string;
+  attempt?: number;
+  authorityExpiresAt?: string;
+  approvalDecision?: MissionApprovalDecision;
+}
+export interface MissionApprovalDecision {
+  id: string;
+  requestId: string;
+  status: "approved" | "rejected" | "expired";
+  action: MissionApprovalAction;
+  resume: { adapter: "codex" | "claude"; sessionId: string };
+  rationale?: string;
+}
+export interface MissionApprovalAction {
+  category: "repository.write" | "development.command" | "network.access"
+    | "pull_request.create" | "pull_request.merge" | "deployment.apply" | "connector.write";
+  target: string;
+  argumentsDigest: string;
+  summary: string;
+  expectedEffect: string;
+}
+export interface AgentApprovalRequest {
+  requestId: string;
+  action: MissionApprovalAction;
+  reason: string;
+  evidence: Record<string, unknown>;
+  resume: { adapter: "codex" | "claude"; sessionId: string };
+}
+export interface AgentApprovalResponse {
+  approval: {
+    id: string;
+    route: "automatic" | "hermes" | "human";
+    status: "pending" | "approved" | "rejected" | "cancelled" | "expired";
+    expiresAt: string;
+  };
 }
 export interface MissionExecution {
   leaseExpiresAt(): number;
   progress(content: string): Promise<void>;
+  requestApproval(request: AgentApprovalRequest): Promise<AgentApprovalResponse>;
+}
+export type MissionStatus = "queued" | "running" | "waiting_for_approval" | "completed" | "failed" | "cancelled";
+export interface MissionMaintenance {
+  status(missionId: string): Promise<MissionStatus | undefined>;
 }
 export interface MissionAdapter {
-  execute(mission: ReadOnlyMission, repository: RegisteredRepository, signal: AbortSignal, execution?: MissionExecution): Promise<string>;
+  execute(mission: RunnerMission, repository: RegisteredRepository, signal: AbortSignal, execution?: MissionExecution): Promise<string>;
+  maintain?(maintenance: MissionMaintenance): Promise<void>;
 }
+
+export class MissionPausedError extends Error {}
 
 // No shell, source file reads, recursive traversal, or repository-controlled code execution.
 export class RepositoryCheckAdapter implements MissionAdapter {
-  async execute(mission: ReadOnlyMission, repository: RegisteredRepository, signal: AbortSignal) {
+  async execute(mission: RunnerMission, repository: RegisteredRepository, signal: AbortSignal) {
     if (mission.adapter !== "repository-check" || mission.repositoryId !== repository.id) {
       throw new Error("The mission is outside this repository scope.");
     }

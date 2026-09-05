@@ -3,12 +3,12 @@ import { GenerateMacCommand, KMSClient, VerifyMacCommand } from "@aws-sdk/client
 import { z } from "zod";
 import { StaticTokenProvider, type TokenProvider } from "./hermes.js";
 
-const adapterSchema = z.enum(["repository-check", "orca-review"]);
+const adapterSchema = z.enum(["repository-check", "orca-review", "codex-development"]);
 const repositoryIdSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/);
 const targetSchema = z.object({
   deviceId: z.string().uuid(),
   repositoryId: repositoryIdSchema,
-  adapters: z.array(adapterSchema).min(1).max(2),
+  adapters: z.array(adapterSchema).min(1).max(3),
 }).strict();
 
 const baseClaimsSchema = z.object({

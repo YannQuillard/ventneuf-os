@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LeaseRejectedError, RunnerMissionWorker, type MissionClient, type MissionReport } from "../src/mission-worker.js";
-import { loadRepositories, RepositoryCheckAdapter } from "../src/repositories.js";
+import { loadRepositories, MissionPausedError, RepositoryCheckAdapter } from "../src/repositories.js";
 
 const device = { deviceId: "device-1", credential: "private-credential", name: "Test Mac", platform: "darwin" as const };
 const mission = { id: "mission-1", repositoryId: "sample", adapter: "repository-check" as const,
@@ -130,4 +130,46 @@ test("long reviews renew their lease and abort when renewal is rejected", async 
   assert.equal(renewals, 2);
   assert.equal(aborted, true);
   assert.equal(reports.some(({ kind }) => kind === "completed"), false);
+});
+
+test("routes a Codex approval through the leased worker and pauses without failure", async () => {
+  const reports: MissionReport[] = [];
+  let request: unknown;
+  const worker = new RunnerMissionWorker({
+    store: { load: async () => device, save: async () => {} },
+    repositories: async () => [{
+      id: "sample", name: "Sample", path: "/repository", orcaReview: true, codexDevelopment: true,
+    }],
+    client: {
+      registerRepositories: async (_device, repositories) => {
+        assert.equal(repositories[0]?.codexDevelopment, true);
+      },
+      claimMission: async () => ({
+        ...mission,
+        adapter: "codex-development",
+        authorityExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+      }),
+      reportMission: async (_device, _id, report) => { reports.push(report); },
+      renewMission: async () => new Date(Date.now() + 60_000).toISOString(),
+      requestApproval: async (_device, _id, input) => {
+        request = input;
+        return { approval: { id: "approval-1", route: "hermes", status: "pending", expiresAt: new Date(Date.now() + 60_000).toISOString() } };
+      },
+    },
+    adapter: { execute: async (_mission, _repository, _signal, execution) => {
+      await execution!.requestApproval({
+        requestId: "00000000-0000-4000-8000-000000000010",
+        action: { category: "network.access", target: "github.com", argumentsDigest: "a".repeat(64), summary: "Push branch", expectedEffect: "Updates the remote branch." },
+        reason: "The mission needs to publish its branch.",
+        evidence: { host: "github.com" },
+        resume: { adapter: "codex", sessionId: "00000000-0000-4000-8000-000000000011" },
+      });
+      throw new MissionPausedError();
+    } },
+  });
+  await worker.tick();
+  assert.deepEqual((request as { owner: string; token: string }).token, mission.leaseToken);
+  assert.equal(typeof (request as { owner: string }).owner, "string");
+  assert.equal(reports.some(({ kind }) => kind === "failed"), false);
+  assert.equal(reports.at(0)?.kind, "progress");
 });

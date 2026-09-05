@@ -166,7 +166,33 @@ test("runner assignment, concurrent claims, fenced retries, cancellation and ten
     const reviewInput = { organizationId, externalSubject: "runner-subject", content: "Review source",
       runner: { deviceId, repositoryId: "sample", adapter: "orca-review" as const } };
     await assert.rejects(conversations.enqueuePrivateMessage(reviewInput), RunnerAssignmentError);
-    await runner.register(scope, [{ id: "sample", name: "Sample", orcaReview: true }]);
+    await assert.rejects(conversations.enqueuePrivateMessage({
+      organizationId,
+      externalSubject: "runner-subject",
+      content: "Develop source",
+      runner: { deviceId, repositoryId: "sample", adapter: "codex-development" },
+    }), RunnerAssignmentError);
+    await runner.register(scope, [{ id: "sample", name: "Sample", orcaReview: true, codexDevelopment: true }]);
+    const development = await conversations.enqueuePrivateMessage({
+      organizationId,
+      externalSubject: "runner-subject",
+      content: "Fix the source and open a pull request",
+      runner: { deviceId, repositoryId: "sample", adapter: "codex-development" },
+    });
+    assert.equal((development.mission.context.agent as { adapter?: string }).adapter, "codex");
+    assert.equal((development.mission.context.authority as { actions?: Record<string, string> }).actions?.["repository.write"], "allow");
+    assert.equal((development.mission.context.authority as { actions?: Record<string, string> }).actions?.["pull_request.merge"], "human");
+    const developmentClaim = await runner.claim(scope, owner, "development-lease");
+    assert.equal(developmentClaim?.adapter, "codex-development");
+    assert.ok(Number.isFinite(Date.parse(developmentClaim?.authorityExpiresAt ?? "")));
+    await runner.report(scope, {
+      missionId: development.mission.id,
+      owner,
+      tokenHash: "development-lease",
+      eventId: randomUUID(),
+      kind: "completed",
+      content: "Development result",
+    });
     const review = await conversations.enqueuePrivateMessage(reviewInput);
     assert.equal((await runner.claim(scope, owner, "review-lease"))?.adapter, "orca-review");
     await expire(review.mission.id);

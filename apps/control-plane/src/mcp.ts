@@ -7,7 +7,7 @@ import {
 } from "@ventneuf/domain";
 import type { ConversationRuntime } from "./runtime.js";
 import { submitPrivateMessage } from "./conversations.js";
-import { dispatchReadOnlyRunnerMission } from "./missions.js";
+import { dispatchRunnerMission } from "./missions.js";
 import type { MissionDelegationVerifier } from "./mission-delegation.js";
 import { decideApprovalAsService } from "./approvals.js";
 
@@ -65,20 +65,20 @@ export function createRemoteMcpServer(
   server.registerTool(
     "mission.dispatch",
     {
-      title: "Dispatch a read-only runner mission",
-      description: "Queue a bounded read-only task. User calls are ownership-scoped directly; Hermes service calls require the current parent-mission delegation and a stable request ID.",
+      title: "Dispatch a runner mission",
+      description: "Queue a repository task within an explicitly advertised runner capability. Codex development missions may edit the isolated worktree and request policy-bound approvals. User calls are ownership-scoped directly; Hermes service calls require the current parent-mission delegation and a stable request ID.",
       inputSchema: {
         objective: z.string().trim().min(1).max(4_000),
         deviceId: z.string().uuid(),
         repositoryId,
-        adapter: z.enum(["repository-check", "orca-review"]).default("orca-review"),
+        adapter: z.enum(["repository-check", "orca-review", "codex-development"]).default("orca-review"),
         delegationToken: z.string().min(1).max(20_000).optional(),
         requestId: z.string().uuid().optional(),
       },
     },
     async (input) => {
       if (!services.conversations) throw new Error("The conversation runtime is unavailable.");
-      return jsonResult(await dispatchReadOnlyRunnerMission(
+      return jsonResult(await dispatchRunnerMission(
         context,
         services.conversations,
         input,

@@ -1,50 +1,25 @@
 import { randomUUID } from "node:crypto";
 import type { CredentialStore, StoredDevice } from "./credential-store.js";
-import type { MissionAdapter, ReadOnlyMission, RegisteredRepository } from "./repositories.js";
+import {
+  MissionPausedError,
+  type AgentApprovalRequest,
+  type AgentApprovalResponse,
+  type MissionAdapter,
+  type MissionStatus,
+  type RunnerMission,
+  type RegisteredRepository,
+} from "./repositories.js";
 
-export interface ClaimedMission extends ReadOnlyMission {
+export interface ClaimedMission extends RunnerMission {
   leaseToken: string;
   leaseExpiresAt: string;
   attempt: number;
-  approvalDecision?: {
-    id: string;
-    requestId: string;
-    status: "approved" | "rejected" | "expired";
-    action: {
-      category: string;
-      target: string;
-      argumentsDigest: string;
-      summary: string;
-      expectedEffect: string;
-    };
-    resume: { adapter: "codex" | "claude"; sessionId: string };
-    rationale?: string;
-  };
 }
-export interface RunnerApprovalRequest {
+export interface RunnerApprovalRequest extends AgentApprovalRequest {
   owner: string;
   token: string;
-  requestId: string;
-  action: {
-    category: "repository.write" | "development.command" | "network.access"
-      | "pull_request.create" | "pull_request.merge" | "deployment.apply" | "connector.write";
-    target: string;
-    argumentsDigest: string;
-    summary: string;
-    expectedEffect: string;
-  };
-  reason: string;
-  evidence: Record<string, unknown>;
-  resume: { adapter: "codex" | "claude"; sessionId: string };
 }
-export interface RunnerApprovalResponse {
-  approval: {
-    id: string;
-    route: "automatic" | "hermes" | "human";
-    status: "pending" | "approved" | "rejected" | "cancelled" | "expired";
-    expiresAt: string;
-  };
-}
+export type RunnerApprovalResponse = AgentApprovalResponse;
 export interface MissionReport {
   owner: string;
   token: string;
@@ -53,11 +28,17 @@ export interface MissionReport {
   content: string;
 }
 export interface MissionClient {
-  registerRepositories(device: StoredDevice, repositories: Array<{ id: string; name: string; orcaReview?: boolean }>): Promise<void>;
+  registerRepositories(device: StoredDevice, repositories: Array<{
+    id: string;
+    name: string;
+    orcaReview?: boolean;
+    codexDevelopment?: boolean;
+  }>): Promise<void>;
   claimMission(device: StoredDevice, owner: string): Promise<ClaimedMission | null>;
   reportMission(device: StoredDevice, missionId: string, report: MissionReport): Promise<void>;
   renewMission?(device: StoredDevice, missionId: string, lease: { owner: string; token: string }): Promise<string>;
   requestApproval?(device: StoredDevice, missionId: string, request: RunnerApprovalRequest): Promise<RunnerApprovalResponse>;
+  getMissionStatus?(device: StoredDevice, missionId: string): Promise<MissionStatus | undefined>;
 }
 
 export class RunnerMissionWorker {
@@ -78,8 +59,13 @@ export class RunnerMissionWorker {
       const device = await this.options.store.load();
       if (!device) return;
       const repositories = await this.options.repositories();
-      await this.options.client.registerRepositories(device, repositories.map(({ id, name, orcaReview }) =>
-        ({ id, name, ...(orcaReview ? { orcaReview } : {}) })));
+      if (this.options.adapter.maintain && this.options.client.getMissionStatus) {
+        await this.options.adapter.maintain({
+          status: (missionId) => this.options.client.getMissionStatus!(device, missionId),
+        });
+      }
+      await this.options.client.registerRepositories(device, repositories.map(({ id, name, orcaReview, codexDevelopment }) =>
+        ({ id, name, ...(orcaReview ? { orcaReview } : {}), ...(codexDevelopment ? { codexDevelopment } : {}) })));
       const mission = await this.options.client.claimMission(device, this.owner);
       if (!mission) return;
       const report = async (kind: MissionReport["kind"], content: string) => {
@@ -93,43 +79,69 @@ export class RunnerMissionWorker {
         }
       };
       await report("progress", mission.adapter === "orca-review"
-        ? "Preparing a read-only code review with Orca." : "Checking the registered repository in read-only mode.");
+        ? "Preparing a read-only code review with Orca."
+        : mission.adapter === "codex-development"
+          ? "Preparing an autonomous Codex development mission in Orca."
+          : "Checking the registered repository in read-only mode.");
       let result: string;
       const controller = new AbortController();
       let leaseExpiresAt = Date.parse(mission.leaseExpiresAt);
-      const deadline = Date.now() + (mission.adapter === "orca-review" ? 300_000 : 10_000);
+      const authorityDeadline = mission.authorityExpiresAt ? Date.parse(mission.authorityExpiresAt) : Number.NaN;
+      const deadline = mission.adapter === "codex-development"
+        ? authorityDeadline
+        : Date.now() + (mission.adapter === "orca-review" ? 300_000 : 10_000);
       let stopped = false;
+      let paused = false;
       let renewal: Promise<void> = Promise.resolve();
       let timer: ReturnType<typeof setTimeout> | undefined;
       const expiryTimer = setInterval(() => {
-        if (Date.now() >= Math.min(deadline, leaseExpiresAt)) controller.abort(new LeaseRejectedError("Execution deadline reached."));
+        if (!paused && Date.now() >= Math.min(deadline, leaseExpiresAt)) controller.abort(new LeaseRejectedError("Execution deadline reached."));
       }, 100);
       const renew = async () => {
-        if (stopped || controller.signal.aborted) return;
+        if (stopped || paused || controller.signal.aborted) return;
         try {
           if (!this.options.client.renewMission) throw new Error("Lease renewal unavailable.");
           const next = Date.parse(await this.options.client.renewMission(device, mission.id, { owner: this.owner, token: mission.leaseToken }));
           if (!Number.isFinite(next) || next <= Date.now()) throw new LeaseRejectedError("Lease expired.");
           leaseExpiresAt = next;
           if (!stopped) timer = setTimeout(() => { renewal = renew(); }, this.options.renewalIntervalMs ?? 15_000);
-        } catch (error) { controller.abort(error); }
+        } catch (error) { if (!paused) controller.abort(error); }
       };
       try {
         const repository = repositories.find(({ id }) => id === mission.repositoryId);
         if (!repository) throw new Error("Repository unavailable.");
         if (!Number.isFinite(leaseExpiresAt) || leaseExpiresAt <= Date.now()) throw new LeaseRejectedError("Lease expired.");
-        if (mission.adapter === "orca-review") {
-          if (!repository.orcaReview) throw new Error("Orca review is not enabled for this repository.");
+        if (mission.adapter === "orca-review" || mission.adapter === "codex-development") {
+          if (mission.adapter === "orca-review" && !repository.orcaReview) {
+            throw new Error("Orca review is not enabled for this repository.");
+          }
+          if (mission.adapter === "codex-development" && (!repository.codexDevelopment
+            || !Number.isFinite(deadline) || deadline <= Date.now())) {
+            throw new Error("Codex development is not enabled or its authority expired.");
+          }
           await renew();
         }
         controller.signal.throwIfAborted();
         result = await this.options.adapter.execute(mission, repository, controller.signal, {
           leaseExpiresAt: () => Math.min(deadline, leaseExpiresAt),
           progress: (content) => report("progress", content),
+          requestApproval: async (request) => {
+            if (!this.options.client.requestApproval) throw new Error("Mission approval requests are unavailable.");
+            const response = await this.options.client.requestApproval(device, mission.id, {
+              owner: this.owner,
+              token: mission.leaseToken,
+              ...request,
+            });
+            if (response.approval.status === "pending") paused = true;
+            return response;
+          },
         });
         controller.signal.throwIfAborted();
-      } catch {
-        await report("failed", "The read-only mission could not complete. Verify the local runner and repository configuration.");
+      } catch (error) {
+        if (error instanceof MissionPausedError) return;
+        await report("failed", mission.adapter === "codex-development"
+          ? "The Codex development mission could not complete. Inspect the retained Orca mission workspace for diagnostics."
+          : "The read-only mission could not complete. Verify the local runner and repository configuration.");
         return;
       } finally {
         stopped = true;

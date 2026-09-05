@@ -2,21 +2,21 @@ import { assertAuthorized, type AuthorizationContext } from "@ventneuf/domain";
 import type { ConversationRuntime } from "./runtime.js";
 import type { MissionDelegationVerifier } from "./mission-delegation.js";
 
-export type ReadOnlyRunnerAdapter = "repository-check" | "orca-review";
+export type RunnerAdapter = "repository-check" | "orca-review" | "codex-development";
 
-export interface ReadOnlyRunnerDispatch {
+export interface RunnerDispatch {
   deviceId: string;
   repositoryId: string;
-  adapter: ReadOnlyRunnerAdapter;
+  adapter: RunnerAdapter;
   objective: string;
   delegationToken?: string;
   requestId?: string;
 }
 
-export async function dispatchReadOnlyRunnerMission(
+export async function dispatchRunnerMission(
   context: AuthorizationContext,
   runtime: Pick<ConversationRuntime, "repository">,
-  input: ReadOnlyRunnerDispatch,
+  input: RunnerDispatch,
   delegations?: MissionDelegationVerifier,
 ) {
   if (context.principalType === "user") {
