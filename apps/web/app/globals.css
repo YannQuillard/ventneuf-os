@@ -157,3 +157,39 @@ body {
     animation: none;
   }
 }
+
+.prototype-chat-region {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.prototype-chat {
+  flex: 1;
+  min-height: 0;
+}
+
+.prototype-mission-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.prototype-mission-panel .prototype-mission-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.prototype-screenshot img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
+  object-position: top;
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-inner);
+  background: var(--color-background-muted);
+}
