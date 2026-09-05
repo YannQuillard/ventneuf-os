@@ -10,6 +10,7 @@ import type { ConversationRuntime } from "./runtime.js";
 import { assertAuthorized } from "@ventneuf/domain";
 import { z } from "zod";
 import { registerRunnerRoutes } from "./runner-routes.js";
+import type { MissionDelegationVerifier } from "./mission-delegation.js";
 import {
   createDeviceCredential,
   createEnrollmentToken,
@@ -22,10 +23,11 @@ export interface AppServices {
   verifier: TokenVerifier;
   hermes: HermesClient;
   conversations?: ConversationRuntime;
+  delegations?: MissionDelegationVerifier;
   host?: string;
 }
 
-export function createApp({ verifier, hermes, conversations, host = "127.0.0.1" }: AppServices) {
+export function createApp({ verifier, hermes, conversations, delegations, host = "127.0.0.1" }: AppServices) {
   const app = createMcpExpressApp({ host });
 
   registerRunnerRoutes(app, verifier, conversations);
@@ -298,7 +300,7 @@ export function createApp({ verifier, hermes, conversations, host = "127.0.0.1" 
         return;
       }
 
-      const server = createRemoteMcpServer(context, { conversations });
+      const server = createRemoteMcpServer(context, { conversations, delegations });
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
         enableJsonResponse: true,

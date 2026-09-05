@@ -2,6 +2,20 @@ import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { Database } from "./client.js";
 import { conversations, devices, members, messages, missionEvents, missions, organizations } from "./schema.js";
 
+export type DelegatedRunnerAdapter = "repository-check" | "orca-review";
+
+export interface HermesDispatchScope {
+  organizationId: string;
+  parentMissionId: string;
+  conversationId: string;
+  memberId: string;
+  targets: Array<{
+    deviceId: string;
+    repositoryId: string;
+    adapters: DelegatedRunnerAdapter[];
+  }>;
+}
+
 export class ConversationRuntimeRepository {
   constructor(private readonly database: Database) {}
 
@@ -224,6 +238,161 @@ export class ConversationRuntimeRepository {
     });
   }
 
+  getHermesDispatchScope(organizationId: string, missionId: string) {
+    return this.database.withOrganization(organizationId, async (transaction) => {
+      const [result] = await transaction
+        .select({
+          mission: missions,
+          ownerMemberId: conversations.ownerMemberId,
+        })
+        .from(missions)
+        .innerJoin(conversations, and(
+          eq(conversations.organizationId, missions.organizationId),
+          eq(conversations.id, missions.conversationId),
+        ))
+        .where(and(eq(missions.organizationId, organizationId), eq(missions.id, missionId)))
+        .limit(1);
+      const mission = result?.mission;
+      if (!mission || !["running", "waiting_for_approval"].includes(mission.status)
+        || mission.context?.type !== "hermes.conversation"
+        || result.ownerMemberId !== mission.requestedByMemberId) return undefined;
+
+      const ownedDevices = await transaction
+        .select({ id: devices.id, repositories: devices.repositories })
+        .from(devices)
+        .where(and(
+          eq(devices.organizationId, organizationId),
+          eq(devices.memberId, mission.requestedByMemberId),
+          isNull(devices.revokedAt),
+        ));
+      const targets = ownedDevices.flatMap((device) => device.repositories.map((repository) => ({
+        deviceId: device.id,
+        repositoryId: repository.id,
+        adapters: [
+          "repository-check" as const,
+          ...(repository.orcaReview ? ["orca-review" as const] : []),
+        ],
+      })));
+      if (targets.length > 50) throw new Error("The mission has too many runner targets to delegate.");
+      return {
+        organizationId,
+        parentMissionId: mission.id,
+        conversationId: mission.conversationId,
+        memberId: mission.requestedByMemberId,
+        targets,
+      } satisfies HermesDispatchScope;
+    });
+  }
+
+  enqueueDelegatedRunnerMission(input: {
+    organizationId: string;
+    parentMissionId: string;
+    conversationId: string;
+    memberId: string;
+    serviceId: string;
+    delegationId: string;
+    requestId: string;
+    expiresAt: Date;
+    objective: string;
+    deviceId: string;
+    repositoryId: string;
+    adapter: DelegatedRunnerAdapter;
+  }) {
+    const acceptedAt = new Date();
+    return this.database.withOrganization(input.organizationId, async (transaction) => {
+      const [parent] = await transaction.select().from(missions).where(and(
+        eq(missions.organizationId, input.organizationId),
+        eq(missions.id, input.parentMissionId),
+      )).for("update").limit(1);
+      if (!parent || !["running", "waiting_for_approval"].includes(parent.status)
+        || parent.context?.type !== "hermes.conversation"
+        || parent.conversationId !== input.conversationId
+        || parent.requestedByMemberId !== input.memberId
+        || input.expiresAt <= acceptedAt) throw new DelegatedMissionError();
+
+      const [conversation] = await transaction.select({ ownerMemberId: conversations.ownerMemberId })
+        .from(conversations).where(and(
+          eq(conversations.organizationId, input.organizationId),
+          eq(conversations.id, input.conversationId),
+        )).limit(1);
+      if (conversation?.ownerMemberId !== input.memberId) throw new DelegatedMissionError();
+
+      const [existing] = await transaction.select().from(missions).where(and(
+        eq(missions.organizationId, input.organizationId),
+        eq(missions.conversationId, input.conversationId),
+        sql`${missions.context}->>'parentMissionId' = ${input.parentMissionId}`,
+        sql`${missions.context}->'delegation'->>'id' = ${input.delegationId}`,
+        sql`${missions.context}->'delegation'->>'requestId' = ${input.requestId}`,
+      )).limit(1);
+      if (existing) {
+        if (existing.goal !== input.objective || existing.assignedDeviceId !== input.deviceId
+          || existing.context?.repositoryId !== input.repositoryId
+          || existing.context?.type !== `runner.${input.adapter}`) throw new DelegatedMissionError();
+        return { conversationId: input.conversationId, mission: existing };
+      }
+
+      const [device] = await transaction.select().from(devices).where(and(
+        eq(devices.organizationId, input.organizationId),
+        eq(devices.id, input.deviceId),
+        eq(devices.memberId, input.memberId),
+        isNull(devices.revokedAt),
+      )).for("share").limit(1);
+      if (!device?.repositories.some(({ id, orcaReview }) => id === input.repositoryId
+        && (input.adapter !== "orca-review" || orcaReview === true))) throw new DelegatedMissionError();
+
+      const [mission] = await transaction.insert(missions).values({
+        organizationId: input.organizationId,
+        conversationId: input.conversationId,
+        requestedByMemberId: input.memberId,
+        assignedDeviceId: input.deviceId,
+        goal: input.objective,
+        context: {
+          type: `runner.${input.adapter}`,
+          repositoryId: input.repositoryId,
+          parentMissionId: input.parentMissionId,
+          delegation: {
+            id: input.delegationId,
+            requestId: input.requestId,
+            serviceId: input.serviceId,
+            capability: "mission:dispatch",
+            expiresAt: input.expiresAt.toISOString(),
+          },
+          timing: { acceptedAt: acceptedAt.toISOString() },
+        },
+        createdAt: acceptedAt,
+        updatedAt: acceptedAt,
+      }).returning();
+      if (!mission) throw new Error("Failed to create the delegated runner mission.");
+      await transaction.insert(missionEvents).values([
+        {
+          organizationId: input.organizationId,
+          missionId: input.parentMissionId,
+          type: "mission.child_dispatched",
+          payload: {
+            childMissionId: mission.id,
+            serviceId: input.serviceId,
+            delegationId: input.delegationId,
+            requestId: input.requestId,
+          },
+          occurredAt: acceptedAt,
+        },
+        {
+          organizationId: input.organizationId,
+          missionId: mission.id,
+          type: "mission.delegated",
+          payload: {
+            parentMissionId: input.parentMissionId,
+            serviceId: input.serviceId,
+            delegationId: input.delegationId,
+            requestId: input.requestId,
+          },
+          occurredAt: acceptedAt,
+        },
+      ]);
+      return { conversationId: input.conversationId, mission };
+    });
+  }
+
   setMissionQueued(organizationId: string, missionId: string, context: Record<string, unknown>) {
     return this.database.withOrganization(organizationId, (transaction) =>
       transaction.update(missions).set({ context, updatedAt: new Date() }).where(and(
@@ -365,4 +534,8 @@ export class ConversationRuntimeRepository {
 
 export class RunnerAssignmentError extends Error {
   constructor() { super("The device or registered repository is unavailable."); }
+}
+
+export class DelegatedMissionError extends Error {
+  constructor() { super("The delegated mission scope is unavailable."); }
 }

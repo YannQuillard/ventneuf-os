@@ -45,7 +45,9 @@ MCP is the tool boundary for coding agents and future device runners. A2A is cur
 
 The authenticated remote `hermes.ask` tool queues a durable message in the caller's private conversation. It returns `missionId`, `conversationId`, and `status` immediately; the eventual reply appears in the conversation through the existing message and event APIs. It does not return an inline Hermes answer. An optional `contextId` must match that member's existing Hermes context; unknown or foreign contexts are rejected. Device and mission principals cannot use this private user tool. The worker supplies the conversation-scoped upstream session key. The local MCP prototype has a separate contract.
 
-The remote `mission.dispatch` tool accepts an explicit objective, enrolled device, registered repository, and bounded read-only adapter. It creates a durable mission only when the authenticated member owns that device and the runner has advertised the requested repository and adapter. The objective travels in the claimed mission and reaches the isolated Codex supervisor without shell interpolation. Hermes service authentication and delegated child-mission authority are separate work; until that identity is implemented, this tool accepts direct user principals only.
+The remote `mission.dispatch` tool accepts an explicit objective, enrolled device, registered repository, and bounded read-only adapter. A direct user call creates a durable mission only when the authenticated member owns the device and the runner has advertised the requested repository and adapter. The objective travels in the claimed mission and reaches the isolated Codex supervisor without shell interpolation.
+
+Hermes authenticates as a distinct service principal with only identity inspection and mission dispatch capabilities. Service dispatch additionally requires a short signed delegation issued for the active parent Hermes mission. The grant fixes the organization, initiating member, private conversation, service identity, eligible device/repository/adapter tuples, and expiry. The database revalidates the active parent and current device ownership while creating the child mission. A stable `requestId` makes retries idempotent; changing the requested operation under the same ID is rejected. Delegation metadata and parent/child events are durable, while bearer values are never persisted.
 
 ## Roadmap
 
@@ -78,7 +80,7 @@ npm run build
 npm run dev
 ```
 
-The control plane fails closed in production unless its token verifier is completely configured. Local development requires an explicit `VENTNEUF_DEV_TOKEN` and must never reuse production credentials.
+The control plane fails closed in production unless its token verifier is completely configured. Local development requires an explicit `VENTNEUF_DEV_TOKEN` and must never reuse production credentials. Hermes MCP authentication is optional until its connector is deployed, but its service and delegation secrets must always be configured together. Production accepts only `HERMES_MCP_SERVICE_SECRET_ID` and `HERMES_MCP_DELEGATION_SECRET_ID`; local development may instead use the explicit raw `HERMES_MCP_SERVICE_TOKEN` and `HERMES_MCP_DELEGATION_SECRET`. Both modes require `HERMES_MCP_SERVICE_ID` and `VENTNEUF_ORGANIZATION_ID`.
 
 To run the macOS runner during development:
 

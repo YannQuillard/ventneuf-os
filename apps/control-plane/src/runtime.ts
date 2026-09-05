@@ -18,6 +18,7 @@ import {
   HermesRunCancelledError,
   type HermesClient,
 } from "./hermes.js";
+import type { MissionDelegationGrant, MissionDelegationIssuer } from "./mission-delegation.js";
 
 interface DatabaseCredentials {
   username?: string;
@@ -55,6 +56,22 @@ function elapsedMs(from: string | undefined, to: Date): number | undefined {
 
 function logMission(event: string, fields: Record<string, unknown>) {
   console.info(JSON.stringify({ component: "mission-worker", event, ...fields }));
+}
+
+function messageWithDelegation(message: string, grant: MissionDelegationGrant): string {
+  return [
+    message,
+    "",
+    "<ventneuf_mission_authority>",
+    `Parent mission: ${grant.claims.parentMissionId}`,
+    "You may dispatch bounded runner work only through the ventneuf MCP mission.dispatch tool.",
+    "Pass the delegation token below and a stable UUID requestId with every dispatch. Reuse the requestId when retrying the same dispatch.",
+    `Available targets: ${JSON.stringify(grant.claims.targets)}`,
+    `Delegation token: ${grant.token}`,
+    `Delegation expires at: ${grant.claims.expiresAt}`,
+    "Do not quote or return the delegation token in your response.",
+    "</ventneuf_mission_authority>",
+  ].join("\n");
 }
 
 const persistedRunEvents = new Set([
@@ -121,6 +138,7 @@ export class MissionWorker {
     private readonly repository: ConversationRuntimeRepository,
     private readonly queue: MissionQueue,
     private readonly hermes: HermesClient,
+    private readonly delegation?: { serviceId: string; issuer: MissionDelegationIssuer },
   ) {}
 
   async process(envelope: MissionEnvelope): Promise<void> {
@@ -151,15 +169,37 @@ export class MissionWorker {
       ...missionTiming(runningContext),
       hermesStartedAt: hermesStartedAt.toISOString(),
     };
-    logMission("hermes.started", {
-      organizationId: envelope.organizationId,
-      missionId: envelope.missionId,
-      queueMs: activeTiming.queueMs,
-    });
     let activeContext: Record<string, unknown> = { ...initialContext, timing: activeTiming };
     try {
+      let hermesMessage = record.mission.goal;
+      if (this.delegation) {
+        const scope = await this.repository.getHermesDispatchScope(envelope.organizationId, envelope.missionId);
+        if (!scope) throw new Error("The Hermes mission is unavailable for delegation.");
+        const grant = await this.delegation.issuer.issue({
+          serviceId: this.delegation.serviceId,
+          ...scope,
+        });
+        hermesMessage = messageWithDelegation(record.mission.goal, grant);
+        await this.repository.appendMissionEvent({
+          organizationId: envelope.organizationId,
+          missionId: envelope.missionId,
+          type: "mission.delegation_issued",
+          payload: {
+            delegationId: grant.claims.delegationId,
+            serviceId: grant.claims.serviceId,
+            expiresAt: grant.claims.expiresAt,
+            targetCount: grant.claims.targets.length,
+          },
+          occurredAt: new Date(grant.claims.issuedAt),
+        });
+      }
+      logMission("hermes.started", {
+        organizationId: envelope.organizationId,
+        missionId: envelope.missionId,
+        queueMs: activeTiming.queueMs,
+      });
       const reply = await this.hermes.ask({
-        message: record.mission.goal,
+        message: hermesMessage,
         contextId: record.hermesContextId ?? undefined,
         runId: typeof initialContext.hermesRunId === "string"
           ? initialContext.hermesRunId
@@ -297,7 +337,11 @@ export class MissionWorker {
   }
 }
 
-export async function createConversationRuntime(hermes: HermesClient, env = process.env): Promise<ConversationRuntime> {
+export async function createConversationRuntime(
+  hermes: HermesClient,
+  env = process.env,
+  delegations?: MissionDelegationIssuer,
+): Promise<ConversationRuntime> {
   const region = env.AWS_REGION ?? "eu-west-1";
   const secretId = env.DATABASE_SECRET_ID;
   const host = env.DATABASE_HOST;
@@ -334,5 +378,17 @@ export async function createConversationRuntime(hermes: HermesClient, env = proc
     name: organizationName,
   });
   const queue = new MissionQueue(new SQSClient({ region }), queueUrl);
-  return { database, repository, devices, runnerMissions: new RunnerMissionRepository(database), queue, worker: new MissionWorker(repository, queue, hermes) };
+  return {
+    database,
+    repository,
+    devices,
+    runnerMissions: new RunnerMissionRepository(database),
+    queue,
+    worker: new MissionWorker(
+      repository,
+      queue,
+      hermes,
+      delegations ? { serviceId: env.HERMES_MCP_SERVICE_ID!, issuer: delegations } : undefined,
+    ),
+  };
 }

@@ -3,16 +3,19 @@ import { createApp } from "./app.js";
 import { createTokenVerifier } from "./authentication.js";
 import { createHermesClient } from "./hermes.js";
 import { createConversationRuntime } from "./runtime.js";
+import { createMissionDelegation } from "./mission-delegation.js";
 
 const port = Number.parseInt(process.env.PORT ?? "8787", 10);
 const host = process.env.HOST ?? "127.0.0.1";
 const hermes = createHermesClient();
-const conversations = await createConversationRuntime(hermes);
+const delegations = createMissionDelegation();
+const conversations = await createConversationRuntime(hermes, process.env, delegations);
 const workerController = new AbortController();
 const server = createServer(createApp({
   verifier: createTokenVerifier(),
   hermes,
   conversations,
+  delegations,
   host,
 }));
 

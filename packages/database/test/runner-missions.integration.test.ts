@@ -4,7 +4,7 @@ import test from "node:test";
 import postgres from "postgres";
 import { createDatabase } from "../src/client.js";
 import { migrate } from "../src/migrate.js";
-import { ConversationRuntimeRepository, RunnerAssignmentError } from "../src/runtime.js";
+import { ConversationRuntimeRepository, DelegatedMissionError, RunnerAssignmentError } from "../src/runtime.js";
 import { RunnerAccessError, RunnerLeaseError, RunnerMissionRepository } from "../src/runner-missions.js";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -77,6 +77,76 @@ test("runner assignment, concurrent claims, fenced retries, cancellation and ten
     assert.equal((await conversations.listPrivateMessages({ organizationId, externalSubject: "runner-subject" }))
       .filter(({ content }) => content === "Durable result").length, 1);
     assert.equal(await runner.claim(scope, owner, "unused"), null);
+
+    const parent = await conversations.enqueuePrivateMessage({
+      organizationId,
+      externalSubject: "runner-subject",
+      content: "Delegate a review",
+    });
+    await conversations.setMissionRunning(organizationId, parent.mission.id, parent.mission.context);
+    const dispatchScope = await conversations.getHermesDispatchScope(organizationId, parent.mission.id);
+    assert.deepEqual(dispatchScope?.targets, [{
+      deviceId,
+      repositoryId: "sample",
+      adapters: ["repository-check"],
+    }]);
+    const delegatedInput = {
+      organizationId,
+      parentMissionId: parent.mission.id,
+      conversationId: parent.conversationId,
+      memberId,
+      serviceId: "hermes-supervisor",
+      delegationId: randomUUID(),
+      requestId: randomUUID(),
+      expiresAt: new Date(Date.now() + 60_000),
+      objective: "Inspect the delegated repository",
+      deviceId,
+      repositoryId: "sample",
+      adapter: "repository-check" as const,
+    };
+    const [delegated, duplicate] = await Promise.all([
+      conversations.enqueueDelegatedRunnerMission(delegatedInput),
+      conversations.enqueueDelegatedRunnerMission(delegatedInput),
+    ]);
+    assert.equal(duplicate.mission.id, delegated.mission.id);
+    await assert.rejects(conversations.enqueueDelegatedRunnerMission({
+      ...delegatedInput,
+      objective: "Conflicting retry",
+    }), DelegatedMissionError);
+    assert.equal(delegated.mission.context.parentMissionId, parent.mission.id);
+    assert.deepEqual(
+      (await conversations.listMissionEvents(organizationId, parent.mission.id))
+        .filter(({ type }) => type === "mission.child_dispatched")
+        .map(({ payload }) => payload.childMissionId),
+      [delegated.mission.id],
+    );
+    const delegatedClaim = await runner.claim(scope, owner, "delegated-lease");
+    assert.equal(delegatedClaim?.id, delegated.mission.id);
+    assert.equal(delegatedClaim?.objective, delegatedInput.objective);
+    await runner.report(scope, {
+      missionId: delegated.mission.id,
+      owner,
+      tokenHash: "delegated-lease",
+      eventId: randomUUID(),
+      kind: "completed",
+      content: "Delegated result",
+    });
+    await assert.rejects(conversations.enqueueDelegatedRunnerMission({
+      ...delegatedInput,
+      requestId: randomUUID(),
+      deviceId: otherDeviceId,
+    }), DelegatedMissionError);
+    await assert.rejects(conversations.enqueueDelegatedRunnerMission({
+      ...delegatedInput,
+      requestId: randomUUID(),
+      expiresAt: new Date(0),
+    }), DelegatedMissionError);
+    await conversations.cancelMission(organizationId, parent.mission.id, {});
+    await assert.rejects(conversations.enqueueDelegatedRunnerMission({
+      ...delegatedInput,
+      requestId: randomUUID(),
+    }), DelegatedMissionError);
+    assert.equal(await conversations.getHermesDispatchScope(organizationId, parent.mission.id), undefined);
 
     const cancelled = await enqueue();
     await runner.claim(scope, owner, "cancel-lease");
