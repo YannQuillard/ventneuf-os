@@ -2,6 +2,8 @@ import type {
   Approval,
   Conversation,
   ConversationEntry,
+  Device,
+  DeviceCapability,
   Member,
   Mission,
   MissionStatus,
@@ -15,7 +17,34 @@ export type PrototypeAction =
   | { type: "retryMission"; missionId: string; at: string }
   | { type: "sendMessage"; conversationId: string; content: string; at: string }
   | { type: "receiveReply"; conversationId: string; content: string; at: string }
-  | { type: "visitConversation"; conversationId: string; at: string };
+  | { type: "visitConversation"; conversationId: string; at: string }
+  | { type: "createConversation"; conversationId: string; title: string; isTemporary: boolean; at: string }
+  | { type: "startThread"; threadId: string; conversationId: string; messageId: string; title: string; at: string }
+  | { type: "keepConversation"; conversationId: string; at: string }
+  | { type: "togglePin"; conversationId: string }
+  | { type: "archiveConversation"; conversationId: string; at: string }
+  | { type: "setDeviceCapability"; deviceId: string; repositoryId: string; capability: DeviceCapability; enabled: boolean }
+  | { type: "enrollDevice"; deviceId: string; name: string; platform: string; at: string }
+  | { type: "revokeDevice"; deviceId: string; at: string }
+  | { type: "connectConnector"; connectorId: string; at: string }
+  | { type: "setConnectorProjectAccess"; connectorId: string; projectId: string; enabled: boolean };
+
+const TEMPORARY_LIFETIME_MS = 24 * 60 * 60 * 1000;
+
+export function messageById(data: PrototypeData, conversationId: string, messageId: string) {
+  const entry = (data.entries[conversationId] ?? []).find((candidate) => candidate.id === messageId);
+  return entry?.kind === "message" ? entry : undefined;
+}
+
+export function threadsForMessage(data: PrototypeData, messageId: string): Conversation[] {
+  return data.conversations.filter((conversation) => conversation.sourceMessageId === messageId && !conversation.isArchived);
+}
+
+export function suggestedThreadTitle(content: string): string {
+  const firstLine = content.split("\n").map((line) => line.replace(/^[#>*\-\d.\s]+/, "").trim()).find(Boolean) ?? "Thread";
+  const words = firstLine.replace(/[`*_]/g, "").split(/\s+/);
+  return words.length > 8 ? `${words.slice(0, 8).join(" ")}…` : firstLine;
+}
 
 export const TERMINAL_STATUSES: readonly MissionStatus[] = ["completed", "failed", "cancelled"];
 
@@ -237,6 +266,164 @@ function retryMission(data: PrototypeData, action: Extract<PrototypeAction, { ty
   });
 }
 
+function updateConversation(data: PrototypeData, conversationId: string, patch: Partial<Conversation>): PrototypeData {
+  return {
+    ...data,
+    conversations: data.conversations.map((conversation) => conversation.id === conversationId
+      ? { ...conversation, ...patch }
+      : conversation),
+  };
+}
+
+function createConversation(data: PrototypeData, action: Extract<PrototypeAction, { type: "createConversation" }>): PrototypeData {
+  if (conversationById(data, action.conversationId)) return data;
+  const title = action.title.trim() || (action.isTemporary ? "Temporary conversation" : "New conversation");
+  const conversation: Conversation = {
+    id: action.conversationId,
+    kind: action.isTemporary ? "temporary" : "personal",
+    title,
+    lastActivityAt: action.at,
+    lastVisitedAt: action.at,
+    knowledgeScope: action.isTemporary ? "none" : "personal",
+    expiresAt: action.isTemporary ? new Date(new Date(action.at).getTime() + TEMPORARY_LIFETIME_MS).toISOString() : undefined,
+  };
+  const withConversation = { ...data, conversations: [...data.conversations, conversation] };
+  return appendEntry(withConversation, conversation.id, {
+    kind: "system",
+    icon: action.isTemporary ? "knowledge" : "thread",
+    content: action.isTemporary
+      ? "Temporary conversation · discarded after 24 hours · nothing is written to durable knowledge"
+      : "Persistent conversation · uses personal knowledge",
+    createdAt: action.at,
+  });
+}
+
+function startThread(data: PrototypeData, action: Extract<PrototypeAction, { type: "startThread" }>): PrototypeData {
+  const parent = conversationById(data, action.conversationId);
+  const source = messageById(data, action.conversationId, action.messageId);
+  if (!parent || !source || conversationById(data, action.threadId)) return data;
+  const author = source.role === "hermes"
+    ? "Hermes"
+    : memberById(data, source.authorId ?? "")?.name ?? currentMember(data).name;
+  const thread: Conversation = {
+    id: action.threadId,
+    kind: "thread",
+    parentId: parent.id,
+    projectId: parent.projectId,
+    sourceMessageId: source.id,
+    title: action.title.trim() || suggestedThreadTitle(source.content),
+    lastActivityAt: action.at,
+    lastVisitedAt: action.at,
+    knowledgeScope: parent.knowledgeScope === "none" ? "none" : parent.knowledgeScope,
+  };
+  const parentLabel = parent.kind === "project-channel" ? `#${parent.title}` : parent.title;
+  const withThread: PrototypeData = {
+    ...data,
+    conversations: [...data.conversations, thread],
+    entries: {
+      ...data.entries,
+      [parent.id]: (data.entries[parent.id] ?? []).map((entry) => entry.id === source.id && entry.kind === "message"
+        ? { ...entry, threadId: thread.id }
+        : entry),
+    },
+  };
+  const withSystem = appendEntry(withThread, thread.id, {
+    kind: "system",
+    icon: "thread",
+    content: `Thread started from a message in ${parentLabel}`,
+    createdAt: action.at,
+  });
+  return appendEntry(withSystem, thread.id, {
+    kind: "snapshot",
+    content: source.content,
+    authorName: author,
+    sourceConversationId: parent.id,
+    sourceMessageId: source.id,
+    createdAt: action.at,
+  });
+}
+
+function keepConversation(data: PrototypeData, action: Extract<PrototypeAction, { type: "keepConversation" }>): PrototypeData {
+  const conversation = conversationById(data, action.conversationId);
+  if (!conversation || conversation.kind !== "temporary") return data;
+  const kept = updateConversation(data, conversation.id, {
+    kind: "personal",
+    knowledgeScope: "personal",
+    expiresAt: undefined,
+  });
+  return appendEntry(kept, conversation.id, {
+    kind: "system",
+    icon: "knowledge",
+    content: "Conversation kept · it now uses personal knowledge and will not be discarded",
+    createdAt: action.at,
+  });
+}
+
+function archiveConversation(data: PrototypeData, action: Extract<PrototypeAction, { type: "archiveConversation" }>): PrototypeData {
+  const conversation = conversationById(data, action.conversationId);
+  if (!conversation || conversation.kind === "personal-main" || conversation.kind === "project-channel") return data;
+  return updateConversation(data, conversation.id, { isArchived: true, isPinned: false, lastActivityAt: action.at });
+}
+
+function setDeviceCapability(data: PrototypeData, action: Extract<PrototypeAction, { type: "setDeviceCapability" }>): PrototypeData {
+  return {
+    ...data,
+    devices: data.devices.map((device) => device.id === action.deviceId
+      ? {
+        ...device,
+        repositories: device.repositories.map((repository) => repository.repositoryId === action.repositoryId
+          ? { ...repository, capabilities: { ...repository.capabilities, [action.capability]: action.enabled } }
+          : repository),
+      }
+      : device),
+  };
+}
+
+function enrollDevice(data: PrototypeData, action: Extract<PrototypeAction, { type: "enrollDevice" }>): PrototypeData {
+  if (data.devices.some((device) => device.id === action.deviceId)) return data;
+  const device: Device = {
+    id: action.deviceId,
+    name: action.name,
+    platform: action.platform,
+    isOnline: true,
+    lastSeenAt: action.at,
+    enrolledAt: action.at,
+    ownerId: currentMember(data).id,
+    runnerVersion: "0.6.2",
+    repositories: [],
+  };
+  return { ...data, devices: [...data.devices, device] };
+}
+
+function revokeDevice(data: PrototypeData, action: Extract<PrototypeAction, { type: "revokeDevice" }>): PrototypeData {
+  return {
+    ...data,
+    devices: data.devices.map((device) => device.id === action.deviceId
+      ? { ...device, isRevoked: true, isOnline: false, lastSeenAt: action.at }
+      : device),
+  };
+}
+
+function connectConnector(data: PrototypeData, action: Extract<PrototypeAction, { type: "connectConnector" }>): PrototypeData {
+  return {
+    ...data,
+    connectors: data.connectors.map((connector) => connector.id === action.connectorId
+      ? { ...connector, status: "connected" as const, lastUsedAt: action.at }
+      : connector),
+  };
+}
+
+function setConnectorProjectAccess(data: PrototypeData, action: Extract<PrototypeAction, { type: "setConnectorProjectAccess" }>): PrototypeData {
+  return {
+    ...data,
+    connectors: data.connectors.map((connector) => {
+      if (connector.id !== action.connectorId) return connector;
+      const without = connector.projectIds.filter((projectId) => projectId !== action.projectId);
+      return { ...connector, projectIds: action.enabled ? [...without, action.projectId] : without };
+    }),
+  };
+}
+
 function visitConversation(data: PrototypeData, action: Extract<PrototypeAction, { type: "visitConversation" }>): PrototypeData {
   return {
     ...data,
@@ -272,5 +459,27 @@ export function prototypeReducer(data: PrototypeData, action: PrototypeAction): 
       });
     case "visitConversation":
       return visitConversation(data, action);
+    case "createConversation":
+      return createConversation(data, action);
+    case "startThread":
+      return startThread(data, action);
+    case "keepConversation":
+      return keepConversation(data, action);
+    case "togglePin": {
+      const conversation = conversationById(data, action.conversationId);
+      return conversation ? updateConversation(data, conversation.id, { isPinned: !conversation.isPinned }) : data;
+    }
+    case "archiveConversation":
+      return archiveConversation(data, action);
+    case "setDeviceCapability":
+      return setDeviceCapability(data, action);
+    case "enrollDevice":
+      return enrollDevice(data, action);
+    case "revokeDevice":
+      return revokeDevice(data, action);
+    case "connectConnector":
+      return connectConnector(data, action);
+    case "setConnectorProjectAccess":
+      return setConnectorProjectAccess(data, action);
   }
 }

@@ -1,22 +1,24 @@
 "use client";
 
 import { Avatar } from "@astryxdesign/core/Avatar";
+import { Divider } from "@astryxdesign/core/Divider";
+import { Icon } from "@astryxdesign/core/Icon";
+import { IconButton } from "@astryxdesign/core/IconButton";
 import { Kbd } from "@astryxdesign/core/Kbd";
-import { HStack, StackItem } from "@astryxdesign/core/Layout";
+import { HStack, StackItem, VStack } from "@astryxdesign/core/Layout";
 import { SideNav, SideNavHeading, SideNavItem, SideNavSection } from "@astryxdesign/core/SideNav";
-import { StatusDot } from "@astryxdesign/core/StatusDot";
 import { Text } from "@astryxdesign/core/Text";
-import { MagnifyingGlassIcon } from "@heroicons/react/24/outline";
+import { MagnifyingGlassIcon, PlusIcon } from "@heroicons/react/24/outline";
 import type { NavigationEntry, NavigationGroup } from "../../../lib/prototype/navigation";
-import type { Device, Member } from "../../../lib/prototype/types";
+import type { Member } from "../../../lib/prototype/types";
 import { navigationIcons } from "./navigation-icons";
 import { NavigationEndContent } from "./navigation-status";
 
 interface WorkspaceSideNavProps {
   navigation: NavigationGroup[];
   member: Member;
-  device: Device;
   onOpenSearch: () => void;
+  onNewConversation: () => void;
 }
 
 function NavigationItem({ entry }: { entry: NavigationEntry }) {
@@ -37,7 +39,9 @@ function NavigationItem({ entry }: { entry: NavigationEntry }) {
   );
 }
 
-export function WorkspaceSideNav({ navigation, member, device, onOpenSearch }: WorkspaceSideNavProps) {
+export function WorkspaceSideNav({ navigation, member, onOpenSearch, onNewConversation }: WorkspaceSideNavProps) {
+  const workspace = navigation.find((group) => group.id === "workspace");
+
   return (
     <SideNav
       header={<SideNavHeading heading="ventneuf.os" />}
@@ -51,22 +55,37 @@ export function WorkspaceSideNav({ navigation, member, device, onOpenSearch }: W
         />
       )}
       footer={(
-        <HStack gap={2} vAlign="center" padding={3}>
-          <Avatar name={member.name} size="sm" />
-          <StackItem size="fill">
-            <Text type="supporting" color="primary" maxLines={1}>{member.name}</Text>
-          </StackItem>
-          <StatusDot
-            variant={device.isOnline ? "success" : "neutral"}
-            label={device.isOnline ? "Runner online" : "Runner offline"}
-            tooltip={device.isOnline ? "Runner online" : "Runner offline"}
-          />
-          <Text type="supporting" maxLines={1}>{device.name}</Text>
-        </HStack>
+        <VStack gap={0}>
+          {workspace ? (
+            <VStack gap={0} paddingBlock={1}>
+              {workspace.entries.map((entry) => <NavigationItem entry={entry} key={entry.id} />)}
+            </VStack>
+          ) : null}
+          <Divider />
+          <HStack gap={2} vAlign="center" padding={3}>
+            <Avatar name={member.name} size="sm" />
+            <StackItem size="fill">
+              <Text type="supporting" color="primary" maxLines={1}>{member.name}</Text>
+            </StackItem>
+          </HStack>
+        </VStack>
       )}
     >
-      {navigation.map((group) => (
-        <SideNavSection title={group.title} key={group.id}>
+      {navigation.filter((group) => group.id !== "workspace").map((group) => (
+        <SideNavSection
+          title={group.title}
+          key={group.id}
+          endContent={group.id === "personal" ? (
+            <IconButton
+              label="New conversation"
+              tooltip="New conversation"
+              variant="ghost"
+              size="sm"
+              icon={<Icon icon={PlusIcon} size="sm" />}
+              onClick={onNewConversation}
+            />
+          ) : undefined}
+        >
           {group.entries.map((entry) => <NavigationItem entry={entry} key={entry.id} />)}
         </SideNavSection>
       ))}

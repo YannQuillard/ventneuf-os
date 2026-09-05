@@ -7,6 +7,7 @@ export interface ShellContextValue {
   isCompact: boolean;
   openNavigation: () => void;
   openSearch: () => void;
+  openNewConversation: (isTemporary?: boolean) => void;
   navigate: (href: string) => void;
 }
 
@@ -15,6 +16,7 @@ export const ShellContext = createContext<ShellContextValue>({
   isCompact: false,
   openNavigation: () => undefined,
   openSearch: () => undefined,
+  openNewConversation: () => undefined,
   navigate: () => undefined,
 });
 

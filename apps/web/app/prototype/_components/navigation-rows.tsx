@@ -3,12 +3,12 @@
 import { Avatar } from "@astryxdesign/core/Avatar";
 import { Icon } from "@astryxdesign/core/Icon";
 import { IconButton } from "@astryxdesign/core/IconButton";
-import { HStack, Layout, LayoutContent, LayoutFooter, LayoutHeader, StackItem, VStack } from "@astryxdesign/core/Layout";
+import { HStack, Layout, LayoutContent, LayoutFooter, LayoutHeader, StackItem } from "@astryxdesign/core/Layout";
 import { List, ListItem } from "@astryxdesign/core/List";
 import { Section } from "@astryxdesign/core/Section";
 import { StatusDot } from "@astryxdesign/core/StatusDot";
 import { Heading, Text } from "@astryxdesign/core/Text";
-import { MagnifyingGlassIcon } from "@heroicons/react/24/outline";
+import { MagnifyingGlassIcon, PlusIcon } from "@heroicons/react/24/outline";
 import type { NavigationEntry, NavigationGroup } from "../../../lib/prototype/navigation";
 import type { Device, Member } from "../../../lib/prototype/types";
 import { navigationIcons } from "./navigation-icons";
@@ -20,6 +20,7 @@ interface NavigationRowsProps {
   device: Device;
   onNavigate: (href: string) => void;
   onOpenSearch: () => void;
+  onNewConversation: () => void;
 }
 
 interface FlatEntry {
@@ -36,20 +37,29 @@ function descriptionFor({ entry, parentLabel }: FlatEntry): string | undefined {
   if (entry.kind === "channel") return "Shared channel";
   if (entry.kind === "main") return "Your private conversation";
   if (entry.kind === "temporary") return "Temporary · not written to memory";
+  if (entry.kind === "devices") return "Runners, repositories, connectors";
+  if (entry.kind === "usage") return "Tokens, time, and cost by mission";
   return undefined;
 }
 
-export function NavigationRows({ navigation, member, device, onNavigate, onOpenSearch }: NavigationRowsProps) {
+export function NavigationRows({ navigation, member, device, onNavigate, onOpenSearch, onNewConversation }: NavigationRowsProps) {
   return (
     <Layout
       height="fill"
       defaultHasDividers
       header={(
         <LayoutHeader padding={4}>
-          <HStack gap={3} vAlign="center">
+          <HStack gap={2} vAlign="center">
             <StackItem size="fill">
               <Heading level={1} accessibilityLevel={1}>ventneuf.os</Heading>
             </StackItem>
+            <IconButton
+              label="New conversation"
+              tooltip="New conversation"
+              variant="ghost"
+              icon={<Icon icon={PlusIcon} />}
+              onClick={onNewConversation}
+            />
             <IconButton
               label="Search conversations, missions, and knowledge"
               tooltip="Search"

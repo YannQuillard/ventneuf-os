@@ -35,13 +35,43 @@ export interface Member {
   isCurrentUser?: boolean;
 }
 
+export type ProjectRole = "owner" | "member";
+
+export interface ProjectMember {
+  memberId: string;
+  role: ProjectRole;
+}
+
+export interface ProjectPolicy {
+  preAuthorised: string[];
+  hermesDiscretion: string[];
+  memberGates: string[];
+  forbidden: string[];
+  budgetMinutes: number;
+}
+
 export interface Project {
   id: string;
   name: string;
   description: string;
-  repositories: string[];
-  memberIds: string[];
+  members: ProjectMember[];
   channelId: string;
+  policy: ProjectPolicy;
+}
+
+export interface Repository {
+  id: string;
+  name: string;
+  projectId: string;
+  defaultBranch: string;
+  url: string;
+}
+
+export type DeviceCapability = "check" | "review" | "codexDevelopment" | "claudeDevelopment";
+
+export interface DeviceRepository {
+  repositoryId: string;
+  capabilities: Record<DeviceCapability, boolean>;
 }
 
 export interface Device {
@@ -49,7 +79,60 @@ export interface Device {
   name: string;
   platform: string;
   isOnline: boolean;
+  isRevoked?: boolean;
   lastSeenAt: string;
+  enrolledAt: string;
+  ownerId: string;
+  runnerVersion: string;
+  orca?: { version: string; isRunning: boolean };
+  repositories: DeviceRepository[];
+}
+
+export type ConnectorProvider = "github" | "sentry" | "cloudflare";
+
+export type ConnectorStatus = "connected" | "needs_auth" | "disconnected";
+
+export interface Connector {
+  id: string;
+  provider: ConnectorProvider;
+  name: string;
+  status: ConnectorStatus;
+  ownerId: string;
+  projectIds: string[];
+  tools: string[];
+  lastUsedAt?: string;
+}
+
+export interface KnowledgeSource {
+  id: string;
+  name: string;
+  projectId?: string;
+  path: string;
+  noteCount: number;
+  lastSyncAt: string;
+}
+
+export interface KnowledgeNote {
+  id: string;
+  sourceId: string;
+  title: string;
+  path: string;
+  summary: string;
+  updatedAt: string;
+}
+
+export interface UsageRecord {
+  id: string;
+  date: string;
+  missionId?: string;
+  conversationId?: string;
+  projectId?: string;
+  agent: AgentKind | "hermes";
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  durationMs: number;
+  costUsd: number;
 }
 
 export interface Conversation {
@@ -58,7 +141,10 @@ export interface Conversation {
   title: string;
   parentId?: string;
   projectId?: string;
+  sourceMessageId?: string;
   isPinned?: boolean;
+  isArchived?: boolean;
+  expiresAt?: string;
   lastActivityAt: string;
   lastVisitedAt?: string;
   knowledgeScope: KnowledgeScope;
@@ -80,12 +166,22 @@ export type ConversationEntry =
       content: string;
       createdAt: string;
       timing?: MessageTiming;
+      threadId?: string;
     }
   | {
       id: string;
       kind: "system";
       icon: "thread" | "mission" | "knowledge" | "device";
       content: string;
+      createdAt: string;
+    }
+  | {
+      id: string;
+      kind: "snapshot";
+      content: string;
+      authorName: string;
+      sourceConversationId: string;
+      sourceMessageId: string;
       createdAt: string;
     }
   | { id: string; kind: "mission"; missionId: string; createdAt: string }
@@ -248,7 +344,12 @@ export interface PrototypeData {
   now: string;
   members: Member[];
   projects: Project[];
+  repositories: Repository[];
   devices: Device[];
+  connectors: Connector[];
+  knowledgeSources: KnowledgeSource[];
+  knowledgeNotes: KnowledgeNote[];
+  usage: UsageRecord[];
   conversations: Conversation[];
   entries: Record<string, ConversationEntry[]>;
   missions: Mission[];

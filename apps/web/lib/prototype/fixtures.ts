@@ -1,12 +1,17 @@
 import type {
   Approval,
+  Connector,
   Conversation,
   ConversationEntry,
   Device,
+  KnowledgeNote,
+  KnowledgeSource,
   Member,
   Mission,
   Project,
   PrototypeData,
+  Repository,
+  UsageRecord,
 } from "./types";
 
 export const PROTOTYPE_NOW = "2026-09-05T14:32:00.000Z";
@@ -21,6 +26,10 @@ function minutesAhead(minutes: number): string {
   return new Date(nowMs + minutes * 60_000).toISOString();
 }
 
+function daysAgo(days: number): string {
+  return new Date(nowMs - days * 24 * 60 * 60_000).toISOString().slice(0, 10);
+}
+
 const members: Member[] = [
   { id: "mem-ada", name: "Ada Lin", isCurrentUser: true },
   { id: "mem-noor", name: "Noor Haddad" },
@@ -31,26 +40,57 @@ const projects: Project[] = [
     id: "ventneuf-os",
     name: "ventneuf-os",
     description: "Agentic workspace product and runner.",
-    repositories: ["ventneuf-os", "ventneuf-infrastructure"],
-    memberIds: ["mem-ada", "mem-noor"],
+    members: [
+      { memberId: "mem-ada", role: "owner" },
+      { memberId: "mem-noor", role: "member" },
+    ],
     channelId: "ch-ventneuf",
+    policy: {
+      preAuthorised: ["Read repository", "Edit owned worktree", "Run npm scripts and tests", "Push mission branch", "Open pull request"],
+      hermesDiscretion: ["Clean up completed mission worktrees", "Read diagnostics through ventneuf MCP", "Retry failed steps"],
+      memberGates: ["Add dependencies", "Start containers", "Delete local data outside the sandbox", "Write outside the worktree"],
+      forbidden: ["Merge", "Deploy", "Change infrastructure"],
+      budgetMinutes: 120,
+    },
   },
   {
     id: "ampel",
     name: "ampel",
     description: "Traffic and incident dashboard.",
-    repositories: ["ampel-web"],
-    memberIds: ["mem-ada", "mem-noor"],
+    members: [
+      { memberId: "mem-noor", role: "owner" },
+      { memberId: "mem-ada", role: "member" },
+    ],
     channelId: "ch-ampel",
+    policy: {
+      preAuthorised: ["Read repository", "Edit owned worktree", "Run tests", "Browser automation", "Push mission branch", "Open pull request"],
+      hermesDiscretion: ["Connector reads through ventneuf MCP", "Retry failed steps"],
+      memberGates: ["Connector writes", "Network access", "Add dependencies"],
+      forbidden: ["Merge", "Deploy"],
+      budgetMinutes: 120,
+    },
   },
   {
     id: "brandstamp",
     name: "brandstamp",
     description: "Marketing site and asset pipeline.",
-    repositories: ["brandstamp-site"],
-    memberIds: ["mem-ada"],
+    members: [{ memberId: "mem-ada", role: "owner" }],
     channelId: "ch-brandstamp",
+    policy: {
+      preAuthorised: ["Read repository", "Edit owned worktree", "Run tests"],
+      hermesDiscretion: [],
+      memberGates: ["Push mission branch", "Open pull request", "Network access"],
+      forbidden: ["Merge", "Deploy", "Change infrastructure"],
+      budgetMinutes: 60,
+    },
   },
+];
+
+const repositories: Repository[] = [
+  { id: "repo-ventneuf", name: "ventneuf-os", projectId: "ventneuf-os", defaultBranch: "main", url: "https://github.com/example/ventneuf-os" },
+  { id: "repo-infra", name: "ventneuf-infrastructure", projectId: "ventneuf-os", defaultBranch: "main", url: "https://github.com/example/ventneuf-infrastructure" },
+  { id: "repo-ampel", name: "ampel-web", projectId: "ampel", defaultBranch: "main", url: "https://github.com/example/ampel-web" },
+  { id: "repo-brandstamp", name: "brandstamp-site", projectId: "brandstamp", defaultBranch: "main", url: "https://github.com/example/brandstamp-site" },
 ];
 
 const devices: Device[] = [
@@ -60,6 +100,15 @@ const devices: Device[] = [
     platform: "macOS 26.1 · Apple M4 Max",
     isOnline: true,
     lastSeenAt: minutesAgo(0.5),
+    enrolledAt: daysAgo(4),
+    ownerId: "mem-ada",
+    runnerVersion: "0.6.2",
+    orca: { version: "1.4.188", isRunning: true },
+    repositories: [
+      { repositoryId: "repo-ventneuf", capabilities: { check: true, review: true, codexDevelopment: true, claudeDevelopment: true } },
+      { repositoryId: "repo-infra", capabilities: { check: true, review: false, codexDevelopment: false, claudeDevelopment: false } },
+      { repositoryId: "repo-ampel", capabilities: { check: true, review: true, codexDevelopment: false, claudeDevelopment: true } },
+    ],
   },
   {
     id: "dev-shared",
@@ -67,7 +116,95 @@ const devices: Device[] = [
     platform: "macOS 26.1 · Apple M2",
     isOnline: false,
     lastSeenAt: minutesAgo(60 * 30),
+    enrolledAt: daysAgo(11),
+    ownerId: "mem-noor",
+    runnerVersion: "0.5.9",
+    orca: { version: "1.4.188", isRunning: false },
+    repositories: [
+      { repositoryId: "repo-ampel", capabilities: { check: true, review: false, codexDevelopment: false, claudeDevelopment: false } },
+      { repositoryId: "repo-brandstamp", capabilities: { check: true, review: false, codexDevelopment: false, claudeDevelopment: false } },
+    ],
   },
+];
+
+const connectors: Connector[] = [
+  {
+    id: "conn-github",
+    provider: "github",
+    name: "GitHub",
+    status: "connected",
+    ownerId: "mem-ada",
+    projectIds: ["ventneuf-os", "ampel", "brandstamp"],
+    tools: ["pull_requests.list", "pull_requests.create", "checks.read"],
+    lastUsedAt: minutesAgo(9),
+  },
+  {
+    id: "conn-sentry",
+    provider: "sentry",
+    name: "Sentry",
+    status: "connected",
+    ownerId: "mem-noor",
+    projectIds: ["ampel"],
+    tools: ["issues.list", "issues.resolve", "events.read"],
+    lastUsedAt: minutesAgo(1),
+  },
+  {
+    id: "conn-cloudflare",
+    provider: "cloudflare",
+    name: "Cloudflare",
+    status: "needs_auth",
+    ownerId: "mem-ada",
+    projectIds: ["brandstamp"],
+    tools: ["zones.read", "deployments.read", "cache.purge"],
+  },
+];
+
+const knowledgeSources: KnowledgeSource[] = [
+  { id: "ks-personal", name: "Personal vault", path: "/knowledge/personal", noteCount: 148, lastSyncAt: minutesAgo(3) },
+  { id: "ks-ventneuf", name: "ventneuf-os vault", projectId: "ventneuf-os", path: "/knowledge/ventneuf", noteCount: 63, lastSyncAt: minutesAgo(3) },
+  { id: "ks-ampel", name: "ampel vault", projectId: "ampel", path: "/knowledge/ampel", noteCount: 21, lastSyncAt: minutesAgo(41) },
+];
+
+const knowledgeNotes: KnowledgeNote[] = [
+  { id: "kn-daily", sourceId: "ks-personal", title: "Daily note · 2026-09-05", path: "Daily/2026-09-05.md", summary: "Week recap saved by Hermes: autonomous missions, durable approvals, KMS delegation.", updatedAt: minutesAgo(328) },
+  { id: "kn-vault-conventions", sourceId: "ks-personal", title: "Vault conventions", path: "Conventions/Vault.md", summary: "Daily notes under Daily/, decisions in a dedicated section, project decisions go to the shared vault.", updatedAt: minutesAgo(60 * 26) },
+  { id: "kn-autonomy", sourceId: "ks-ventneuf", title: "Mission autonomy", path: "Architecture/Mission autonomy.md", summary: "Hermes-supervised missions, delegated authority, approval and resumption protocol.", updatedAt: minutesAgo(60 * 9) },
+  { id: "kn-connectors", sourceId: "ks-ventneuf", title: "Connector registry", path: "Architecture/Connector registry.md", summary: "Server-side provider credentials, mission-scoped access, curated tool catalogue.", updatedAt: minutesAgo(60 * 24 * 3) },
+  { id: "kn-runner", sourceId: "ks-ventneuf", title: "First runner runbook", path: "Runbooks/First runner.md", summary: "Enrol a Mac, verify the Keychain identity, watch the heartbeat.", updatedAt: minutesAgo(60 * 24 * 6) },
+  { id: "kn-retention", sourceId: "ks-ventneuf", title: "Worktree retention decision", path: "Decisions/2026-09-05 Worktree retention.md", summary: "Retention follows mission state; clean worktrees are removed at completion or cancellation.", updatedAt: minutesAgo(180) },
+  { id: "kn-sentry-noise", sourceId: "ks-ampel", title: "Sentry noise policy", path: "Operations/Sentry noise.md", summary: "Ignore extension-generated errors and ResizeObserver loops; keep hydration warnings visible.", updatedAt: minutesAgo(45) },
+  { id: "kn-incident-board", sourceId: "ks-ampel", title: "Incident board", path: "Product/Incident board.md", summary: "Board layout, relative clock behaviour, and mobile breakpoints.", updatedAt: minutesAgo(60 * 24 * 2) },
+];
+
+function hermesUsage(day: number, index: number): UsageRecord {
+  const seed = (day * 7 + index * 13) % 11;
+  return {
+    id: `u-hermes-${day}-${index}`,
+    date: daysAgo(day),
+    conversationId: index === 0 ? "hermes" : index === 1 ? "ch-ventneuf" : "ch-ampel",
+    projectId: index === 0 ? undefined : index === 1 ? "ventneuf-os" : "ampel",
+    agent: "hermes",
+    model: "hermes-supervisor",
+    inputTokens: 6_000 + seed * 900,
+    outputTokens: 900 + seed * 120,
+    durationMs: 4_000 + seed * 700,
+    costUsd: Math.round((0.05 + seed * 0.008) * 100) / 100,
+  };
+}
+
+const usage: UsageRecord[] = [
+  { id: "u-m-retention", date: daysAgo(0), missionId: "m-retention", conversationId: "thread-retention", projectId: "ventneuf-os", agent: "codex", model: "gpt-5-codex", inputTokens: 412_800, outputTokens: 38_400, durationMs: 34 * 60_000, costUsd: 3.12 },
+  { id: "u-m-sentry", date: daysAgo(0), missionId: "m-sentry", conversationId: "thread-sentry", projectId: "ampel", agent: "claude", model: "claude-sonnet-5", inputTokens: 188_000, outputTokens: 21_500, durationMs: 19 * 60_000, costUsd: 1.46 },
+  { id: "u-m-review", date: daysAgo(0), missionId: "m-review", conversationId: "hermes", agent: "codex", model: "gpt-5-codex", inputTokens: 296_000, outputTokens: 6_200, durationMs: 291_000, costUsd: 0.81 },
+  { id: "u-m-expiry", date: daysAgo(0), missionId: "m-expiry", conversationId: "thread-expiry", projectId: "ventneuf-os", agent: "codex", model: "gpt-5-codex", inputTokens: 1_020_000, outputTokens: 74_000, durationMs: 54 * 60_000, costUsd: 7.9 },
+  { id: "u-m-cleanup", date: daysAgo(0), missionId: "m-cleanup", conversationId: "thread-cleanup", projectId: "ventneuf-os", agent: "claude", model: "claude-sonnet-5", inputTokens: 61_000, outputTokens: 4_300, durationMs: 10 * 60_000, costUsd: 0.34 },
+  { id: "u-m-past-1", date: daysAgo(2), missionId: "m-review", conversationId: "hermes", agent: "codex", model: "gpt-5-codex", inputTokens: 240_000, outputTokens: 5_100, durationMs: 250_000, costUsd: 0.66 },
+  { id: "u-m-past-2", date: daysAgo(6), missionId: "m-cleanup", conversationId: "thread-cleanup", projectId: "ventneuf-os", agent: "claude", model: "claude-sonnet-5", inputTokens: 52_000, outputTokens: 3_900, durationMs: 8 * 60_000, costUsd: 0.29 },
+  { id: "u-m-past-3", date: daysAgo(12), missionId: "m-sentry", conversationId: "thread-sentry", projectId: "ampel", agent: "claude", model: "claude-sonnet-5", inputTokens: 210_000, outputTokens: 19_000, durationMs: 22 * 60_000, costUsd: 1.58 },
+  { id: "u-m-past-4", date: daysAgo(25), missionId: "m-expiry", conversationId: "thread-expiry", projectId: "ventneuf-os", agent: "codex", model: "gpt-5-codex", inputTokens: 640_000, outputTokens: 41_000, durationMs: 38 * 60_000, costUsd: 4.7 },
+  { id: "u-m-past-5", date: daysAgo(48), missionId: "m-review", conversationId: "hermes", agent: "codex", model: "gpt-5-codex", inputTokens: 180_000, outputTokens: 4_400, durationMs: 200_000, costUsd: 0.52 },
+  ...Array.from({ length: 30 }, (_, day) => [hermesUsage(day, 0), hermesUsage(day, 1), hermesUsage(day, 2)]).flat(),
+  ...Array.from({ length: 6 }, (_, week) => hermesUsage(35 + week * 9, 0)),
 ];
 
 const conversations: Conversation[] = [
@@ -84,6 +221,7 @@ const conversations: Conversation[] = [
     id: "thread-vault",
     kind: "thread",
     parentId: "hermes",
+    sourceMessageId: "h2",
     title: "Vault conventions",
     isPinned: true,
     lastActivityAt: minutesAgo(60 * 26),
@@ -109,7 +247,16 @@ const conversations: Conversation[] = [
     kind: "temporary",
     title: "Quick question",
     lastActivityAt: minutesAgo(22),
+    expiresAt: minutesAhead(60 * 24 - 23),
     knowledgeScope: "none",
+  },
+  {
+    id: "conv-archived",
+    kind: "personal",
+    title: "Runner install script",
+    isArchived: true,
+    lastActivityAt: minutesAgo(60 * 24 * 20),
+    knowledgeScope: "personal",
   },
   {
     id: "conv-onboarding",
@@ -147,6 +294,7 @@ const conversations: Conversation[] = [
     kind: "thread",
     parentId: "ch-ventneuf",
     projectId: "ventneuf-os",
+    sourceMessageId: "c4",
     title: "Worktree retention",
     lastActivityAt: minutesAgo(2),
     lastVisitedAt: minutesAgo(1),
@@ -167,6 +315,7 @@ const conversations: Conversation[] = [
     kind: "thread",
     parentId: "ch-ventneuf",
     projectId: "ventneuf-os",
+    sourceMessageId: "c2",
     title: "Runner cleanup audit",
     lastActivityAt: minutesAgo(190),
     lastVisitedAt: minutesAgo(170),
@@ -196,6 +345,7 @@ const conversations: Conversation[] = [
     kind: "thread",
     parentId: "ch-ampel",
     projectId: "ampel",
+    sourceMessageId: "am1",
     title: "Sentry noise triage",
     lastActivityAt: minutesAgo(1),
     lastVisitedAt: minutesAgo(12),
@@ -1112,6 +1262,7 @@ const entries: Record<string, ConversationEntry[]> = {
       id: "h2",
       kind: "message",
       role: "hermes",
+      threadId: "thread-vault",
       content:
         "Here is the week in ventneuf-os:\n\n- **Autonomous Codex missions** landed in PR #36 with a two-hour mission authority and native approval capture.\n- **Durable approvals** (PR #35) route requests to Hermes, to you, or deny them by policy.\n- **KMS-signed delegation** (PR #34) removed the last static Hermes credential.\n\nI saved this as `Daily/2026-09-05.md` in your personal vault.",
       createdAt: minutesAgo(328),
@@ -1163,6 +1314,15 @@ const entries: Record<string, ConversationEntry[]> = {
       kind: "system",
       icon: "thread",
       content: "Thread started from a message in Hermes",
+      createdAt: minutesAgo(60 * 26),
+    },
+    {
+      id: "v1b",
+      kind: "snapshot",
+      content: "I saved this as `Daily/2026-09-05.md` in your personal vault.",
+      authorName: "Hermes",
+      sourceConversationId: "hermes",
+      sourceMessageId: "h2",
       createdAt: minutesAgo(60 * 26),
     },
     {
@@ -1286,6 +1446,23 @@ const entries: Record<string, ConversationEntry[]> = {
       timing: { totalMs: 2_400, model: "hermes-supervisor", tokens: 410 },
     },
   ],
+  "conv-archived": [
+    {
+      id: "ar1",
+      kind: "message",
+      role: "user",
+      content: "Write the install script for the runner service.",
+      createdAt: minutesAgo(60 * 24 * 20 + 2),
+    },
+    {
+      id: "ar2",
+      kind: "message",
+      role: "hermes",
+      content: "Done. The installer persists the control-plane URL and allowed origins, installs the LaunchAgent, and keeps the Keychain identity.",
+      createdAt: minutesAgo(60 * 24 * 20),
+      timing: { totalMs: 5_900, model: "hermes-supervisor", tokens: 1_210 },
+    },
+  ],
   "ch-ventneuf": [
     {
       id: "c1",
@@ -1300,6 +1477,7 @@ const entries: Record<string, ConversationEntry[]> = {
       kind: "message",
       role: "user",
       authorId: "mem-ada",
+      threadId: "thread-cleanup",
       content: "Agreed, that is a lifecycle gap. Hermes, audit what is there first, then we decide.",
       createdAt: minutesAgo(203),
     },
@@ -1315,6 +1493,7 @@ const entries: Record<string, ConversationEntry[]> = {
       kind: "message",
       role: "user",
       authorId: "mem-ada",
+      threadId: "thread-retention",
       content: "Change of plan: let's fix the root cause. Retention should follow mission state instead of manual cleanup.",
       createdAt: minutesAgo(192),
     },
@@ -1356,6 +1535,15 @@ const entries: Record<string, ConversationEntry[]> = {
       kind: "system",
       icon: "thread",
       content: "Thread started from a message in #ventneuf-os",
+      createdAt: minutesAgo(35),
+    },
+    {
+      id: "tr1b",
+      kind: "snapshot",
+      content: "Change of plan: let's fix the root cause. Retention should follow mission state instead of manual cleanup.",
+      authorName: "Ada Lin",
+      sourceConversationId: "ch-ventneuf",
+      sourceMessageId: "c4",
       createdAt: minutesAgo(35),
     },
     {
@@ -1408,6 +1596,15 @@ const entries: Record<string, ConversationEntry[]> = {
       content: "Thread started from a message in #ventneuf-os",
       createdAt: minutesAgo(201),
     },
+    {
+      id: "tc1b",
+      kind: "snapshot",
+      content: "Agreed, that is a lifecycle gap. Hermes, audit what is there first, then we decide.",
+      authorName: "Ada Lin",
+      sourceConversationId: "ch-ventneuf",
+      sourceMessageId: "c2",
+      createdAt: minutesAgo(201),
+    },
     { id: "tc2", kind: "mission", missionId: "m-cleanup", createdAt: minutesAgo(200) },
     {
       id: "tc3",
@@ -1449,6 +1646,7 @@ const entries: Record<string, ConversationEntry[]> = {
       kind: "message",
       role: "user",
       authorId: "mem-noor",
+      threadId: "thread-sentry",
       content: "The incident board is drowning in Sentry noise again, and the hydration warning is back on the header clock.",
       createdAt: minutesAgo(50),
     },
@@ -1474,6 +1672,15 @@ const entries: Record<string, ConversationEntry[]> = {
       kind: "system",
       icon: "thread",
       content: "Thread started from a message in #ampel",
+      createdAt: minutesAgo(20),
+    },
+    {
+      id: "ts1b",
+      kind: "snapshot",
+      content: "The incident board is drowning in Sentry noise again, and the hydration warning is back on the header clock.",
+      authorName: "Noor Haddad",
+      sourceConversationId: "ch-ampel",
+      sourceMessageId: "am1",
       createdAt: minutesAgo(20),
     },
     { id: "ts2", kind: "mission", missionId: "m-sentry", createdAt: minutesAgo(19) },
@@ -1503,7 +1710,12 @@ export const prototypeData: PrototypeData = {
   now: PROTOTYPE_NOW,
   members,
   projects,
+  repositories,
   devices,
+  connectors,
+  knowledgeSources,
+  knowledgeNotes,
+  usage,
   conversations,
   entries,
   missions,
