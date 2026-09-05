@@ -172,7 +172,15 @@ test("runner assignment, concurrent claims, fenced retries, cancellation and ten
       content: "Develop source",
       runner: { deviceId, repositoryId: "sample", adapter: "codex-development" },
     }), RunnerAssignmentError);
-    await runner.register(scope, [{ id: "sample", name: "Sample", orcaReview: true, codexDevelopment: true }]);
+    await assert.rejects(conversations.enqueuePrivateMessage({
+      organizationId,
+      externalSubject: "runner-subject",
+      content: "Develop source with Claude",
+      runner: { deviceId, repositoryId: "sample", adapter: "claude-development" },
+    }), RunnerAssignmentError);
+    await runner.register(scope, [{
+      id: "sample", name: "Sample", orcaReview: true, codexDevelopment: true, claudeDevelopment: true,
+    }]);
     const development = await conversations.enqueuePrivateMessage({
       organizationId,
       externalSubject: "runner-subject",
@@ -192,6 +200,26 @@ test("runner assignment, concurrent claims, fenced retries, cancellation and ten
       eventId: randomUUID(),
       kind: "completed",
       content: "Development result",
+    });
+    const claudeDevelopment = await conversations.enqueuePrivateMessage({
+      organizationId,
+      externalSubject: "runner-subject",
+      content: "Fix the source with Claude and open a pull request",
+      runner: { deviceId, repositoryId: "sample", adapter: "claude-development" },
+    });
+    assert.equal((claudeDevelopment.mission.context.agent as { adapter?: string }).adapter, "claude");
+    assert.equal((claudeDevelopment.mission.context.authority as { actions?: Record<string, string> })
+      .actions?.["repository.write"], "allow");
+    const claudeClaim = await runner.claim(scope, owner, "claude-development-lease");
+    assert.equal(claudeClaim?.adapter, "claude-development");
+    assert.ok(Number.isFinite(Date.parse(claudeClaim?.authorityExpiresAt ?? "")));
+    await runner.report(scope, {
+      missionId: claudeDevelopment.mission.id,
+      owner,
+      tokenHash: "claude-development-lease",
+      eventId: randomUUID(),
+      kind: "completed",
+      content: "Claude development result",
     });
     const review = await conversations.enqueuePrivateMessage(reviewInput);
     assert.equal((await runner.claim(scope, owner, "review-lease"))?.adapter, "orca-review");

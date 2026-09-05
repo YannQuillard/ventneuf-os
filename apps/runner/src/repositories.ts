@@ -8,6 +8,7 @@ export interface RegisteredRepository {
   path: string;
   orcaReview?: boolean;
   codexDevelopment?: boolean;
+  claudeDevelopment?: boolean;
 }
 export const defaultRepositoriesFile = () => join(homedir(), ".config", "ventneuf.os", "repositories.json");
 
@@ -27,7 +28,8 @@ export async function loadRepositories(path: string): Promise<RegisteredReposito
       || ids.has(entry.id) || typeof entry.name !== "string" || !entry.name.trim() || entry.name.length > 100
       || typeof entry.path !== "string" || !isAbsolute(entry.path)
       || (entry.orcaReview !== undefined && typeof entry.orcaReview !== "boolean")
-      || (entry.codexDevelopment !== undefined && typeof entry.codexDevelopment !== "boolean")) {
+      || (entry.codexDevelopment !== undefined && typeof entry.codexDevelopment !== "boolean")
+      || (entry.claudeDevelopment !== undefined && typeof entry.claudeDevelopment !== "boolean")) {
       throw new Error("Invalid repository configuration.");
     }
     ids.add(entry.id);
@@ -36,6 +38,7 @@ export async function loadRepositories(path: string): Promise<RegisteredReposito
     repositories.push({ id: entry.id, name: entry.name.trim(), path,
       ...(entry.orcaReview === true ? { orcaReview: true } : {}),
       ...(entry.codexDevelopment === true ? { codexDevelopment: true } : {}),
+      ...(entry.claudeDevelopment === true ? { claudeDevelopment: true } : {}),
     });
   }
   return repositories;
@@ -44,7 +47,7 @@ export async function loadRepositories(path: string): Promise<RegisteredReposito
 export interface RunnerMission {
   id: string;
   repositoryId: string;
-  adapter: "repository-check" | "orca-review" | "codex-development";
+  adapter: "repository-check" | "orca-review" | "codex-development" | "claude-development";
   objective: string;
   attempt?: number;
   authorityExpiresAt?: string;

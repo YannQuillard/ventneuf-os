@@ -11,10 +11,13 @@ import type { AgentApprovalRequest } from "./repositories.js";
 import { writeReviewState } from "./review-supervisor.js";
 
 export interface DevelopmentJob {
+  agent?: "codex" | "claude";
+  agentPath?: string;
   missionId: string;
   repositoryId: string;
   objective: string;
-  codexPath: string;
+  codexPath?: string;
+  claudePath?: string;
   gitPath: string;
   gitAuthorName: string;
   gitAuthorEmail: string;
@@ -24,6 +27,8 @@ export interface DevelopmentJob {
   gitObjectsDirectory: string;
   gitBranchRef: string;
   gitBranchLog: string;
+  remoteHost?: string;
+  remoteRepository?: string;
   authorityExpiresAt: number;
 }
 
@@ -174,13 +179,17 @@ export function classifyCodexApproval(
 }
 
 export function codexDevelopmentConfig(job: DevelopmentJob): string[] {
+  const codexPath = job.agentPath ?? job.codexPath;
+  if ((job.agent !== undefined && job.agent !== "codex") || !codexPath) {
+    throw new Error("The development job is not a Codex mission.");
+  }
   const filesystem = {
     ":minimal": "read",
     "/private/tmp/**": "deny",
     "/tmp/**": "deny",
     "/private/var/tmp/**": "deny",
     "/var/tmp/**": "deny",
-    [job.codexPath]: "read",
+    [codexPath]: "read",
     [job.gitPath]: "read",
     [job.worktree]: "write",
     [job.gitDirectory]: "write",
@@ -193,7 +202,7 @@ export function codexDevelopmentConfig(job: DevelopmentJob): string[] {
   };
   const filesystemToml = Object.entries(filesystem)
     .map(([path, access]) => `${JSON.stringify(path)}=${JSON.stringify(access)}`).join(", ");
-  const toolPath = [...new Set([dirname(process.execPath), dirname(job.codexPath), dirname(job.gitPath),
+  const toolPath = [...new Set([dirname(process.execPath), dirname(codexPath), dirname(job.gitPath),
     "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"])]
     .join(":");
   const toolEnvironment = {
@@ -237,6 +246,10 @@ export function codexAppServerArguments(job: DevelopmentJob): string[] {
 }
 
 export async function verifyDevelopmentIsolation(job: DevelopmentJob, directory: string) {
+  const codexPath = job.agentPath ?? job.codexPath;
+  if ((job.agent !== undefined && job.agent !== "codex") || !codexPath) {
+    throw new Error("The development job is not a Codex mission.");
+  }
   const marker = `.isolation-${randomUUID()}`;
   const source = join(job.worktree, marker);
   const gitWorktreeProbe = join(job.gitDirectory, marker);
@@ -258,7 +271,7 @@ export async function verifyDevelopmentIsolation(job: DevelopmentJob, directory:
     await writeFile(outside, "outside", { mode: 0o600 });
     await writeFile(join(temporary, "probe"), "temporary", { mode: 0o600 });
     const config = codexDevelopmentConfig(job);
-    const { stdout } = await execute(job.codexPath, ["sandbox", "-P", "ventneuf-development", "-C", job.worktree,
+    const { stdout } = await execute(codexPath, ["sandbox", "-P", "ventneuf-development", "-C", job.worktree,
       ...config.flatMap((value) => ["-c", value]), "--", "/bin/sh", "-c",
       'cat "$1" >/dev/null || exit 1; echo changed >"$1" || exit 2; echo git >"$2" || exit 3; '
       + 'echo object >"$3" || exit 4; echo branch >"$4" || exit 5; echo log >"$5" || exit 6; '
@@ -269,7 +282,7 @@ export async function verifyDevelopmentIsolation(job: DevelopmentJob, directory:
       gitCommonProbe, outside, temporary, `http://127.0.0.1:${address.port}`], {
       timeout: 15_000,
       maxBuffer: 16_000,
-      env: { HOME: homedir(), PATH: `${dirname(job.codexPath)}:/usr/bin:/bin`, LANG: "en_US.UTF-8" },
+      env: { HOME: homedir(), PATH: `${dirname(codexPath)}:/usr/bin:/bin`, LANG: "en_US.UTF-8" },
     });
     const sourceContent = await readFile(source, "utf8");
     if (stdout.trim() !== "isolated" || sourceContent !== "changed\n") {
@@ -460,7 +473,9 @@ function missionPrompt(job: DevelopmentJob, resumed: boolean) {
 
 export async function superviseDevelopment(directory: string) {
   const job = JSON.parse(await readFile(join(directory, "job.json"), "utf8")) as DevelopmentJob;
-  if (!/^[a-f0-9-]{36}$/.test(job.missionId) || !job.repositoryId || !isAbsolute(job.codexPath)
+  const configuredCodexPath = job.agentPath ?? job.codexPath;
+  if ((job.agent !== undefined && job.agent !== "codex") || !configuredCodexPath
+    || !/^[a-f0-9-]{36}$/.test(job.missionId) || !job.repositoryId || !isAbsolute(configuredCodexPath)
     || !isAbsolute(job.gitPath) || typeof job.gitAuthorName !== "string" || !job.gitAuthorName.trim()
     || typeof job.gitAuthorEmail !== "string" || !job.gitAuthorEmail.trim()
     || job.gitAuthorName.length > 100 || job.gitAuthorEmail.length > 254
@@ -475,10 +490,10 @@ export async function superviseDevelopment(directory: string) {
   const worktree = await realpath(job.worktree);
   if (worktree !== job.worktree) throw new Error("The mission worktree moved.");
   await mkdir(join(worktree, ".ventneuf-tmp"), { mode: 0o700 });
-  const codexPath = await realpath(job.codexPath);
-  await verifyDevelopmentIsolation({ ...job, codexPath }, directory);
+  const codexPath = await realpath(configuredCodexPath);
+  await verifyDevelopmentIsolation({ ...job, agent: "codex", agentPath: codexPath, codexPath }, directory);
   const previousSession = await readJsonIfPresent<{ threadId?: string; sessionId?: string }>(join(directory, "session.json"));
-  const child = spawn(codexPath, codexAppServerArguments({ ...job, codexPath }), {
+  const child = spawn(codexPath, codexAppServerArguments({ ...job, agent: "codex", agentPath: codexPath, codexPath }), {
     cwd: worktree,
     detached: true,
     stdio: ["pipe", "pipe", "pipe"],

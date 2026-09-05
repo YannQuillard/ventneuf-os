@@ -20,9 +20,13 @@ test("repository check uses explicit configuration and never reads source conten
     await writeFile(join(root, "secret.txt"), "sensitive source content");
     await symlink("/unavailable", join(root, "external"));
     const configuration = join(temporary, "repositories.json");
-    await writeFile(configuration, JSON.stringify([{ id: "sample", name: "Sample", path: root }]));
+    await writeFile(configuration, JSON.stringify([{
+      id: "sample", name: "Sample", path: root, codexDevelopment: true, claudeDevelopment: true,
+    }]));
     const [repository] = await loadRepositories(configuration);
     assert.ok(repository);
+    assert.equal(repository.codexDevelopment, true);
+    assert.equal(repository.claudeDevelopment, true);
     const adapter = new RepositoryCheckAdapter();
     const result = await adapter.execute(mission, repository, new AbortController().signal);
     assert.match(result, /3 top-level entries/);
@@ -132,21 +136,23 @@ test("long reviews renew their lease and abort when renewal is rejected", async 
   assert.equal(reports.some(({ kind }) => kind === "completed"), false);
 });
 
-test("routes a Codex approval through the leased worker and pauses without failure", async () => {
+test("routes a Claude approval through the leased worker and pauses without failure", async () => {
   const reports: MissionReport[] = [];
   let request: unknown;
   const worker = new RunnerMissionWorker({
     store: { load: async () => device, save: async () => {} },
     repositories: async () => [{
       id: "sample", name: "Sample", path: "/repository", orcaReview: true, codexDevelopment: true,
+      claudeDevelopment: true,
     }],
     client: {
       registerRepositories: async (_device, repositories) => {
         assert.equal(repositories[0]?.codexDevelopment, true);
+        assert.equal(repositories[0]?.claudeDevelopment, true);
       },
       claimMission: async () => ({
         ...mission,
-        adapter: "codex-development",
+        adapter: "claude-development",
         authorityExpiresAt: new Date(Date.now() + 60_000).toISOString(),
       }),
       reportMission: async (_device, _id, report) => { reports.push(report); },
@@ -162,7 +168,7 @@ test("routes a Codex approval through the leased worker and pauses without failu
         action: { category: "network.access", target: "github.com", argumentsDigest: "a".repeat(64), summary: "Push branch", expectedEffect: "Updates the remote branch." },
         reason: "The mission needs to publish its branch.",
         evidence: { host: "github.com" },
-        resume: { adapter: "codex", sessionId: "00000000-0000-4000-8000-000000000011" },
+        resume: { adapter: "claude", sessionId: "00000000-0000-4000-8000-000000000011" },
       });
       throw new MissionPausedError();
     } },

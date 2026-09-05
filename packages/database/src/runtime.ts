@@ -3,7 +3,7 @@ import type { MissionAuthority } from "@ventneuf/domain";
 import type { Database } from "./client.js";
 import { conversations, devices, members, messages, missionApprovals, missionEvents, missions, organizations } from "./schema.js";
 
-export type DelegatedRunnerAdapter = "repository-check" | "orca-review" | "codex-development";
+export type DelegatedRunnerAdapter = "repository-check" | "orca-review" | "codex-development" | "claude-development";
 const developmentAuthorityMs = 2 * 60 * 60_000;
 
 function developmentAuthority(expiresAt: Date): MissionAuthority {
@@ -102,9 +102,10 @@ export class ConversationRuntimeRepository {
           eq(devices.memberId, member.id),
           isNull(devices.revokedAt),
         )).for("share").limit(1);
-        if (!device?.repositories.some(({ id, orcaReview, codexDevelopment }) => id === input.runner!.repositoryId
+        if (!device?.repositories.some(({ id, orcaReview, codexDevelopment, claudeDevelopment }) => id === input.runner!.repositoryId
           && (input.runner!.adapter !== "orca-review" || orcaReview === true)
-          && (input.runner!.adapter !== "codex-development" || codexDevelopment === true))) {
+          && (input.runner!.adapter !== "codex-development" || codexDevelopment === true)
+          && (input.runner!.adapter !== "claude-development" || claudeDevelopment === true))) {
           throw new RunnerAssignmentError();
         }
       }
@@ -160,6 +161,9 @@ export class ConversationRuntimeRepository {
             ...(input.runner ? { repositoryId: input.runner.repositoryId } : {}),
             ...(input.runner?.adapter === "codex-development" ? {
               agent: { adapter: "codex" },
+              authority: developmentAuthority(new Date(acceptedAt.getTime() + developmentAuthorityMs)),
+            } : input.runner?.adapter === "claude-development" ? {
+              agent: { adapter: "claude" },
               authority: developmentAuthority(new Date(acceptedAt.getTime() + developmentAuthorityMs)),
             } : {}),
             timing: { acceptedAt: acceptedAt.toISOString() },
@@ -296,6 +300,7 @@ export class ConversationRuntimeRepository {
           "repository-check" as const,
           ...(repository.orcaReview ? ["orca-review" as const] : []),
           ...(repository.codexDevelopment ? ["codex-development" as const] : []),
+          ...(repository.claudeDevelopment ? ["claude-development" as const] : []),
         ],
       })));
       if (targets.length > 50) throw new Error("The mission has too many runner targets to delegate.");
@@ -362,9 +367,10 @@ export class ConversationRuntimeRepository {
         eq(devices.memberId, input.memberId),
         isNull(devices.revokedAt),
       )).for("share").limit(1);
-      if (!device?.repositories.some(({ id, orcaReview, codexDevelopment }) => id === input.repositoryId
+      if (!device?.repositories.some(({ id, orcaReview, codexDevelopment, claudeDevelopment }) => id === input.repositoryId
         && (input.adapter !== "orca-review" || orcaReview === true)
-        && (input.adapter !== "codex-development" || codexDevelopment === true))) throw new DelegatedMissionError();
+        && (input.adapter !== "codex-development" || codexDevelopment === true)
+        && (input.adapter !== "claude-development" || claudeDevelopment === true))) throw new DelegatedMissionError();
 
       const [mission] = await transaction.insert(missions).values({
         organizationId: input.organizationId,
@@ -385,6 +391,9 @@ export class ConversationRuntimeRepository {
           },
           ...(input.adapter === "codex-development" ? {
             agent: { adapter: "codex" },
+            authority: developmentAuthority(new Date(acceptedAt.getTime() + developmentAuthorityMs)),
+          } : input.adapter === "claude-development" ? {
+            agent: { adapter: "claude" },
             authority: developmentAuthority(new Date(acceptedAt.getTime() + developmentAuthorityMs)),
           } : {}),
           timing: { acceptedAt: acceptedAt.toISOString() },

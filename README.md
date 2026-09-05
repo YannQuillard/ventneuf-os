@@ -143,6 +143,14 @@ Codex works through a clean pushed branch and pull request. Native command and f
 
 Waiting for approval releases the cloud lease while the owned App Server request remains suspended. A final decision requeues the mission, and a fresh claim injects that decision into the same local Codex session. The runner reconciles retained local state with the authenticated cloud mission status, stops cancelled work, closes completed or cancelled terminals, and removes only clean worktrees. Dirty worktrees are retained to avoid deleting undeclared changes. Failed clean worktrees are retained for a 24-hour diagnostic period before automatic cleanup.
 
+### Autonomous Claude development missions
+
+Set an absolute `VENTNEUF_CLAUDE_PATH` and add `"claudeDevelopment": true` to each repository where Hermes may dispatch Claude Code. Orca, Claude Code 2.1.261 or newer authenticated as the LaunchAgent user, the local repository registration, and the per-repository opt-in remain required. Claude uses the same isolated worktree lifecycle, two-hour authority, cloud lease, cancellation fencing, clean-worktree removal, and retained diagnostics as Codex. This capability uses the existing mission schema and requires no database migration after `0004`.
+
+Claude runs with its native sandbox required and configured to fail closed. Repository writes are limited to the worktree and the Git objects and mission-branch files needed for commits. Reads outside the worktree are blocked, credentials are removed from sandboxed commands, command network access starts with an empty strict allowlist, and unsandboxed retries are disabled. Hosted web search and fetch, installed skills, and bounded subagents remain available for autonomous research and implementation. Repository-provided settings and MCP servers are excluded from the restricted session.
+
+Native `PreToolUse` hooks defer an exact external operation and persist the Claude session and tool identity. Hermes reviews a bounded description and SHA-256 argument digest while the raw tool input stays on the runner. Approved dependency downloads and Git reads resume only that exact command inside the sandbox with the reviewed host allowlisted. For Git pushes and pull-request creation, the supervisor invokes a trusted `git` or `gh` executable with fixed arguments after approval, then reports the outcome back to the resumed Claude session; Claude never receives access to SSH or GitHub credentials. Pull-request merges and deployment applies are rejected by this adapter.
+
 Set `TEST_DATABASE_URL` to an isolated disposable PostgreSQL database to include database and HTTP-to-runner integration tests in `npm test`.
 
 Production migrations use the compiled `apps/control-plane/dist/migrate.js` entrypoint from an isolated one-shot workload. The web runtime must retain a separate database identity without schema ownership or DDL privileges.

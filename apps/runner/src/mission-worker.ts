@@ -33,6 +33,7 @@ export interface MissionClient {
     name: string;
     orcaReview?: boolean;
     codexDevelopment?: boolean;
+    claudeDevelopment?: boolean;
   }>): Promise<void>;
   claimMission(device: StoredDevice, owner: string): Promise<ClaimedMission | null>;
   reportMission(device: StoredDevice, missionId: string, report: MissionReport): Promise<void>;
@@ -64,8 +65,10 @@ export class RunnerMissionWorker {
           status: (missionId) => this.options.client.getMissionStatus!(device, missionId),
         });
       }
-      await this.options.client.registerRepositories(device, repositories.map(({ id, name, orcaReview, codexDevelopment }) =>
-        ({ id, name, ...(orcaReview ? { orcaReview } : {}), ...(codexDevelopment ? { codexDevelopment } : {}) })));
+      await this.options.client.registerRepositories(device, repositories.map(({
+        id, name, orcaReview, codexDevelopment, claudeDevelopment,
+      }) => ({ id, name, ...(orcaReview ? { orcaReview } : {}), ...(codexDevelopment ? { codexDevelopment } : {}),
+        ...(claudeDevelopment ? { claudeDevelopment } : {}) })));
       const mission = await this.options.client.claimMission(device, this.owner);
       if (!mission) return;
       const report = async (kind: MissionReport["kind"], content: string) => {
@@ -82,12 +85,14 @@ export class RunnerMissionWorker {
         ? "Preparing a read-only code review with Orca."
         : mission.adapter === "codex-development"
           ? "Preparing an autonomous Codex development mission in Orca."
+          : mission.adapter === "claude-development"
+            ? "Preparing an autonomous Claude development mission in Orca."
           : "Checking the registered repository in read-only mode.");
       let result: string;
       const controller = new AbortController();
       let leaseExpiresAt = Date.parse(mission.leaseExpiresAt);
       const authorityDeadline = mission.authorityExpiresAt ? Date.parse(mission.authorityExpiresAt) : Number.NaN;
-      const deadline = mission.adapter === "codex-development"
+      const deadline = ["codex-development", "claude-development"].includes(mission.adapter)
         ? authorityDeadline
         : Date.now() + (mission.adapter === "orca-review" ? 300_000 : 10_000);
       let stopped = false;
@@ -111,13 +116,17 @@ export class RunnerMissionWorker {
         const repository = repositories.find(({ id }) => id === mission.repositoryId);
         if (!repository) throw new Error("Repository unavailable.");
         if (!Number.isFinite(leaseExpiresAt) || leaseExpiresAt <= Date.now()) throw new LeaseRejectedError("Lease expired.");
-        if (mission.adapter === "orca-review" || mission.adapter === "codex-development") {
+        if (["orca-review", "codex-development", "claude-development"].includes(mission.adapter)) {
           if (mission.adapter === "orca-review" && !repository.orcaReview) {
             throw new Error("Orca review is not enabled for this repository.");
           }
           if (mission.adapter === "codex-development" && (!repository.codexDevelopment
             || !Number.isFinite(deadline) || deadline <= Date.now())) {
             throw new Error("Codex development is not enabled or its authority expired.");
+          }
+          if (mission.adapter === "claude-development" && (!repository.claudeDevelopment
+            || !Number.isFinite(deadline) || deadline <= Date.now())) {
+            throw new Error("Claude development is not enabled or its authority expired.");
           }
           await renew();
         }
@@ -139,8 +148,8 @@ export class RunnerMissionWorker {
         controller.signal.throwIfAborted();
       } catch (error) {
         if (error instanceof MissionPausedError) return;
-        await report("failed", mission.adapter === "codex-development"
-          ? "The Codex development mission could not complete. Inspect the retained Orca mission workspace for diagnostics."
+        await report("failed", ["codex-development", "claude-development"].includes(mission.adapter)
+          ? `The ${mission.adapter === "codex-development" ? "Codex" : "Claude"} development mission could not complete. Inspect the retained Orca mission workspace for diagnostics.`
           : "The read-only mission could not complete. Verify the local runner and repository configuration.");
         return;
       } finally {

@@ -8,6 +8,9 @@ test("renders a persistent launch agent without embedding credentials", () => {
     runnerSourceDirectory: "/tmp/runner",
     controlPlaneUrl: "https://control.example.com?a=1&b=2",
     webOrigins: "https://os.example.com,http://localhost:3000",
+    orcaPath: "/Applications/Orca.app/Contents/MacOS/orca",
+    codexPath: "/usr/local/bin/codex",
+    claudePath: "/Users/test/.local/bin/claude",
     homeDirectory: "/Users/test",
   });
 
@@ -16,6 +19,9 @@ test("renders a persistent launch agent without embedding credentials", () => {
   assert.match(plist, /KeepAlive/);
   assert.match(plist, /\/Users\/test\/Library\/Application Support\/ventneuf\.os\/runner\/index\.js/);
   assert.match(plist, /https:\/\/control\.example\.com\?a=1&amp;b=2/);
+  assert.match(plist, /VENTNEUF_CODEX_PATH/);
+  assert.match(plist, /VENTNEUF_CLAUDE_PATH/);
+  assert.match(plist, /\/Users\/test\/\.local\/bin\/claude/);
   assert.doesNotMatch(plist, /credential|token/i);
 });
 

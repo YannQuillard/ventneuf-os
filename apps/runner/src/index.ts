@@ -8,6 +8,7 @@ import { installLaunchAgent, launchAgentStatus, uninstallLaunchAgent } from "./l
 import { RunnerMissionWorker } from "./mission-worker.js";
 import { defaultRepositoriesFile, loadRepositories } from "./repositories.js";
 import { CodexDevelopmentAdapter } from "./codex-development.js";
+import { ClaudeDevelopmentAdapter } from "./claude-development.js";
 import { OrcaReviewAdapter, RunnerAdapters } from "./orca-review.js";
 import { LocalRunnerBridge } from "./local-bridge.js";
 
@@ -31,6 +32,7 @@ if (command === "install") {
     repositoriesFile: process.env.VENTNEUF_REPOSITORIES_FILE,
     orcaPath: process.env.VENTNEUF_ORCA_PATH,
     codexPath: process.env.VENTNEUF_CODEX_PATH,
+    claudePath: process.env.VENTNEUF_CLAUDE_PATH,
   });
   console.info(`Installed ventneuf.os runner at ${paths.supportDirectory}`);
 } else if (command === "uninstall") {
@@ -62,12 +64,15 @@ if (command === "install") {
     ? new OrcaReviewAdapter({ orcaPath: process.env.VENTNEUF_ORCA_PATH, codexPath: process.env.VENTNEUF_CODEX_PATH }) : undefined;
   const development = process.env.VENTNEUF_ORCA_PATH && process.env.VENTNEUF_CODEX_PATH
     ? new CodexDevelopmentAdapter({ orcaPath: process.env.VENTNEUF_ORCA_PATH, codexPath: process.env.VENTNEUF_CODEX_PATH }) : undefined;
-  new RunnerMissionWorker({ client, store, adapter: new RunnerAdapters(review, development),
+  const claudeDevelopment = process.env.VENTNEUF_ORCA_PATH && process.env.VENTNEUF_CLAUDE_PATH
+    ? new ClaudeDevelopmentAdapter({ orcaPath: process.env.VENTNEUF_ORCA_PATH, claudePath: process.env.VENTNEUF_CLAUDE_PATH }) : undefined;
+  new RunnerMissionWorker({ client, store, adapter: new RunnerAdapters(review, development, claudeDevelopment),
     repositories: async () => (await loadRepositories(process.env.VENTNEUF_REPOSITORIES_FILE ?? defaultRepositoriesFile()))
       .map((repository) => ({
         ...repository,
         orcaReview: Boolean(review && repository.orcaReview),
         codexDevelopment: Boolean(development && repository.codexDevelopment),
+        claudeDevelopment: Boolean(claudeDevelopment && repository.claudeDevelopment),
       })),
   }).start();
   console.info(`ventneuf.os runner listening on http://127.0.0.1:${port}`);

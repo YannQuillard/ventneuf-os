@@ -2,7 +2,7 @@ import { assertAuthorized, type AuthorizationContext } from "@ventneuf/domain";
 import type { ConversationRuntime } from "./runtime.js";
 import type { MissionDelegationVerifier } from "./mission-delegation.js";
 
-export type RunnerAdapter = "repository-check" | "orca-review" | "codex-development";
+export type RunnerAdapter = "repository-check" | "orca-review" | "codex-development" | "claude-development";
 
 export interface RunnerDispatch {
   deviceId: string;

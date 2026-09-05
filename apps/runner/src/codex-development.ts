@@ -40,6 +40,24 @@ function within(root: string, candidate: string) {
   return candidate === root || (pathFromRoot !== ".." && !pathFromRoot.startsWith(`..${sep}`) && !isAbsolute(pathFromRoot));
 }
 
+function remoteLocation(value: string) {
+  let host: string | undefined;
+  let path: string | undefined;
+  try {
+    const url = new URL(value);
+    host = url.hostname;
+    path = url.pathname;
+  } catch {
+    const scp = value.match(/^(?:[^@\s]+@)?([a-zA-Z0-9.-]+):([^\s]+)$/);
+    host = scp?.[1];
+    path = scp?.[2];
+  }
+  const repository = path?.replace(/^\/+/, "").replace(/\.git$/, "");
+  return host && repository && /^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(repository)
+    ? { host: host.toLowerCase(), repository }
+    : undefined;
+}
+
 async function readJsonIfPresent<T>(path: string): Promise<T | undefined> {
   try { return JSON.parse(await readFile(path, "utf8")) as T; }
   catch (error) {
@@ -48,23 +66,25 @@ async function readJsonIfPresent<T>(path: string): Promise<T | undefined> {
   }
 }
 
-export class CodexDevelopmentAdapter implements MissionAdapter {
+export class AgentDevelopmentAdapter implements MissionAdapter {
   private readonly root: string;
   private readonly retentionMs: number;
   private maintenanceOffset = 0;
 
   constructor(private readonly options: {
     orcaPath: string;
-    codexPath: string;
+    agentPath: string;
+    agent: "codex" | "claude";
     gitPath?: string;
     stateDirectory?: string;
     diagnosticRetentionMs?: number;
   }) {
-    if (!isAbsolute(options.orcaPath) || !isAbsolute(options.codexPath)
+    if (!isAbsolute(options.orcaPath) || !isAbsolute(options.agentPath)
       || (options.gitPath !== undefined && !isAbsolute(options.gitPath))) {
-      throw new Error("Orca, Codex, and Git executable paths must be absolute.");
+      throw new Error("Orca, agent, and Git executable paths must be absolute.");
     }
-    this.root = options.stateDirectory ?? join(homedir(), "Library", "Application Support", "ventneuf.os", "development");
+    this.root = options.stateDirectory ?? join(homedir(), "Library", "Application Support", "ventneuf.os",
+      options.agent === "codex" ? "development" : "claude-development");
     this.retentionMs = options.diagnosticRetentionMs ?? 24 * 60 * 60_000;
   }
 
@@ -97,8 +117,9 @@ export class CodexDevelopmentAdapter implements MissionAdapter {
   private directory(missionId: string) { return join(this.root, missionId); }
 
   private async launch(directory: string, state: DevelopmentOrcaState) {
+    const supervisor = this.options.agent === "codex" ? "development-supervisor.js" : "claude-supervisor.js";
     const command = ["/usr/bin/env", "-i", `HOME=${homedir()}`, "PATH=/usr/bin:/bin", process.execPath,
-      fileURLToPath(new URL("./development-supervisor.js", import.meta.url)), directory].map(quote).join(" ");
+      fileURLToPath(new URL(`./${supervisor}`, import.meta.url)), directory].map(quote).join(" ");
     const response = await this.orca(["terminal", "create", "--worktree", `path:${state.worktreePath}`,
       "--title", `Mission ${state.missionId.slice(0, 8)}`, "--command", command]);
     const terminal = response.terminal as { handle?: string; worktreeId?: string } | undefined;
@@ -195,11 +216,29 @@ export class CodexDevelopmentAdapter implements MissionAdapter {
       || /[\u0000-\u001f\u007f]/.test(gitAuthorName) || /[\u0000-\u001f\u007f]/.test(gitAuthorEmail)) {
       throw new Error("The registered repository has no valid Git author identity.");
     }
+    const { stdout: remoteOutput } = await execute(gitPath, ["-C", repository.path, "remote", "get-url", "origin"], {
+      timeout: 10_000,
+      maxBuffer: 1_000,
+      env: { HOME: homedir(), PATH: `${dirname(gitPath)}:/usr/bin:/bin`, LANG: "en_US.UTF-8" },
+    });
+    const { stdout: pushRemoteOutput } = await execute(gitPath, ["-C", repository.path, "remote", "get-url", "--push", "origin"], {
+      timeout: 10_000,
+      maxBuffer: 1_000,
+      env: { HOME: homedir(), PATH: `${dirname(gitPath)}:/usr/bin:/bin`, LANG: "en_US.UTF-8" },
+    });
+    const origin = remoteLocation(remoteOutput.trim());
+    const pushOrigin = remoteLocation(pushRemoteOutput.trim());
+    if (!origin || !pushOrigin || origin.host.length > 253
+      || origin.host !== pushOrigin.host || origin.repository !== pushOrigin.repository) {
+      throw new Error("The registered repository has no safe origin host.");
+    }
     const job: DevelopmentJob = {
+      agent: this.options.agent,
+      agentPath: this.options.agentPath,
       missionId: mission.id,
       repositoryId: repository.id,
       objective: mission.objective,
-      codexPath: this.options.codexPath,
+      ...(this.options.agent === "codex" ? { codexPath: this.options.agentPath } : { claudePath: this.options.agentPath }),
       gitPath,
       gitAuthorName,
       gitAuthorEmail,
@@ -209,6 +248,8 @@ export class CodexDevelopmentAdapter implements MissionAdapter {
       gitObjectsDirectory,
       gitBranchRef,
       gitBranchLog,
+      remoteHost: origin.host,
+      remoteRepository: origin.repository,
       authorityExpiresAt,
     };
     await writeReviewState(join(directory, "job.json"), job);
@@ -274,8 +315,10 @@ export class CodexDevelopmentAdapter implements MissionAdapter {
   }
 
   async execute(mission: RunnerMission, repository: RegisteredRepository, signal: AbortSignal, execution?: MissionExecution) {
-    if (mission.adapter !== "codex-development" || mission.repositoryId !== repository.id
-      || !repository.codexDevelopment || !execution || !/^[a-f0-9-]{36}$/.test(mission.id)
+    const adapter = `${this.options.agent}-development`;
+    const enabled = this.options.agent === "codex" ? repository.codexDevelopment : repository.claudeDevelopment;
+    if (mission.adapter !== adapter || mission.repositoryId !== repository.id
+      || !enabled || !execution || !/^[a-f0-9-]{36}$/.test(mission.id)
       || !mission.authorityExpiresAt) throw new Error("The development mission is outside this repository scope.");
     const authorityExpiresAt = Date.parse(mission.authorityExpiresAt);
     if (!Number.isFinite(authorityExpiresAt) || authorityExpiresAt <= Date.now()) throw new Error("Development authority expired.");
@@ -290,9 +333,12 @@ export class CodexDevelopmentAdapter implements MissionAdapter {
     }
     const job = await readJsonIfPresent<DevelopmentJob>(join(directory, "job.json"));
     const gitPath = await this.gitExecutable();
+    const configuredAgentPath = job?.agentPath
+      ?? (this.options.agent === "codex" ? job?.codexPath : job?.claudePath);
     if (!job || job.missionId !== mission.id || job.repositoryId !== repository.id
       || job.objective !== mission.objective || job.worktree !== state.worktreePath
-      || job.codexPath !== this.options.codexPath || job.gitPath !== gitPath
+      || (job.agent ?? "codex") !== this.options.agent
+      || configuredAgentPath !== this.options.agentPath || job.gitPath !== gitPath
       || job.authorityExpiresAt !== authorityExpiresAt
       || await realpath(state.worktreePath) !== state.worktreePath) {
       throw new Error("The retained development job does not match the claimed mission.");
@@ -317,7 +363,7 @@ export class CodexDevelopmentAdapter implements MissionAdapter {
       if (local?.status === "failed" && (mission.approvalDecision || (mission.attempt ?? 1) > 1)) {
         state = await this.relaunch(directory, state);
       } else if (local?.status === "failed") {
-        throw new Error("The retained Codex supervisor failed.");
+        throw new Error(`The retained ${this.options.agent} supervisor failed.`);
       } else if ((mission.attempt ?? 1) > 1 && local?.status !== "completed" && !supervisorActive) {
         state = await this.relaunch(directory, state);
       }
@@ -342,7 +388,7 @@ export class CodexDevelopmentAdapter implements MissionAdapter {
           if (!request || request.requestId !== mission.approvalDecision.requestId
             || request.resume.sessionId !== mission.approvalDecision.resume.sessionId
             || session?.sessionId !== mission.approvalDecision.resume.sessionId) {
-            throw new Error("The approval decision does not match the suspended Codex session.");
+            throw new Error(`The approval decision does not match the suspended ${this.options.agent} session.`);
           }
           await writeReviewState(join(directory, "approval-decision.json"), {
             approvalId: mission.approvalDecision.id,
@@ -350,10 +396,10 @@ export class CodexDevelopmentAdapter implements MissionAdapter {
             status: mission.approvalDecision.status,
             rationale: mission.approvalDecision.rationale,
           });
-          await execution.progress(`Codex resumed after the ${mission.approvalDecision.status} approval decision.`);
+          await execution.progress(`${this.options.agent === "codex" ? "Codex" : "Claude"} resumed after the ${mission.approvalDecision.status} approval decision.`);
         }
       }
-      await execution.progress("Codex is working in an isolated Orca worktree. Repository changes are allowed only within this mission.");
+      await execution.progress(`${this.options.agent === "codex" ? "Codex" : "Claude"} is working in an isolated Orca worktree. Repository changes are allowed only within this mission.`);
       while (true) {
         signal.throwIfAborted();
         await writing;
@@ -365,7 +411,7 @@ export class CodexDevelopmentAdapter implements MissionAdapter {
             .replaceAll(state.worktreePath, repository.id).replaceAll(repository.path, repository.id).replaceAll(homedir(), "~");
           if (!result) throw new Error("Empty development result.");
           if (!/https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/pull\/\d+/i.test(result)) {
-            throw new Error("Codex completed without reporting a pull request URL.");
+            throw new Error(`${this.options.agent === "codex" ? "Codex" : "Claude"} completed without reporting a pull request URL.`);
           }
           const { stdout: currentBranchRef } = await execute(gitPath, ["-C", state.worktreePath, "symbolic-ref", "--quiet", "HEAD"], {
             timeout: 10_000,
@@ -373,7 +419,7 @@ export class CodexDevelopmentAdapter implements MissionAdapter {
             env: { HOME: homedir(), PATH: `${dirname(gitPath)}:/usr/bin:/bin`, LANG: "en_US.UTF-8" },
           });
           if (resolve(job.gitCommonDirectory, currentBranchRef.trim()) !== job.gitBranchRef) {
-            throw new Error("Codex left the isolated mission branch.");
+            throw new Error(`${this.options.agent === "codex" ? "Codex" : "Claude"} left the isolated mission branch.`);
           }
           try {
             await this.clean(directory, state, true);
@@ -381,9 +427,9 @@ export class CodexDevelopmentAdapter implements MissionAdapter {
             await writeReviewState(join(directory, "status.json"), { status: "failed", failedAt: new Date().toISOString() });
             throw error;
           }
-          return `Codex development mission completed for ${repository.id}.\n\n${result.slice(0, 14_000)}`;
+          return `${this.options.agent === "codex" ? "Codex" : "Claude"} development mission completed for ${repository.id}.\n\n${result.slice(0, 14_000)}`;
         }
-        if (status?.status === "failed") throw new Error("Codex development supervisor failed.");
+        if (status?.status === "failed") throw new Error(`${this.options.agent === "codex" ? "Codex" : "Claude"} development supervisor failed.`);
         const request = await readJsonIfPresent<AgentApprovalRequest>(join(directory, "approval-request.json"));
         const decision = await readJsonIfPresent<{ requestId?: string }>(join(directory, "approval-decision.json"));
         if (request && decision?.requestId !== request.requestId) {
@@ -393,7 +439,7 @@ export class CodexDevelopmentAdapter implements MissionAdapter {
               mode: "waiting_for_approval",
               expiresAt: Math.min(authorityExpiresAt, Date.parse(response.approval.expiresAt)),
             });
-            await execution.progress(`Codex is waiting for ${response.approval.route} approval for ${request.action.category}.`)
+            await execution.progress(`${this.options.agent === "codex" ? "Codex" : "Claude"} is waiting for ${response.approval.route} approval for ${request.action.category}.`)
               .catch(() => undefined);
             throw new MissionPausedError("The development mission is waiting for approval.");
           }
@@ -414,5 +460,17 @@ export class CodexDevelopmentAdapter implements MissionAdapter {
         await this.clean(directory, state, false).catch(() => undefined);
       }
     }
+  }
+}
+
+export class CodexDevelopmentAdapter extends AgentDevelopmentAdapter {
+  constructor(options: {
+    orcaPath: string;
+    codexPath: string;
+    gitPath?: string;
+    stateDirectory?: string;
+    diagnosticRetentionMs?: number;
+  }) {
+    super({ ...options, agent: "codex", agentPath: options.codexPath });
   }
 }

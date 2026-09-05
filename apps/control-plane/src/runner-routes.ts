@@ -21,6 +21,7 @@ const repository = z.object({
   name: z.string().trim().min(1).max(100),
   orcaReview: z.boolean().optional(),
   codexDevelopment: z.boolean().optional(),
+  claudeDevelopment: z.boolean().optional(),
 }).strict();
 const lease = z.object({ owner: z.string().uuid(), token: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 const report = z.object({

@@ -87,6 +87,7 @@ export const devices = pgTable(
       name: string;
       orcaReview?: boolean;
       codexDevelopment?: boolean;
+      claudeDevelopment?: boolean;
     }>>().default([]).notNull(),
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
