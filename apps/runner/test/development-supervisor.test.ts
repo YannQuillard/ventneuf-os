@@ -135,6 +135,12 @@ test("runs a durable App Server turn through a structured approval", { timeout: 
     const args = codexAppServerArguments(job);
     assert.ok(args.includes("--strict-config"));
     assert.ok(args.some((value) => value.includes("permissions.ventneuf-development.network.enabled=false")));
+    assert.ok(args.includes("web_search=\"live\""));
+    assert.ok(args.includes("features.skill_search=true"));
+    assert.ok(args.includes("features.skip_host_skill_discovery=false"));
+    assert.ok(args.includes("features.multi_agent=true"));
+    assert.ok(args.includes("features.view_image=true"));
+    assert.ok(args.includes("features.image_generation=true"));
     assert.ok(!args.join(" ").includes("credential"));
   } finally {
     await rm(directory, { recursive: true, force: true });
