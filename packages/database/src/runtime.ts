@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { Database } from "./client.js";
 import { conversations, devices, members, messages, missionEvents, missions, organizations } from "./schema.js";
 
@@ -15,6 +15,7 @@ export class ConversationRuntimeRepository {
     organizationId: string;
     externalSubject: string;
     content: string;
+    contextId?: string;
     runner?: { deviceId: string; repositoryId: string; adapter?: "repository-check" | "orca-review" };
   }) {
     const acceptedAt = new Date();
@@ -86,6 +87,10 @@ export class ConversationRuntimeRepository {
         )
         .orderBy(asc(conversations.createdAt))
         .limit(1);
+
+      if (input.contextId !== undefined && conversation?.hermesContextId !== input.contextId) {
+        throw new Error("The private conversation context is unavailable.");
+      }
 
       if (!conversation) {
         [conversation] = await transaction
@@ -221,19 +226,31 @@ export class ConversationRuntimeRepository {
 
   setMissionQueued(organizationId: string, missionId: string, context: Record<string, unknown>) {
     return this.database.withOrganization(organizationId, (transaction) =>
-      transaction
-        .update(missions)
-        .set({ context, updatedAt: new Date() })
-        .where(and(eq(missions.organizationId, organizationId), eq(missions.id, missionId))),
+      transaction.update(missions).set({ context, updatedAt: new Date() }).where(and(
+        eq(missions.organizationId, organizationId), eq(missions.id, missionId),
+        eq(missions.status, "queued"),
+      )),
     );
   }
 
-  setMissionRunning(organizationId: string, missionId: string, context: Record<string, unknown>) {
+  async setMissionRunning(organizationId: string, missionId: string, context: Record<string, unknown>) {
+    const rows = await this.database.withOrganization(organizationId, (transaction) =>
+      transaction.update(missions).set({ status: "running", context, updatedAt: new Date() }).where(and(
+        eq(missions.organizationId, organizationId), eq(missions.id, missionId),
+        // Failed deliveries can be retried by SQS; cancellation and completion are final.
+        inArray(missions.status, ["queued", "running", "waiting_for_approval", "failed"]),
+      )).returning({ id: missions.id }),
+    );
+    return rows.length > 0;
+  }
+
+  rememberCancelledHermesRun(organizationId: string, missionId: string, runId: string) {
     return this.database.withOrganization(organizationId, (transaction) =>
-      transaction
-        .update(missions)
-        .set({ status: "running", context, updatedAt: new Date() })
-        .where(and(eq(missions.organizationId, organizationId), eq(missions.id, missionId))),
+      transaction.update(missions).set({
+        context: sql`coalesce(${missions.context}, '{}'::jsonb) || ${JSON.stringify({ hermesRunId: runId })}::jsonb`,
+        updatedAt: new Date(),
+      }).where(and(eq(missions.organizationId, organizationId), eq(missions.id, missionId),
+        eq(missions.status, "cancelled"))),
     );
   }
 
@@ -287,17 +304,19 @@ export class ConversationRuntimeRepository {
     return this.database.withOrganization(organizationId, async (transaction) => {
       const cancelledAt = new Date();
       const cancelled = await transaction.update(missions)
-        .set({ status: "cancelled", context, updatedAt: cancelledAt })
+        .set({ status: "cancelled",
+          context: sql`coalesce(${missions.context}, '{}'::jsonb) || ${JSON.stringify({ cancelledAt: context.cancelledAt ?? cancelledAt.toISOString() })}::jsonb`,
+          updatedAt: cancelledAt })
         .where(and(
           eq(missions.organizationId, organizationId), eq(missions.id, missionId),
           inArray(missions.status, ["queued", "running", "waiting_for_approval"]),
         ))
-        .returning({ id: missions.id, assignedDeviceId: missions.assignedDeviceId });
+        .returning({ id: missions.id, assignedDeviceId: missions.assignedDeviceId, context: missions.context });
       if (cancelled[0]?.assignedDeviceId) {
         await transaction.insert(missionEvents).values({ organizationId, missionId,
           type: "run.cancelled", payload: { executor: "runner" }, occurredAt: cancelledAt });
       }
-      return cancelled.map(({ id }) => ({ id }));
+      return cancelled.map(({ id, context }) => ({ id, context }));
     });
   }
 
@@ -338,7 +357,8 @@ export class ConversationRuntimeRepository {
       transaction
         .update(missions)
         .set({ status: "failed", context: { ...context, failure: reason }, updatedAt: new Date() })
-        .where(and(eq(missions.organizationId, organizationId), eq(missions.id, missionId))),
+        .where(and(eq(missions.organizationId, organizationId), eq(missions.id, missionId),
+          inArray(missions.status, ["queued", "running", "waiting_for_approval", "failed"]))),
     );
   }
 }

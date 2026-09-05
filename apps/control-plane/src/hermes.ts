@@ -151,40 +151,55 @@ export class RunsHermesClient implements HermesClient {
       await input.onRunStarted?.(runId);
     }
 
+    const lifecycle = new AbortController();
+    const deadline = Date.now() + this.maxWaitMs;
+    const timeout = setTimeout(() => lifecycle.abort(), this.maxWaitMs);
     const eventStream = input.onEvent
-      ? this.streamEvents(runId, input.onEvent, input.sessionKey).catch(() => undefined)
+      ? this.streamEvents(runId, input.onEvent, lifecycle.signal, input.sessionKey).catch(() => undefined)
       : Promise.resolve();
 
-    const deadline = Date.now() + this.maxWaitMs;
-    while (Date.now() < deadline) {
-      const response = await this.request(
-        `/v1/runs/${encodeURIComponent(runId)}`,
-        { signal: AbortSignal.timeout(10_000) },
-        input.sessionKey,
-      );
-      await this.assertOk(response, "read");
-      const run = await response.json() as HermesRun;
-      const status = run.status?.toLowerCase();
-      if (status === "completed") {
-        await eventStream;
-        if (!run.output) throw new Error("Hermes Runs API completed without output.");
-        return {
-          taskId: runId,
-          contextId: run.session_id ?? contextId,
-          state: status,
-          text: run.output,
-          usage: run.usage,
-        };
+    try {
+      while (Date.now() < deadline) {
+        const response = await this.request(
+          `/v1/runs/${encodeURIComponent(runId)}`,
+          { signal: AbortSignal.any([lifecycle.signal, AbortSignal.timeout(10_000)]) },
+          input.sessionKey,
+        );
+        await this.assertOk(response, "read");
+        const run = await response.json() as HermesRun;
+        const status = run.status?.toLowerCase();
+        if (status === "completed") {
+          // Allow buffered events to drain, but never let SSE hold the queue worker.
+          let drainTimer: ReturnType<typeof setTimeout> | undefined;
+          try {
+            await Promise.race([eventStream, new Promise<void>((resolve) => {
+              drainTimer = setTimeout(resolve, Math.max(0, Math.min(100, deadline - Date.now())));
+            })]);
+          } finally {
+            clearTimeout(drainTimer);
+          }
+          if (!run.output) throw new Error("Hermes Runs API completed without output.");
+          return {
+            taskId: runId,
+            contextId: run.session_id ?? contextId,
+            state: status,
+            text: run.output,
+            usage: run.usage,
+          };
+        }
+        if (status === "failed") {
+          throw new Error(`Hermes run failed: ${errorMessage(run.error) ?? "unknown failure"}`);
+        }
+        if (status === "cancelled" || status === "interrupted") {
+          throw new HermesRunCancelledError();
+        }
+        await new Promise((resolve) => setTimeout(resolve, Math.max(0, Math.min(this.pollIntervalMs, deadline - Date.now()))));
       }
-      if (status === "failed") {
-        throw new Error(`Hermes run failed: ${errorMessage(run.error) ?? "unknown failure"}`);
-      }
-      if (status === "cancelled" || status === "interrupted") {
-        throw new HermesRunCancelledError();
-      }
-      await new Promise((resolve) => setTimeout(resolve, this.pollIntervalMs));
+      throw new Error("Hermes run is still active after the polling window.");
+    } finally {
+      clearTimeout(timeout);
+      lifecycle.abort();
     }
-    throw new Error("Hermes run is still active after the polling window.");
   }
 
   async stop(runId: string): Promise<void> {
@@ -213,38 +228,49 @@ export class RunsHermesClient implements HermesClient {
   private async streamEvents(
     runId: string,
     onEvent: (event: HermesRunEvent) => Promise<void>,
+    signal: AbortSignal,
     sessionKey?: string,
   ): Promise<void> {
     const response = await this.request(
       `/v1/runs/${encodeURIComponent(runId)}/events`,
-      { headers: { accept: "text/event-stream" } },
+      { headers: { accept: "text/event-stream" }, signal },
       sessionKey,
     );
     await this.assertOk(response, "stream");
     if (!response.body) return;
     const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    while (true) {
-      const { done, value } = await reader.read();
-      buffer += decoder.decode(value, { stream: !done });
-      const frames = buffer.split("\n\n");
-      buffer = frames.pop() ?? "";
-      for (const frame of frames) {
-        const data = frame.split("\n")
-          .filter((line) => line.startsWith("data:"))
-          .map((line) => line.slice(5).trim())
-          .join("\n");
-        if (!data || data === "[DONE]") continue;
-        try {
-          const event = JSON.parse(data) as HermesRunEvent;
-          if (typeof event.event === "string") await onEvent(event);
-        } catch (error) {
-          if (error instanceof SyntaxError) continue;
-          throw error;
+    const cancel = () => { void reader.cancel().catch(() => undefined); };
+    signal.addEventListener("abort", cancel, { once: true });
+    if (signal.aborted) cancel();
+    try {
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (!signal.aborted) {
+        const { done, value } = await reader.read();
+        buffer += decoder.decode(value, { stream: !done });
+        const frames = buffer.split("\n\n");
+        buffer = frames.pop() ?? "";
+        for (const frame of frames) {
+          const data = frame.split("\n")
+            .filter((line) => line.startsWith("data:"))
+            .map((line) => line.slice(5).trim())
+            .join("\n");
+          if (signal.aborted || data === "[DONE]") return;
+          if (!data) continue;
+          try {
+            const event = JSON.parse(data) as HermesRunEvent;
+            if (typeof event.event === "string") await onEvent(event);
+          } catch (error) {
+            if (error instanceof SyntaxError) continue;
+            throw error;
+          }
         }
+        if (done) break;
       }
-      if (done) break;
+    } finally {
+      signal.removeEventListener("abort", cancel);
+      cancel();
+      reader.releaseLock();
     }
   }
 

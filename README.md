@@ -41,6 +41,10 @@ The web application is a browser-facing backend-for-frontend. It owns the login 
 
 MCP is the tool boundary for coding agents and future device runners. A2A is currently the service-to-service boundary between the control plane and Hermes. Human, device, runner, and mission identities remain distinct throughout the system.
 
+### Remote Hermes MCP contract
+
+The authenticated remote `hermes.ask` tool queues a durable message in the caller's private conversation. It returns `missionId`, `conversationId`, and `status` immediately; the eventual reply appears in the conversation through the existing message and event APIs. It does not return an inline Hermes answer. An optional `contextId` must match that member's existing Hermes context; unknown or foreign contexts are rejected. Device and mission principals cannot use this private user tool. The worker supplies the conversation-scoped upstream session key. The local MCP prototype has a separate contract.
+
 ## Roadmap
 
 The next product milestones are:

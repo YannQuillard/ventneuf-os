@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ConversationRuntimeRepository } from "@ventneuf/database";
-import { HermesRequestTimeoutError } from "../src/hermes.js";
+import { HermesRequestTimeoutError, RunsHermesClient, StaticTokenProvider } from "../src/hermes.js";
 import { MissionWorker, type MissionQueue } from "../src/runtime.js";
 
 function repository(overrides: Record<string, unknown> = {}) {
@@ -22,8 +22,8 @@ function repository(overrides: Record<string, unknown> = {}) {
         },
       },
     }),
-    setMissionRunning: async () => undefined,
-    completeMission: async () => undefined,
+    setMissionRunning: async () => true,
+    completeMission: async () => true,
     failMission: async () => undefined,
     ...overrides,
   } as unknown as ConversationRuntimeRepository;
@@ -44,6 +44,7 @@ test("processes a queued Hermes mission and persists its reply", async () => {
       ) => {
         persistedRunId = context.hermesRunId ?? persistedRunId;
         events.push("running");
+        return true;
       },
       appendMissionEvent: async (input: { type: string }) => { runEvents.push(input.type); },
       completeMission: async (input: {
@@ -55,6 +56,7 @@ test("processes a queued Hermes mission and persists its reply", async () => {
         assert.equal(typeof input.context.timing?.hermesMs, "number");
         assert.equal(typeof input.context.timing?.totalMs, "number");
         events.push(`completed:${input.contextId}:${input.content}`);
+        return true;
       },
     }),
     unusedQueue,
@@ -62,6 +64,7 @@ test("processes a queued Hermes mission and persists its reply", async () => {
       ask: async (input) => {
         assert.equal(input.contextId, "context-before");
         assert.equal(input.message, "Investigate the issue");
+        assert.equal(input.sessionKey, "organization:organization-1:conversation:conversation-1");
         await input.onRunStarted?.("run-1");
         await input.onEvent?.({ event: "tool.started", tool: "terminal", timestamp: 1 });
         await input.onEvent?.({ event: "reasoning.available", text: "private reasoning" });
@@ -150,4 +153,88 @@ test("Hermes worker never executes a device-assigned mission", async () => {
     ask: async () => { throw new Error("Must not call Hermes."); },
   });
   await worker.process({ organizationId: "organization-1", missionId: "mission-1" });
+});
+
+test("cancellation between the mission read and running transition prevents submission", async () => {
+  const worker = new MissionWorker(repository({ setMissionRunning: async () => false }), unusedQueue, {
+    ask: async () => assert.fail("Cancelled work must not be submitted"),
+  });
+  await worker.process({ organizationId: "organization-1", missionId: "mission-1" });
+});
+
+test("cancellation before a new run is recorded stops it and preserves the ID for retry", async () => {
+  let transitions = 0;
+  let remembered: string | undefined;
+  let stopAttempts = 0;
+  let cancelled = false;
+  const base = repository();
+  const worker = new MissionWorker(repository({
+    getMission: async () => cancelled
+      ? { mission: { status: "cancelled", context: { hermesRunId: remembered } } }
+      : base.getMission("organization-1", "mission-1"),
+    setMissionRunning: async () => ++transitions === 1,
+    rememberCancelledHermesRun: async (_org: string, _mission: string, runId: string) => { remembered = runId; },
+    failMission: async () => {},
+    completeMission: async () => assert.fail("Cancelled work must not complete"),
+  }), unusedQueue, {
+    ask: async (input) => {
+      cancelled = true;
+      await input.onRunStarted?.("late-run");
+      return assert.fail("Must stop before continuing the new run");
+    },
+    stop: async (runId) => {
+      assert.equal(runId, "late-run");
+      assert.equal(remembered, runId);
+      if (++stopAttempts === 1) throw new Error("Stop temporarily unavailable");
+    },
+  });
+  await assert.rejects(worker.process({ organizationId: "organization-1", missionId: "mission-1" }), /Stop temporarily unavailable/);
+  await worker.process({ organizationId: "organization-1", missionId: "mission-1" });
+  assert.equal(stopAttempts, 2);
+  assert.equal(transitions, 2);
+});
+
+test("a successful stop after cancellation does not persist a reply or failure", async () => {
+  let transitions = 0;
+  let stopped = false;
+  const worker = new MissionWorker(repository({
+    setMissionRunning: async () => ++transitions === 1,
+    rememberCancelledHermesRun: async () => {},
+    completeMission: async () => assert.fail("No cancelled reply"),
+    failMission: async () => assert.fail("Cancellation is not failure"),
+  }), unusedQueue, {
+    ask: async (input) => {
+      await input.onRunStarted?.("late-run");
+      return assert.fail("Must stop before polling");
+    },
+    stop: async () => { stopped = true; },
+  });
+  await worker.process({ organizationId: "organization-1", missionId: "mission-1" });
+  assert.equal(stopped, true);
+});
+
+test("the sequential queue persists results and advances despite open Hermes event streams", { timeout: 2_000 }, async () => {
+  const abort = new AbortController();
+  const completed: string[] = [];
+  let deliveries = 0;
+  let closedStreams = 0;
+  const queue = {
+    receive: async () => ({ Messages: [{
+      Body: JSON.stringify({ organizationId: "organization-1", missionId: `mission-${++deliveries}` }),
+      ReceiptHandle: `receipt-${deliveries}`,
+    }] }),
+    delete: async () => { if (deliveries === 2) abort.abort(); },
+    release: async () => assert.fail("Completed work must not be retried"),
+  } as unknown as MissionQueue;
+  const hermes = new RunsHermesClient("http://hermes.internal", new StaticTokenProvider("token"), (async (url) => {
+    if (String(url).endsWith("/v1/runs")) return Response.json({ run_id: `run-${deliveries}` });
+    if (String(url).endsWith("/events")) return new Response(new ReadableStream({ cancel() { closedStreams++; } }));
+    return Response.json({ status: "completed", output: "Result" });
+  }) as typeof fetch, 1, 500);
+  const worker = new MissionWorker(repository({
+    completeMission: async (input: { missionId: string }) => { completed.push(input.missionId); return true; },
+  }), queue, hermes);
+  await worker.run(abort.signal);
+  assert.deepEqual(completed, ["mission-1", "mission-2"]);
+  assert.equal(closedStreams, 2);
 });
