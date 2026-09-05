@@ -1,7 +1,7 @@
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import { homedir, userInfo } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
@@ -55,6 +55,21 @@ const safeTools = new Set([
 const fileTools = new Set(["Read", "Glob", "Grep", "Edit", "Write", "NotebookEdit"]);
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 const execute = promisify(execFile);
+
+function localUserEnvironment() {
+  const account = userInfo();
+  return {
+    HOME: account.homedir,
+    USER: account.username,
+    LOGNAME: account.username,
+    SHELL: account.shell || "/bin/sh",
+  };
+}
+
+function claudeShellWorkingDirectoryPatterns() {
+  const userId = process.getuid?.();
+  return userId === undefined ? [] : [`/tmp/claude-${userId}/cwd-*`, `/private/tmp/claude-${userId}/cwd-*`];
+}
 
 function within(root: string, candidate: string) {
   const path = resolve(candidate);
@@ -171,7 +186,7 @@ async function verifyClaudeInstallation(job: DevelopmentJob, directory: string) 
   const claudePath = job.agentPath ?? job.claudePath;
   if (!claudePath) throw new Error("Claude executable unavailable.");
   const environment = {
-    HOME: homedir(),
+    ...localUserEnvironment(),
     PATH: `${dirname(claudePath)}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`,
     LANG: "en_US.UTF-8",
   };
@@ -497,7 +512,7 @@ export function claudeMissionSettings(job: DevelopmentJob, domains: string[] = [
       allowUnsandboxedCommands: false,
       filesystem: {
         denyRead: [homedir(), "/private/tmp", "/tmp", "/Volumes"],
-        allowRead: [job.worktree, job.gitCommonDirectory],
+        allowRead: [job.worktree, job.gitCommonDirectory, ...claudeShellWorkingDirectoryPatterns()],
         denyWrite: [job.gitCommonDirectory],
         allowWrite: gitWrites,
       },
@@ -562,7 +577,7 @@ async function runClaude(
     detached: true,
     stdio: ["pipe", "pipe", "pipe"],
     env: {
-      HOME: homedir(),
+      ...localUserEnvironment(),
       PATH: [...new Set([dirname(claudePath), dirname(job.gitPath), "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"])].join(":"),
       TMPDIR: join(job.worktree, ".ventneuf-tmp"),
       LANG: "en_US.UTF-8",
