@@ -6,6 +6,7 @@ import {
   type RunnerApprovalResponse,
 } from "./mission-worker.js";
 import type { StoredDevice } from "./credential-store.js";
+import type { MissionStatus } from "./repositories.js";
 
 interface EnrollmentResponse {
   device: {
@@ -30,7 +31,12 @@ export class RunnerCloudClient {
     return response.json();
   }
 
-  async registerRepositories(device: StoredDevice, repositories: Array<{ id: string; name: string; orcaReview?: boolean }>) {
+  async registerRepositories(device: StoredDevice, repositories: Array<{
+    id: string;
+    name: string;
+    orcaReview?: boolean;
+    codexDevelopment?: boolean;
+  }>) {
     await this.missionRequest(device, "/api/runner/repositories", { repositories });
   }
 
@@ -41,9 +47,11 @@ export class RunnerCloudClient {
     if (!mission || typeof mission.id !== "string" || !/^[a-f0-9-]{36}$/.test(mission.id)
       || typeof mission.repositoryId !== "string" || typeof mission.objective !== "string"
       || !mission.objective.trim() || mission.objective.length > 4_000
-      || !["repository-check", "orca-review"].includes(mission.adapter)
+      || !["repository-check", "orca-review", "codex-development"].includes(mission.adapter)
       || typeof mission.leaseToken !== "string" || !/^[a-f0-9]{64}$/.test(mission.leaseToken)
       || !Number.isFinite(Date.parse(mission.leaseExpiresAt))
+      || (mission.adapter === "codex-development"
+        && (!mission.authorityExpiresAt || !Number.isFinite(Date.parse(mission.authorityExpiresAt))))
       || (mission.approvalDecision !== undefined && !this.isApprovalDecision(mission.approvalDecision))) {
       throw new Error("Invalid runner mission response.");
     }
@@ -98,6 +106,19 @@ export class RunnerCloudClient {
       throw new Error("Invalid runner approval response.");
     }
     return result;
+  }
+
+  async getMissionStatus(device: StoredDevice, missionId: string): Promise<MissionStatus | undefined> {
+    const result = await this.missionRequest(
+      device,
+      `/api/runner/missions/${encodeURIComponent(missionId)}/inspect`,
+      {},
+    ) as { status?: unknown };
+    if (result.status === undefined) return undefined;
+    if (!["queued", "running", "waiting_for_approval", "completed", "failed", "cancelled"].includes(String(result.status))) {
+      throw new Error("Invalid runner mission status response.");
+    }
+    return result.status as MissionStatus;
   }
 
   async enroll(token: string, name: string): Promise<StoredDevice> {

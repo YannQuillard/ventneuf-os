@@ -82,7 +82,12 @@ export const devices = pgTable(
     memberId: uuid("member_id").notNull(),
     name: text("name").notNull(),
     platform: text("platform").notNull(),
-    repositories: jsonb("repositories").$type<Array<{ id: string; name: string; orcaReview?: boolean }>>().default([]).notNull(),
+    repositories: jsonb("repositories").$type<Array<{
+      id: string;
+      name: string;
+      orcaReview?: boolean;
+      codexDevelopment?: boolean;
+    }>>().default([]).notNull(),
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
     ...timestamps,

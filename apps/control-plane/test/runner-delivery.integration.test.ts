@@ -101,9 +101,11 @@ test("browser API delivers a read-only mission through the real runner client an
     assert.equal(review?.adapter, "orca-review");
     assert.equal(review?.objective, "Review registered repository sample in read-only mode.");
     assert.ok(review);
+    assert.equal(await cloud.getMissionStatus(device, review.id), "running");
     await assert.rejects(cloud.renewMission(device, review.id, { owner: randomUUID(), token: review.leaseToken }));
     assert.ok(Date.parse(await cloud.renewMission(device, review.id, { owner, token: review.leaseToken })) >= Date.parse(review.leaseExpiresAt));
     await repository.cancelMission(organizationId, review.id, {});
+    assert.equal(await cloud.getMissionStatus(device, review.id), "cancelled");
     await assert.rejects(cloud.renewMission(device, review.id, { owner, token: review.leaseToken }));
   } finally {
     await new Promise<void>((resolve) => { server.close(() => resolve()); server.closeAllConnections(); });

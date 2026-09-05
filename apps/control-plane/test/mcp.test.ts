@@ -83,7 +83,7 @@ test("MCP dispatches an objective only through the authenticated member's runner
     objective: "Review cancellation behavior",
     deviceId: "00000000-0000-4000-8000-000000000001",
     repositoryId: "ventneuf-os",
-    adapter: "orca-review",
+    adapter: "codex-development",
   };
   const result = await callTool(services, authorized, "mission.dispatch", args);
   assert.equal(result.isError, undefined);
@@ -125,7 +125,7 @@ test("MCP dispatches for Hermes only through a matching parent delegation", asyn
     objective: "Inspect the repository",
     deviceId: "00000000-0000-4000-8000-000000000002",
     repositoryId: "ventneuf-os",
-    adapter: "orca-review",
+    adapter: "codex-development",
     delegationToken: "signed-parent-delegation",
     requestId: "00000000-0000-4000-8000-000000000003",
   };
@@ -143,7 +143,7 @@ test("MCP dispatches for Hermes only through a matching parent delegation", asyn
     targets: [{
       deviceId: args.deviceId,
       repositoryId: args.repositoryId,
-      adapters: ["orca-review" as const],
+      adapters: ["codex-development" as const],
     }],
     issuedAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + 60_000).toISOString(),

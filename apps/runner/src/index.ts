@@ -7,6 +7,7 @@ import { MacOSKeychainCredentialStore } from "./credential-store.js";
 import { installLaunchAgent, launchAgentStatus, uninstallLaunchAgent } from "./launch-agent.js";
 import { RunnerMissionWorker } from "./mission-worker.js";
 import { defaultRepositoriesFile, loadRepositories } from "./repositories.js";
+import { CodexDevelopmentAdapter } from "./codex-development.js";
 import { OrcaReviewAdapter, RunnerAdapters } from "./orca-review.js";
 import { LocalRunnerBridge } from "./local-bridge.js";
 
@@ -59,9 +60,15 @@ if (command === "install") {
   await bridge.start(port);
   const review = process.env.VENTNEUF_ORCA_PATH && process.env.VENTNEUF_CODEX_PATH
     ? new OrcaReviewAdapter({ orcaPath: process.env.VENTNEUF_ORCA_PATH, codexPath: process.env.VENTNEUF_CODEX_PATH }) : undefined;
-  new RunnerMissionWorker({ client, store, adapter: new RunnerAdapters(review),
+  const development = process.env.VENTNEUF_ORCA_PATH && process.env.VENTNEUF_CODEX_PATH
+    ? new CodexDevelopmentAdapter({ orcaPath: process.env.VENTNEUF_ORCA_PATH, codexPath: process.env.VENTNEUF_CODEX_PATH }) : undefined;
+  new RunnerMissionWorker({ client, store, adapter: new RunnerAdapters(review, development),
     repositories: async () => (await loadRepositories(process.env.VENTNEUF_REPOSITORIES_FILE ?? defaultRepositoriesFile()))
-      .map((repository) => ({ ...repository, orcaReview: Boolean(review && repository.orcaReview) })),
+      .map((repository) => ({
+        ...repository,
+        orcaReview: Boolean(review && repository.orcaReview),
+        codexDevelopment: Boolean(development && repository.codexDevelopment),
+      })),
   }).start();
   console.info(`ventneuf.os runner listening on http://127.0.0.1:${port}`);
 } else {

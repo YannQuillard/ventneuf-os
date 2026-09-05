@@ -19,7 +19,7 @@ const input = {
   targets: [{
     deviceId: "00000000-0000-4000-8000-000000000005",
     repositoryId: "ventneuf-os",
-    adapters: ["repository-check" as const, "orca-review" as const],
+    adapters: ["repository-check" as const, "orca-review" as const, "codex-development" as const],
   }],
 };
 
