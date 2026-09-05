@@ -12,6 +12,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@aws-sdk/client-kms": "3.1123.0",
     "@aws-sdk/client-secrets-manager": "3.1123.0",
     "@aws-sdk/client-sqs": "3.1123.0",
     "@modelcontextprotocol/sdk": "1.30.0",

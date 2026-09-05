@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { StaticTokenProvider } from "../src/hermes.js";
-import { InvalidMissionDelegationError, MissionDelegation } from "../src/mission-delegation.js";
+import {
+  HmacMissionDelegationMac,
+  InvalidMissionDelegationError,
+  KmsMissionDelegationMac,
+  MissionDelegation,
+} from "../src/mission-delegation.js";
+
+const localMac = (secret: string) => new HmacMissionDelegationMac(new StaticTokenProvider(secret));
 
 const input = {
   serviceId: "hermes-supervisor",
@@ -17,7 +24,7 @@ const input = {
 };
 
 test("issues and verifies a short parent-scoped mission delegation", async () => {
-  const delegations = new MissionDelegation(new StaticTokenProvider("a".repeat(32)), 60_000);
+  const delegations = new MissionDelegation(localMac("a".repeat(32)), 60_000);
   const now = new Date("2026-09-05T12:00:00.000Z");
   const grant = await delegations.issue(input, now);
   assert.match(grant.token, /^vnd1\./);
@@ -28,18 +35,37 @@ test("issues and verifies a short parent-scoped mission delegation", async () =>
 
 test("rejects expired, tampered, foreign-key, and weak mission delegations", async () => {
   const now = new Date("2026-09-05T12:00:00.000Z");
-  const delegations = new MissionDelegation(new StaticTokenProvider("a".repeat(32)), 60_000);
+  const delegations = new MissionDelegation(localMac("a".repeat(32)), 60_000);
   const grant = await delegations.issue(input, now);
   const parts = grant.token.split(".");
   const tampered = `${parts[0]}.${parts[1]}.${parts[2]![0] === "a" ? "b" : "a"}${parts[2]!.slice(1)}`;
   await assert.rejects(delegations.verify(tampered, now), InvalidMissionDelegationError);
   await assert.rejects(delegations.verify(grant.token, new Date(now.getTime() + 60_000)), InvalidMissionDelegationError);
   await assert.rejects(
-    new MissionDelegation(new StaticTokenProvider("b".repeat(32))).verify(grant.token, now),
+    new MissionDelegation(localMac("b".repeat(32))).verify(grant.token, now),
     InvalidMissionDelegationError,
   );
   await assert.rejects(
-    new MissionDelegation(new StaticTokenProvider("short")).issue(input, now),
+    new MissionDelegation(localMac("short")).issue(input, now),
     /at least 32 bytes/,
   );
+});
+
+test("uses AWS KMS only for generating and verifying delegation MACs", async () => {
+  const calls: Array<Record<string, unknown>> = [];
+  const kms = new KmsMissionDelegationMac({
+    send: async (command: { input: Record<string, unknown> }) => {
+      calls.push(command.input);
+      return "Mac" in command.input
+        ? { MacValid: true }
+        : { Mac: Uint8Array.from([1, 2, 3]) };
+    },
+  } as never, "delegation-key");
+  const message = Buffer.from("payload");
+  assert.deepEqual(await kms.sign(message), Uint8Array.from([1, 2, 3]));
+  assert.equal(await kms.verify(message, Uint8Array.from([1, 2, 3])), true);
+  assert.deepEqual(calls, [
+    { KeyId: "delegation-key", MacAlgorithm: "HMAC_SHA_256", Message: message },
+    { KeyId: "delegation-key", MacAlgorithm: "HMAC_SHA_256", Message: message, Mac: Uint8Array.from([1, 2, 3]) },
+  ]);
 });

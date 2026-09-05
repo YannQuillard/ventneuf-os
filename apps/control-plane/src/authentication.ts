@@ -117,15 +117,18 @@ export function bearerToken(request: Pick<Request, "headers">): string | undefin
 
 export function createTokenVerifier(env: NodeJS.ProcessEnv = process.env): TokenVerifier {
   const serviceSecretId = env.HERMES_MCP_SERVICE_SECRET_ID;
-  const delegationSecretId = env.HERMES_MCP_DELEGATION_SECRET_ID;
+  const delegationKmsKeyId = env.HERMES_MCP_DELEGATION_KMS_KEY_ID;
   const serviceToken = env.HERMES_MCP_SERVICE_TOKEN;
   const delegationSecret = env.HERMES_MCP_DELEGATION_SECRET;
   if (env.NODE_ENV === "production" && (serviceToken || delegationSecret)) {
     throw new Error("Raw Hermes MCP secrets cannot be configured in production.");
   }
-  if (Boolean(serviceSecretId) !== Boolean(delegationSecretId)
+  if (Boolean(serviceSecretId) !== Boolean(delegationKmsKeyId)
     || Boolean(serviceToken) !== Boolean(delegationSecret)) {
-    throw new Error("Hermes MCP service and delegation secrets must be configured together.");
+    throw new Error("Hermes MCP service authentication and delegation signing must be configured together.");
+  }
+  if ((serviceSecretId || delegationKmsKeyId) && (serviceToken || delegationSecret)) {
+    throw new Error("Hermes MCP production and development credentials cannot be configured together.");
   }
   if ((serviceSecretId || serviceToken)
     && (!env.HERMES_MCP_SERVICE_ID || !env.VENTNEUF_ORGANIZATION_ID)) {
