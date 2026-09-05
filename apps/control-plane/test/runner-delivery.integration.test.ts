@@ -99,6 +99,7 @@ test("browser API delivers a read-only mission through the real runner client an
     const owner = randomUUID();
     const review = await cloud.claimMission(device, owner);
     assert.equal(review?.adapter, "orca-review");
+    assert.equal(review?.objective, "Review registered repository sample in read-only mode.");
     assert.ok(review);
     await assert.rejects(cloud.renewMission(device, review.id, { owner: randomUUID(), token: review.leaseToken }));
     assert.ok(Date.parse(await cloud.renewMission(device, review.id, { owner, token: review.leaseToken })) >= Date.parse(review.leaseExpiresAt));

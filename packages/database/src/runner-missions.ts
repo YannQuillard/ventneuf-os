@@ -74,7 +74,7 @@ export class RunnerMissionRepository {
         await transaction.insert(missionEvents).values({ organizationId: scope.organizationId,
           missionId: mission.id, type: "run.started",
           payload: { executor: "runner", attempt: mission.attempts + 1 }, occurredAt: now });
-        return { id: mission.id, repositoryId: mission.context.repositoryId,
+        return { id: mission.id, repositoryId: mission.context.repositoryId, objective: mission.goal,
           adapter, attempt: mission.attempts + 1, leaseExpiresAt: expiresAt.toISOString() };
       }
     });
