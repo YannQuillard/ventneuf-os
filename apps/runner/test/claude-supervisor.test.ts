@@ -162,6 +162,7 @@ test("builds a fail-closed Claude CLI and sandbox configuration", async () => {
     assert.equal(settings.sandbox.network.strictAllowlist, true);
     assert.deepEqual(settings.sandbox.network.allowedDomains, ["registry.npmjs.org"]);
     assert.ok(settings.sandbox.filesystem.denyRead.includes(homedir()));
+    assert.ok(settings.sandbox.filesystem.allowRead.some((path) => path.endsWith("/cwd-*")));
     assert.ok(!settings.sandbox.filesystem.allowRead.includes(join(homedir(), ".ssh")));
     assert.ok(!settings.sandbox.filesystem.allowRead.includes(join(homedir(), ".config", "gh")));
     assert.ok(settings.sandbox.credentials.envVars.every(({ mode }) => mode === "deny"));
@@ -197,6 +198,7 @@ test("supervises a deferred push without exposing credentials to Claude", { time
       + "process.exit(1);\n", { mode: 0o700 });
     await writeFile(fakeClaude, `#!${process.execPath}\n`
       + "const fs = require('node:fs'); const path = require('node:path'); const args = process.argv.slice(2);\n"
+      + "if (!process.env.HOME || !process.env.USER || process.env.LOGNAME !== process.env.USER || !process.env.SHELL) process.exit(2);\n"
       + "if (args.includes('--version')) { console.log('2.1.261 (Claude Code)'); process.exit(0); }\n"
       + "if (args.includes('doctor')) { console.log('Claude Code doctor\\n\\nRunning: native (2.1.261)'); process.exit(0); }\n"
       + "if (args[0] === 'auth' && args[1] === 'status') { console.log(JSON.stringify({ loggedIn: true, authMethod: 'oauth' })); process.exit(0); }\n"
