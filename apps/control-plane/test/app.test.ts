@@ -266,11 +266,11 @@ test("stops and cancels only the authenticated member's latest mission", async (
         getLatestPrivateMission: async () => ({
           id: "mission-1",
           status: "running",
-          context: { hermesRunId: "run-1" },
+          context: {},
         }),
         cancelMission: async (_organizationId: string, missionId: string) => {
           cancelled.push(missionId);
-          return [{ id: missionId }];
+          return [{ id: missionId, context: { hermesRunId: "run-created-after-read" } }];
         },
       },
     } as unknown as ConversationRuntime,
@@ -300,7 +300,7 @@ test("stops and cancels only the authenticated member's latest mission", async (
 
     assert.equal(result.statusCode, 200);
     assert.equal(JSON.parse(result.body).status, "cancelled");
-    assert.deepEqual(stopped, ["run-1"]);
+    assert.deepEqual(stopped, ["run-created-after-read"]);
     assert.deepEqual(cancelled, ["mission-1"]);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
@@ -361,6 +361,46 @@ test("streams tenant-scoped mission activity as authenticated SSE", async () => 
     assert.match(body, /event: snapshot/);
     assert.match(body, /tool\.started/);
     assert.doesNotMatch(body, /member-subject/);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("a failed upstream stop can be retried without reopening the cancelled mission", async () => {
+  let status = "running";
+  let transitions = 0;
+  let stopAttempts = 0;
+  const app = createApp({
+    verifier: { verify: async () => ({
+      organizationId: "organization-1", principalId: "member-1", principalType: "user",
+      projectIds: [], capabilities: ["hermes:ask"], expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    }) },
+    hermes: {
+      ask: async () => assert.fail("Cancellation must not submit work"),
+      stop: async () => {
+        assert.equal(status, "cancelled");
+        if (++stopAttempts === 1) throw new Error("Stop temporarily unavailable");
+      },
+    },
+    conversations: { repository: {
+      getLatestPrivateMission: async () => ({ id: "mission-1", status, context: { hermesRunId: "run-1" } }),
+      cancelMission: async () => {
+        transitions++;
+        status = "cancelled";
+        return [{ id: "mission-1", context: { hermesRunId: "run-1" } }];
+      },
+    } } as unknown as ConversationRuntime,
+  });
+  const server = createServer(app);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const path = "/api/conversations/hermes/missions/mission-1/cancel";
+    assert.equal((await postJson(server, path, {}, "valid")).statusCode, 500);
+    assert.equal((await postJson(server, path, {}, "valid")).statusCode, 200);
+    assert.equal(transitions, 1);
+    assert.equal(stopAttempts, 2);
+    assert.equal((await postJson(server, "/api/conversations/hermes/missions/foreign/cancel", {}, "valid")).statusCode, 404);
+    assert.equal(stopAttempts, 2);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }

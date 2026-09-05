@@ -125,7 +125,12 @@ export class MissionWorker {
 
   async process(envelope: MissionEnvelope): Promise<void> {
     const record = await this.repository.getMission(envelope.organizationId, envelope.missionId);
-    if (!record || record.mission.status === "completed" || record.mission.status === "cancelled") return;
+    if (!record || record.mission.status === "completed") return;
+    if (record.mission.status === "cancelled") {
+      const runId = record.mission.context?.hermesRunId;
+      if (!record.mission.assignedDeviceId && typeof runId === "string") await this.stopRun(runId);
+      return;
+    }
 
     if (record.mission.assignedDeviceId || record.mission.context?.type === "runner.repository-check") return;
 
@@ -140,7 +145,7 @@ export class MissionWorker {
         queueMs: elapsedMs(initialTiming.queuedAt ?? initialTiming.acceptedAt, workerReceivedAt),
       },
     };
-    await this.repository.setMissionRunning(envelope.organizationId, envelope.missionId, runningContext);
+    if (!await this.repository.setMissionRunning(envelope.organizationId, envelope.missionId, runningContext)) return;
     const hermesStartedAt = new Date();
     const activeTiming = {
       ...missionTiming(runningContext),
@@ -163,11 +168,16 @@ export class MissionWorker {
         idempotencyKey: envelope.missionId,
         onRunStarted: async (runId) => {
           activeContext = { ...activeContext, hermesRunId: runId };
-          await this.repository.setMissionRunning(
+          const running = await this.repository.setMissionRunning(
             envelope.organizationId,
             envelope.missionId,
             activeContext,
           );
+          if (!running) {
+            await this.repository.rememberCancelledHermesRun(envelope.organizationId, envelope.missionId, runId);
+            await this.stopRun(runId);
+            throw new HermesRunCancelledError();
+          }
           logMission("hermes.run_started", {
             organizationId: envelope.organizationId,
             missionId: envelope.missionId,
@@ -198,7 +208,7 @@ export class MissionWorker {
         totalMs: elapsedMs(activeTiming.acceptedAt, persistedAt),
       };
       const completedContext = { ...activeContext, timing: completedTiming };
-      await this.repository.completeMission({
+      const completed = await this.repository.completeMission({
         organizationId: envelope.organizationId,
         missionId: envelope.missionId,
         conversationId: record.mission.conversationId,
@@ -213,6 +223,7 @@ export class MissionWorker {
         },
         context: completedContext,
       });
+      if (!completed) return;
       logMission("mission.completed", {
         organizationId: envelope.organizationId,
         missionId: envelope.missionId,
@@ -249,6 +260,11 @@ export class MissionWorker {
       });
       throw error;
     }
+  }
+
+  private async stopRun(runId: string): Promise<void> {
+    if (!this.hermes.stop) throw new Error("Hermes cancellation is unavailable.");
+    await this.hermes.stop(runId);
   }
 
   async run(signal: AbortSignal): Promise<void> {

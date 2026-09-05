@@ -5,7 +5,8 @@ import {
   publicIdentity,
   type AuthorizationContext,
 } from "@ventneuf/domain";
-import type { HermesClient } from "./hermes.js";
+import type { ConversationRuntime } from "./runtime.js";
+import { submitPrivateMessage } from "./conversations.js";
 
 function jsonResult(value: unknown) {
   return {
@@ -15,7 +16,7 @@ function jsonResult(value: unknown) {
 }
 
 export interface RemoteMcpServices {
-  hermes: HermesClient;
+  conversations?: Pick<ConversationRuntime, "repository" | "queue">;
 }
 
 export function createRemoteMcpServer(
@@ -41,7 +42,7 @@ export function createRemoteMcpServer(
     "hermes.ask",
     {
       title: "Ask Hermes",
-      description: "Send a scoped message to the authorized private Hermes profile.",
+      description: "Queue a message in your private Hermes conversation. Returns missionId and conversationId; the reply is persisted asynchronously. contextId, if supplied, must match your existing Hermes context.",
       inputSchema: {
         message: z.string().min(1).max(100_000),
         contextId: z.string().min(1).optional(),
@@ -49,7 +50,8 @@ export function createRemoteMcpServer(
     },
     async ({ message, contextId }) => {
       assertAuthorized(context, "hermes:ask");
-      return jsonResult(await services.hermes.ask({ message, contextId }));
+      if (!services.conversations) throw new Error("The conversation runtime is unavailable.");
+      return jsonResult(await submitPrivateMessage(context, services.conversations, { content: message, contextId }));
     },
   );
 

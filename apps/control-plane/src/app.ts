@@ -1,3 +1,4 @@
+import { submitPrivateMessage } from "./conversations.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { randomUUID } from "node:crypto";
@@ -241,68 +242,7 @@ export function createApp({ verifier, hermes, conversations, host = "127.0.0.1" 
       assertAuthorized(context, "hermes:ask");
       if (!conversations) return void response.status(503).json({ error: "conversation_runtime_unavailable" });
       const { content } = z.object({ content: z.string().trim().min(1).max(100_000) }).parse(request.body);
-      const queued = await conversations.repository.enqueuePrivateMessage({
-        organizationId: context.organizationId,
-        externalSubject: context.principalId,
-        content,
-      });
-      const queuedAt = new Date();
-      const missionContext = queued.mission.context ?? {};
-      const queuedContext = {
-        ...missionContext,
-        timing: {
-          ...(missionContext.timing && typeof missionContext.timing === "object"
-            ? missionContext.timing as Record<string, unknown>
-            : {}),
-          queuedAt: queuedAt.toISOString(),
-        },
-      };
-      await conversations.repository.setMissionQueued(
-        context.organizationId,
-        queued.mission.id,
-        queuedContext,
-      );
-      try {
-        await conversations.queue.publish(
-          { organizationId: context.organizationId, missionId: queued.mission.id },
-          queued.conversationId,
-        );
-      } catch (error) {
-        const failedAt = new Date();
-        await conversations.repository.failMission(
-          context.organizationId,
-          queued.mission.id,
-          "Mission dispatch failed.",
-          {
-            ...queuedContext,
-            timing: {
-              ...queuedContext.timing,
-              failedAt: failedAt.toISOString(),
-              totalMs: queued.message.createdAt instanceof Date
-                ? failedAt.getTime() - queued.message.createdAt.getTime()
-                : undefined,
-            },
-          },
-        );
-        throw error;
-      }
-      console.info(JSON.stringify({
-        component: "conversation-api",
-        event: "mission.queued",
-        organizationId: context.organizationId,
-        missionId: queued.mission.id,
-        conversationId: queued.conversationId,
-        acceptedToQueueMs: queued.message.createdAt instanceof Date
-          ? queuedAt.getTime() - queued.message.createdAt.getTime()
-          : undefined,
-      }));
-      response.status(202).json({
-        conversationId: queued.conversationId,
-        message: queued.message,
-        missionId: queued.mission.id,
-        status: queued.mission.status,
-        timing: queuedContext.timing,
-      });
+      response.status(202).json(await submitPrivateMessage(context, conversations, { content }));
     } catch (error) {
       if (error instanceof z.ZodError) {
         response.status(400).json({ error: "invalid_request" });
@@ -326,26 +266,25 @@ export function createApp({ verifier, hermes, conversations, host = "127.0.0.1" 
       if (!mission || mission.id !== request.params.missionId) {
         return void response.status(404).json({ error: "mission_not_found" });
       }
-      if (!["queued", "running", "waiting_for_approval"].includes(mission.status)) {
+      if (!["queued", "running", "waiting_for_approval", "cancelled"].includes(mission.status)) {
         return void response.status(409).json({ error: "mission_not_cancellable" });
       }
 
-      const hermesRunId = typeof mission.context?.hermesRunId === "string"
-        ? mission.context.hermesRunId
-        : undefined;
-      if (hermesRunId) {
-        if (!hermes.stop) return void response.status(503).json({ error: "hermes_cancellation_unavailable" });
-        await hermes.stop(hermesRunId);
+      if (!mission.assignedDeviceId && !hermes.stop) {
+        return void response.status(503).json({ error: "hermes_cancellation_unavailable" });
       }
       const cancelledAt = new Date().toISOString();
-      const cancelled = await conversations.repository.cancelMission(
-        context.organizationId,
-        mission.id,
-        { ...mission.context, cancelledAt },
-      );
+      const cancelled = mission.status === "cancelled"
+        ? [{ id: mission.id, context: mission.context }]
+        : await conversations.repository.cancelMission(
+          context.organizationId, mission.id, { cancelledAt },
+        );
       if (cancelled.length === 0) {
         return void response.status(409).json({ error: "mission_not_cancellable" });
       }
+      // Use the context returned by the transition, not the earlier ownership read.
+      const runId = cancelled[0]?.context?.hermesRunId;
+      if (typeof runId === "string") await hermes.stop!(runId);
       response.json({ id: mission.id, status: "cancelled", cancelledAt });
     } catch (error) {
       next(error);
@@ -359,7 +298,7 @@ export function createApp({ verifier, hermes, conversations, host = "127.0.0.1" 
         return;
       }
 
-      const server = createRemoteMcpServer(context, { hermes });
+      const server = createRemoteMcpServer(context, { conversations });
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
         enableJsonResponse: true,

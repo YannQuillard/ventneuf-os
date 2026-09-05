@@ -200,3 +200,53 @@ test("classifies an A2A client timeout as non-retryable", async () => {
     HermesRequestTimeoutError,
   );
 });
+
+for (const status of ["completed", "failed", "cancelled", "interrupted", "timeout"]) {
+  test(`closes a stalled event stream when polling reaches ${status}`, { timeout: 2_000 }, async () => {
+    let cancelled = false;
+    let streamSignal: AbortSignal | undefined;
+    const client = new RunsHermesClient("http://hermes.internal", new StaticTokenProvider("token"), (async (url, init) => {
+      if (String(url).endsWith("/events")) {
+        streamSignal = init?.signal as AbortSignal;
+        return new Response(new ReadableStream({ cancel() { cancelled = true; } }));
+      }
+      return Response.json({ status: status === "timeout" ? "running" : status, output: "Finished" });
+    }) as typeof fetch, 1, status === "timeout" ? 20 : 500);
+    const result = client.ask({ message: "test", runId: "existing", onEvent: async () => {} });
+    if (status === "completed") assert.equal((await result).text, "Finished");
+    else await assert.rejects(result);
+    assert.equal(streamSignal?.aborted, true);
+    assert.equal(cancelled, true);
+  });
+}
+
+test("DONE closes SSE even while the run is still polling", { timeout: 2_000 }, async () => {
+  let closed = false;
+  const client = new RunsHermesClient("http://hermes.internal", new StaticTokenProvider("token"), (async (url) => {
+    if (String(url).endsWith("/events")) return new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new TextEncoder().encode('data: [DONE]\n\ndata: {"event":"unexpected"}\n\n')); },
+      cancel() { closed = true; },
+    }));
+    return Response.json({ status: closed ? "completed" : "running", output: "Done" });
+  }) as typeof fetch, 1, 500);
+  assert.equal((await client.ask({ message: "test", runId: "existing", onEvent: async () => assert.fail("Events after DONE must be ignored") })).text, "Done");
+  assert.equal(closed, true);
+});
+
+test("stalled SSE headers and event callbacks cannot block a completed result", { timeout: 2_000 }, async () => {
+  for (const stall of ["headers", "callback"]) {
+    let signal: AbortSignal | undefined;
+    const client = new RunsHermesClient("http://hermes.internal", new StaticTokenProvider("token"), (async (url, init) => {
+      if (String(url).endsWith("/events")) {
+        signal = init?.signal as AbortSignal;
+        if (stall === "headers") return new Promise<Response>((_resolve, reject) => {
+          signal!.addEventListener("abort", () => reject(signal!.reason), { once: true });
+        });
+        return new Response('data: {"event":"tool.started"}\n\n');
+      }
+      return Response.json({ status: "completed", output: "Done" });
+    }) as typeof fetch, 1, 500);
+    assert.equal((await client.ask({ message: "test", runId: "existing", onEvent: async () => new Promise(() => {}) })).text, "Done");
+    assert.equal(signal?.aborted, true);
+  }
+});
