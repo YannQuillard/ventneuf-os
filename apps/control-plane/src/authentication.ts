@@ -25,6 +25,7 @@ const authenticatedCapabilities: Capability[] = [
   "mission:create",
   "mission:read",
   "mission:progress:write",
+  "approval:decide",
   "device:manage",
   "hermes:ask",
 ];
@@ -90,7 +91,7 @@ export class HermesServiceTokenVerifier implements TokenVerifier {
       principalId: this.serviceId,
       principalType: "service",
       projectIds: [],
-      capabilities: ["system:identity:read", "mission:dispatch"],
+      capabilities: ["system:identity:read", "mission:dispatch", "approval:decide"],
       expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
     };
   }

@@ -33,6 +33,24 @@ test("issues and verifies a short parent-scoped mission delegation", async () =>
   assert.equal(grant.claims.expiresAt, "2026-09-05T12:01:00.000Z");
 });
 
+test("issues an approval delegation bound to one request and parent review mission", async () => {
+  const delegations = new MissionDelegation(localMac("a".repeat(32)), 60_000);
+  const now = new Date("2026-09-05T12:00:00.000Z");
+  const approvalId = "00000000-0000-4000-8000-000000000006";
+  const grant = await delegations.issueApproval({
+    serviceId: input.serviceId,
+    organizationId: input.organizationId,
+    parentMissionId: input.parentMissionId,
+    conversationId: input.conversationId,
+    memberId: input.memberId,
+    approvalId,
+  }, now);
+  assert.deepEqual(await delegations.verify(grant.token, new Date(now.getTime() + 30_000)), grant.claims);
+  assert.deepEqual(grant.claims.capabilities, ["approval:decide"]);
+  assert.equal(grant.claims.approvalId, approvalId);
+  assert.equal("targets" in grant.claims, false);
+});
+
 test("rejects expired, tampered, foreign-key, and weak mission delegations", async () => {
   const now = new Date("2026-09-05T12:00:00.000Z");
   const delegations = new MissionDelegation(localMac("a".repeat(32)), 60_000);

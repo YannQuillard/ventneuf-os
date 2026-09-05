@@ -1,4 +1,10 @@
-import { LeaseRejectedError, type ClaimedMission, type MissionReport } from "./mission-worker.js";
+import {
+  LeaseRejectedError,
+  type ClaimedMission,
+  type MissionReport,
+  type RunnerApprovalRequest,
+  type RunnerApprovalResponse,
+} from "./mission-worker.js";
 import type { StoredDevice } from "./credential-store.js";
 
 interface EnrollmentResponse {
@@ -37,8 +43,31 @@ export class RunnerCloudClient {
       || !mission.objective.trim() || mission.objective.length > 4_000
       || !["repository-check", "orca-review"].includes(mission.adapter)
       || typeof mission.leaseToken !== "string" || !/^[a-f0-9]{64}$/.test(mission.leaseToken)
-      || !Number.isFinite(Date.parse(mission.leaseExpiresAt))) throw new Error("Invalid runner mission response.");
+      || !Number.isFinite(Date.parse(mission.leaseExpiresAt))
+      || (mission.approvalDecision !== undefined && !this.isApprovalDecision(mission.approvalDecision))) {
+      throw new Error("Invalid runner mission response.");
+    }
     return mission;
+  }
+
+  private isApprovalDecision(value: unknown): value is NonNullable<ClaimedMission["approvalDecision"]> {
+    if (!value || typeof value !== "object") return false;
+    const decision = value as Record<string, unknown>;
+    const action = decision.action as Record<string, unknown> | undefined;
+    const resume = decision.resume as Record<string, unknown> | undefined;
+    return typeof decision.id === "string" && /^[a-f0-9-]{36}$/.test(decision.id)
+      && typeof decision.requestId === "string" && /^[a-f0-9-]{36}$/.test(decision.requestId)
+      && ["approved", "rejected", "expired"].includes(String(decision.status))
+      && Boolean(action)
+      && ["repository.write", "development.command", "network.access", "pull_request.create",
+        "pull_request.merge", "deployment.apply", "connector.write"].includes(String(action?.category))
+      && typeof action?.target === "string"
+      && typeof action?.argumentsDigest === "string" && /^[a-f0-9]{64}$/.test(action.argumentsDigest)
+      && typeof action?.summary === "string"
+      && typeof action?.expectedEffect === "string"
+      && Boolean(resume)
+      && ["codex", "claude"].includes(String(resume?.adapter))
+      && typeof resume?.sessionId === "string";
   }
 
   async reportMission(device: StoredDevice, missionId: string, report: MissionReport) {
@@ -50,6 +79,25 @@ export class RunnerCloudClient {
     const result = await this.missionRequest(device, `/api/runner/missions/${encodeURIComponent(missionId)}/renew`, lease) as { leaseExpiresAt?: string };
     if (!result.leaseExpiresAt || !Number.isFinite(Date.parse(result.leaseExpiresAt))) throw new Error("Invalid runner lease response.");
     return result.leaseExpiresAt;
+  }
+
+  async requestApproval(
+    device: StoredDevice,
+    missionId: string,
+    request: RunnerApprovalRequest,
+  ): Promise<RunnerApprovalResponse> {
+    const result = await this.missionRequest(
+      device,
+      `/api/runner/missions/${encodeURIComponent(missionId)}/approvals`,
+      request,
+    ) as RunnerApprovalResponse;
+    if (!result.approval || typeof result.approval.id !== "string"
+      || !["automatic", "hermes", "human"].includes(result.approval.route)
+      || !["pending", "approved", "rejected", "cancelled", "expired"].includes(result.approval.status)
+      || !Number.isFinite(Date.parse(result.approval.expiresAt))) {
+      throw new Error("Invalid runner approval response.");
+    }
+    return result;
   }
 
   async enroll(token: string, name: string): Promise<StoredDevice> {

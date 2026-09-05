@@ -21,6 +21,7 @@ test("verifies the development token without exposing it", async () => {
   const context = await verifier.verify("expected-token");
   assert.equal(context?.organizationId, "00000000-0000-4000-8000-000000000001");
   assert.ok(context?.capabilities.includes("hermes:ask"));
+  assert.ok(context?.capabilities.includes("approval:decide"));
 });
 
 test("maps verified Cognito access claims to an authorization context", async () => {
@@ -65,7 +66,7 @@ test("authenticates Hermes as a narrow service principal without member identity
     principalId: "hermes-supervisor",
     principalType: "service",
     projectIds: [],
-    capabilities: ["system:identity:read", "mission:dispatch"],
+    capabilities: ["system:identity:read", "mission:dispatch", "approval:decide"],
     expiresAt: context!.expiresAt,
   });
 });

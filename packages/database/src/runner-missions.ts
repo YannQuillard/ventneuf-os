@@ -1,6 +1,7 @@
 import { and, asc, eq, gt, isNull, lte, or, sql } from "drizzle-orm";
+import { evaluateApprovalPolicy } from "@ventneuf/domain";
 import type { Database, DatabaseTransaction } from "./client.js";
-import { deviceCredentials, devices, messages, missionEvents, missions } from "./schema.js";
+import { deviceCredentials, devices, messages, missionApprovals, missionEvents, missions } from "./schema.js";
 
 export interface DeviceScope {
   organizationId: string;
@@ -74,8 +75,55 @@ export class RunnerMissionRepository {
         await transaction.insert(missionEvents).values({ organizationId: scope.organizationId,
           missionId: mission.id, type: "run.started",
           payload: { executor: "runner", attempt: mission.attempts + 1 }, occurredAt: now });
+        const resumeApprovalId = mission.context.resumeApprovalId;
+        const [resumeApproval] = typeof resumeApprovalId === "string"
+          ? await transaction.select().from(missionApprovals).where(and(
+            eq(missionApprovals.organizationId, scope.organizationId),
+            eq(missionApprovals.id, resumeApprovalId),
+            eq(missionApprovals.missionId, mission.id),
+          )).limit(1)
+          : [];
+        const approvedPolicy = resumeApproval?.route === "automatic"
+          ? "allow"
+          : resumeApproval?.route === "hermes"
+            ? "hermes"
+            : resumeApproval?.route === "human"
+              ? ["hermes", "human"]
+              : [];
+        const currentPolicy = resumeApproval
+          ? evaluateApprovalPolicy(mission.context.authority, resumeApproval.actionCategory, now)
+          : "deny";
+        if (resumeApproval?.status === "approved"
+          && (resumeApproval.expiresAt <= now
+            || !(Array.isArray(approvedPolicy)
+              ? approvedPolicy.includes(currentPolicy)
+              : approvedPolicy === currentPolicy))) {
+          resumeApproval.status = "expired";
+          await transaction.update(missionApprovals).set({ status: "expired", updatedAt: now })
+            .where(eq(missionApprovals.id, resumeApproval.id));
+          await transaction.insert(missionEvents).values({ organizationId: scope.organizationId,
+            missionId: mission.id, type: "approval.expired",
+            payload: { approvalId: resumeApproval.id, reason: "grant_revalidation_failed" }, occurredAt: now });
+        }
+        const approvalDecision = resumeApproval && ["approved", "rejected", "expired"].includes(resumeApproval.status)
+          ? {
+            id: resumeApproval.id,
+            requestId: resumeApproval.requestId,
+            status: resumeApproval.status as "approved" | "rejected" | "expired",
+            action: {
+              category: resumeApproval.actionCategory,
+              target: resumeApproval.actionTarget,
+              argumentsDigest: resumeApproval.argumentsDigest,
+              summary: resumeApproval.summary,
+              expectedEffect: resumeApproval.expectedEffect,
+            },
+            resume: resumeApproval.resumeContext,
+            ...(resumeApproval.rationale ? { rationale: resumeApproval.rationale } : {}),
+          }
+          : undefined;
         return { id: mission.id, repositoryId: mission.context.repositoryId, objective: mission.goal,
-          adapter, attempt: mission.attempts + 1, leaseExpiresAt: expiresAt.toISOString() };
+          adapter, attempt: mission.attempts + 1, leaseExpiresAt: expiresAt.toISOString(),
+          ...(approvalDecision ? { approvalDecision } : {}) };
       }
     });
   }

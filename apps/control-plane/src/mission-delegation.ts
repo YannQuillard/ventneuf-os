@@ -11,7 +11,7 @@ const targetSchema = z.object({
   adapters: z.array(adapterSchema).min(1).max(2),
 }).strict();
 
-const claimsSchema = z.object({
+const baseClaimsSchema = z.object({
   version: z.literal(1),
   issuer: z.literal("ventneuf-control-plane"),
   audience: z.literal("ventneuf-mcp"),
@@ -21,18 +21,32 @@ const claimsSchema = z.object({
   parentMissionId: z.string().uuid(),
   conversationId: z.string().uuid(),
   memberId: z.string().uuid(),
-  capabilities: z.tuple([z.literal("mission:dispatch")]),
-  targets: z.array(targetSchema).max(50),
   issuedAt: z.string().datetime(),
   expiresAt: z.string().datetime(),
 }).strict();
+const dispatchClaimsSchema = baseClaimsSchema.extend({
+  capabilities: z.tuple([z.literal("mission:dispatch")]),
+  targets: z.array(targetSchema).max(50),
+}).strict();
+const approvalClaimsSchema = baseClaimsSchema.extend({
+  capabilities: z.tuple([z.literal("approval:decide")]),
+  approvalId: z.string().uuid(),
+}).strict();
+const claimsSchema = z.union([dispatchClaimsSchema, approvalClaimsSchema]);
 
 export type MissionDispatchTarget = z.infer<typeof targetSchema>;
 export type MissionDelegationClaims = z.infer<typeof claimsSchema>;
+export type MissionDispatchDelegationClaims = z.infer<typeof dispatchClaimsSchema>;
+export type MissionApprovalDelegationClaims = z.infer<typeof approvalClaimsSchema>;
 
 export interface MissionDelegationGrant {
   token: string;
-  claims: MissionDelegationClaims;
+  claims: MissionDispatchDelegationClaims;
+}
+
+export interface MissionApprovalDelegationGrant {
+  token: string;
+  claims: MissionApprovalDelegationClaims;
 }
 
 export interface MissionDelegationVerifier {
@@ -48,6 +62,14 @@ export interface MissionDelegationIssuer extends MissionDelegationVerifier {
     memberId: string;
     targets: MissionDispatchTarget[];
   }, now?: Date): Promise<MissionDelegationGrant>;
+  issueApproval(input: {
+    serviceId: string;
+    organizationId: string;
+    parentMissionId: string;
+    conversationId: string;
+    memberId: string;
+    approvalId: string;
+  }, now?: Date): Promise<MissionApprovalDelegationGrant>;
 }
 
 export class InvalidMissionDelegationError extends Error {
@@ -123,7 +145,7 @@ export class MissionDelegation implements MissionDelegationIssuer {
     memberId: string;
     targets: MissionDispatchTarget[];
   }, now = new Date()): Promise<MissionDelegationGrant> {
-    const claims = claimsSchema.parse({
+    const claims = dispatchClaimsSchema.parse({
       version: 1,
       issuer: "ventneuf-control-plane",
       audience: "ventneuf-mcp",
@@ -139,6 +161,36 @@ export class MissionDelegation implements MissionDelegationIssuer {
       issuedAt: now.toISOString(),
       expiresAt: new Date(now.getTime() + this.lifetimeMs).toISOString(),
     });
+    return this.signClaims(claims);
+  }
+
+  async issueApproval(input: {
+    serviceId: string;
+    organizationId: string;
+    parentMissionId: string;
+    conversationId: string;
+    memberId: string;
+    approvalId: string;
+  }, now = new Date()): Promise<MissionApprovalDelegationGrant> {
+    const claims = approvalClaimsSchema.parse({
+      version: 1,
+      issuer: "ventneuf-control-plane",
+      audience: "ventneuf-mcp",
+      delegationId: randomUUID(),
+      serviceId: input.serviceId,
+      organizationId: input.organizationId,
+      parentMissionId: input.parentMissionId,
+      conversationId: input.conversationId,
+      memberId: input.memberId,
+      capabilities: ["approval:decide"],
+      approvalId: input.approvalId,
+      issuedAt: now.toISOString(),
+      expiresAt: new Date(now.getTime() + this.lifetimeMs).toISOString(),
+    });
+    return this.signClaims(claims);
+  }
+
+  private async signClaims<T extends MissionDelegationClaims>(claims: T): Promise<{ token: string; claims: T }> {
     const payload = Buffer.from(JSON.stringify(claims)).toString("base64url");
     const mac = await this.macs.sign(Buffer.from(payload, "utf8"));
     return { claims, token: `vnd1.${payload}.${Buffer.from(mac).toString("base64url")}` };

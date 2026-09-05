@@ -6,6 +6,44 @@ export interface ClaimedMission extends ReadOnlyMission {
   leaseToken: string;
   leaseExpiresAt: string;
   attempt: number;
+  approvalDecision?: {
+    id: string;
+    requestId: string;
+    status: "approved" | "rejected" | "expired";
+    action: {
+      category: string;
+      target: string;
+      argumentsDigest: string;
+      summary: string;
+      expectedEffect: string;
+    };
+    resume: { adapter: "codex" | "claude"; sessionId: string };
+    rationale?: string;
+  };
+}
+export interface RunnerApprovalRequest {
+  owner: string;
+  token: string;
+  requestId: string;
+  action: {
+    category: "repository.write" | "development.command" | "network.access"
+      | "pull_request.create" | "pull_request.merge" | "deployment.apply" | "connector.write";
+    target: string;
+    argumentsDigest: string;
+    summary: string;
+    expectedEffect: string;
+  };
+  reason: string;
+  evidence: Record<string, unknown>;
+  resume: { adapter: "codex" | "claude"; sessionId: string };
+}
+export interface RunnerApprovalResponse {
+  approval: {
+    id: string;
+    route: "automatic" | "hermes" | "human";
+    status: "pending" | "approved" | "rejected" | "cancelled" | "expired";
+    expiresAt: string;
+  };
 }
 export interface MissionReport {
   owner: string;
@@ -19,6 +57,7 @@ export interface MissionClient {
   claimMission(device: StoredDevice, owner: string): Promise<ClaimedMission | null>;
   reportMission(device: StoredDevice, missionId: string, report: MissionReport): Promise<void>;
   renewMission?(device: StoredDevice, missionId: string, lease: { owner: string; token: string }): Promise<string>;
+  requestApproval?(device: StoredDevice, missionId: string, request: RunnerApprovalRequest): Promise<RunnerApprovalResponse>;
 }
 
 export class RunnerMissionWorker {

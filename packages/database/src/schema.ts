@@ -25,6 +25,24 @@ export const missionStatus = pgEnum("mission_status", [
   "failed",
   "cancelled",
 ]);
+export const approvalStatus = pgEnum("approval_status", [
+  "pending",
+  "approved",
+  "rejected",
+  "cancelled",
+  "expired",
+]);
+export const approvalRoute = pgEnum("approval_route", ["automatic", "hermes", "human"]);
+export const approvalDeciderType = pgEnum("approval_decider_type", ["system", "service", "user"]);
+export const approvalActionCategory = pgEnum("approval_action_category", [
+  "repository.write",
+  "development.command",
+  "network.access",
+  "pull_request.create",
+  "pull_request.merge",
+  "deployment.apply",
+  "connector.write",
+]);
 
 const timestamps = {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -255,6 +273,59 @@ export const missions = pgTable(
     index("missions_status_idx").on(table.organizationId, table.status),
     index("missions_device_claim_idx").on(table.organizationId, table.assignedDeviceId, table.status, table.createdAt),
     check("missions_attempts_check", sql`${table.attempts} >= 0`),
+  ],
+);
+
+export const missionApprovals = pgTable(
+  "mission_approvals",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    missionId: uuid("mission_id").notNull(),
+    reviewMissionId: uuid("review_mission_id"),
+    requestId: uuid("request_id").notNull(),
+    actionCategory: approvalActionCategory("action_category").notNull(),
+    actionTarget: text("action_target").notNull(),
+    argumentsDigest: text("arguments_digest").notNull(),
+    summary: text("summary").notNull(),
+    expectedEffect: text("expected_effect").notNull(),
+    reason: text("reason").notNull(),
+    evidence: jsonb("evidence").$type<Record<string, unknown>>().default({}).notNull(),
+    route: approvalRoute("route").notNull(),
+    status: approvalStatus("status").notNull(),
+    requestedByLeaseOwner: uuid("requested_by_lease_owner").notNull(),
+    requestedByLeaseTokenHash: text("requested_by_lease_token_hash").notNull(),
+    resumeContext: jsonb("resume_context").$type<{ adapter: "codex" | "claude"; sessionId: string }>().notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    decidedByType: approvalDeciderType("decided_by_type"),
+    decidedById: text("decided_by_id"),
+    rationale: text("rationale"),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("mission_approvals_organization_id_unique").on(table.organizationId, table.id),
+    uniqueIndex("mission_approvals_request_unique").on(table.organizationId, table.missionId, table.requestId),
+    uniqueIndex("mission_approvals_pending_mission_unique")
+      .on(table.organizationId, table.missionId)
+      .where(sql`${table.status} = 'pending'`),
+    foreignKey({
+      columns: [table.organizationId, table.missionId],
+      foreignColumns: [missions.organizationId, missions.id],
+      name: "mission_approvals_organization_mission_fk",
+    }),
+    foreignKey({
+      columns: [table.organizationId, table.reviewMissionId],
+      foreignColumns: [missions.organizationId, missions.id],
+      name: "mission_approvals_organization_review_mission_fk",
+    }),
+    index("mission_approvals_member_queue_idx").on(table.organizationId, table.route, table.status, table.createdAt),
+    check("mission_approvals_arguments_digest_check", sql`${table.argumentsDigest} ~ '^[a-f0-9]{64}$'`),
+    check("mission_approvals_lease_hash_check", sql`${table.requestedByLeaseTokenHash} ~ '^[a-f0-9]{64}$'`),
+    check("mission_approvals_decision_check", sql`${table.status} not in ('approved', 'rejected') or (
+      ${table.decidedByType} is not null and ${table.decidedById} is not null
+      and ${table.rationale} is not null and ${table.decidedAt} is not null
+    )`),
   ],
 );
 

@@ -45,7 +45,7 @@ export async function dispatchReadOnlyRunnerMission(
   }
   const claims = await delegations.verify(input.delegationToken);
   if (claims.organizationId !== context.organizationId || claims.serviceId !== context.principalId
-    || !claims.capabilities.includes("mission:dispatch")
+    || !("targets" in claims)
     || !claims.targets.some((target) => target.deviceId === input.deviceId
       && target.repositoryId === input.repositoryId
       && target.adapters.includes(input.adapter))) {

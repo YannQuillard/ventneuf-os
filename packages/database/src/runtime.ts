@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { Database } from "./client.js";
-import { conversations, devices, members, messages, missionEvents, missions, organizations } from "./schema.js";
+import { conversations, devices, members, messages, missionApprovals, missionEvents, missions, organizations } from "./schema.js";
 
 export type DelegatedRunnerAdapter = "repository-check" | "orca-review";
 
@@ -207,6 +207,7 @@ export class ConversationRuntimeRepository {
           and(
             eq(missions.organizationId, input.organizationId),
             eq(members.externalSubject, input.externalSubject),
+            sql`coalesce(${missions.context}->>'type', '') <> 'hermes.approval'`,
           ),
         )
         .orderBy(desc(missions.createdAt))
@@ -481,9 +482,45 @@ export class ConversationRuntimeRepository {
           inArray(missions.status, ["queued", "running", "waiting_for_approval"]),
         ))
         .returning({ id: missions.id, assignedDeviceId: missions.assignedDeviceId, context: missions.context });
+      if (!cancelled[0]) return [];
       if (cancelled[0]?.assignedDeviceId) {
         await transaction.insert(missionEvents).values({ organizationId, missionId,
           type: "run.cancelled", payload: { executor: "runner" }, occurredAt: cancelledAt });
+      }
+      const cancelledApprovals = await transaction.update(missionApprovals).set({
+        status: "cancelled",
+        updatedAt: cancelledAt,
+      }).where(and(
+        eq(missionApprovals.organizationId, organizationId),
+        eq(missionApprovals.missionId, missionId),
+        inArray(missionApprovals.status, ["pending", "approved"]),
+      )).returning({ id: missionApprovals.id });
+      if (cancelledApprovals.length) {
+        await transaction.insert(missionEvents).values(cancelledApprovals.map(({ id }) => ({
+          organizationId,
+          missionId,
+          type: "approval.cancelled",
+          payload: { approvalId: id, reason: "mission_cancelled" },
+          occurredAt: cancelledAt,
+        })));
+      }
+      const [escalated] = await transaction.update(missionApprovals).set({
+        route: "human",
+        updatedAt: cancelledAt,
+      }).where(and(
+        eq(missionApprovals.organizationId, organizationId),
+        eq(missionApprovals.reviewMissionId, missionId),
+        eq(missionApprovals.status, "pending"),
+        eq(missionApprovals.route, "hermes"),
+      )).returning({ id: missionApprovals.id, missionId: missionApprovals.missionId });
+      if (escalated) {
+        await transaction.insert(missionEvents).values({
+          organizationId,
+          missionId: escalated.missionId,
+          type: "approval.escalated",
+          payload: { approvalId: escalated.id, decision: "escalated", deciderType: "system", reason: "review_cancelled" },
+          occurredAt: cancelledAt,
+        });
       }
       return cancelled.map(({ id, context }) => ({ id, context }));
     });

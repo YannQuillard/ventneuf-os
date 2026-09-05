@@ -15,6 +15,7 @@ The repository is under active development. Current foundations include:
 - one-time, tenant-scoped device enrollment and revocable runner credentials;
 - a macOS runner bridge with loopback-only onboarding, Keychain storage, and outbound heartbeats;
 - device-assigned read-only repository checks with fenced leases, bounded recovery, and durable results;
+- policy-routed durable approval records with Hermes decisions, member escalation, and session resumption data;
 - a separately deployable control plane that communicates with Hermes over A2A;
 - authenticated remote and local MCP boundaries for agent tools;
 - identity, device, mission, and capability authorization primitives;
@@ -47,7 +48,13 @@ The authenticated remote `hermes.ask` tool queues a durable message in the calle
 
 The remote `mission.dispatch` tool accepts an explicit objective, enrolled device, registered repository, and bounded read-only adapter. A direct user call creates a durable mission only when the authenticated member owns the device and the runner has advertised the requested repository and adapter. The objective travels in the claimed mission and reaches the isolated Codex supervisor without shell interpolation.
 
-Hermes authenticates as a distinct service principal with only identity inspection and mission dispatch capabilities. Service dispatch additionally requires a short signed delegation issued for the active parent Hermes mission. The grant fixes the organization, initiating member, private conversation, service identity, eligible device/repository/adapter tuples, and expiry. The database revalidates the active parent and current device ownership while creating the child mission. A stable `requestId` makes retries idempotent; changing the requested operation under the same ID is rejected. Delegation metadata and parent/child events are durable, while bearer values are never persisted.
+Hermes authenticates as a distinct service principal with identity inspection, mission dispatch, and approval decision capabilities. Each service operation additionally requires a short signed delegation issued for its active parent Hermes mission. A dispatch grant fixes the organization, initiating member, private conversation, service identity, eligible device/repository/adapter tuples, and expiry. An approval grant fixes those identities and one exact approval request. The database revalidates the active parent, current device ownership, and mission authority. Stable request IDs make retries idempotent; changing an operation or decision under the same ID is rejected. Delegation metadata and parent/child events are durable, while bearer values are never persisted.
+
+### Durable mission approvals
+
+Migration `0005_mission_approvals.sql` adds tenant-scoped approval records for exact action categories, targets, argument digests, evidence, policy routes, decisions, expiry, and agent session references. A request must authenticate both the enrolled device and the active mission lease. The control plane then permits a pre-authorized action, starts an internal Hermes review, routes directly to the initiating member, or rejects the action according to the mission authority.
+
+Waiting clears the execution lease and persists `waiting_for_approval`. Hermes receives a separate parent-scoped `approval.decide` delegation and may approve, reject, or escalate. Human decisions use the authenticated approval endpoint and are ownership-checked in the database; conversation text is not an approval. A final decision requeues the mission, and a fresh claim returns the exact decision plus the original Codex or Claude session reference. The runner revalidates approved grants against current policy before resumption. Cancellation, device revocation, policy changes, and expiry invalidate applicable grants, and all transitions produce mission audit events.
 
 ## Roadmap
 
@@ -57,7 +64,7 @@ The next product milestones are:
 2. configurable workspaces, project channels, private conversations, and memberships;
 3. authorized knowledge tools over MCP;
 4. Orca integration behind the runner adapter and mission-scoped tool credentials;
-5. scoped local execution, live terminal events, browser evidence, and approval controls;
+5. scoped local execution, live terminal events, browser evidence, and agent-native approval capture;
 6. GitHub, AWS, and project-management connectors;
 7. policy-based agent and model routing with usage and cost attribution;
 8. automated member and device onboarding;

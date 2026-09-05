@@ -10,6 +10,7 @@ import {
   ConversationRuntimeRepository,
   createDatabase,
   DeviceRuntimeRepository,
+  MissionApprovalRepository,
   RunnerMissionRepository,
   type Database,
 } from "@ventneuf/database";
@@ -18,7 +19,11 @@ import {
   HermesRunCancelledError,
   type HermesClient,
 } from "./hermes.js";
-import type { MissionDelegationGrant, MissionDelegationIssuer } from "./mission-delegation.js";
+import type {
+  MissionApprovalDelegationGrant,
+  MissionDelegationGrant,
+  MissionDelegationIssuer,
+} from "./mission-delegation.js";
 
 interface DatabaseCredentials {
   username?: string;
@@ -74,6 +79,21 @@ function messageWithDelegation(message: string, grant: MissionDelegationGrant): 
   ].join("\n");
 }
 
+function messageWithApprovalDelegation(message: string, grant: MissionApprovalDelegationGrant): string {
+  return [
+    message,
+    "",
+    "<ventneuf_approval_authority>",
+    `Approval request: ${grant.claims.approvalId}`,
+    "Decide only this approval through the ventneuf MCP approval.decide tool.",
+    "Pass the delegation token below and a stable UUID requestId. Reuse the requestId when retrying the same decision.",
+    `Delegation token: ${grant.token}`,
+    `Delegation expires at: ${grant.claims.expiresAt}`,
+    "Do not quote or return the delegation token in your response.",
+    "</ventneuf_approval_authority>",
+  ].join("\n");
+}
+
 const persistedRunEvents = new Set([
   "tool.started",
   "tool.completed",
@@ -91,6 +111,7 @@ export interface ConversationRuntime {
   database: Database;
   repository: ConversationRuntimeRepository;
   devices: DeviceRuntimeRepository;
+  approvals: MissionApprovalRepository;
   runnerMissions: RunnerMissionRepository;
   queue: MissionQueue;
   worker: MissionWorker;
@@ -139,6 +160,7 @@ export class MissionWorker {
     private readonly queue: MissionQueue,
     private readonly hermes: HermesClient,
     private readonly delegation?: { serviceId: string; issuer: MissionDelegationIssuer },
+    private readonly approvals?: MissionApprovalRepository,
   ) {}
 
   async process(envelope: MissionEnvelope): Promise<void> {
@@ -172,7 +194,31 @@ export class MissionWorker {
     let activeContext: Record<string, unknown> = { ...initialContext, timing: activeTiming };
     try {
       let hermesMessage = record.mission.goal;
-      if (this.delegation) {
+      if (record.mission.context?.type === "hermes.approval") {
+        if (!this.delegation || !this.approvals) throw new Error("Hermes approval delegation is unavailable.");
+        const scope = await this.approvals.getHermesDecisionScope(
+          envelope.organizationId,
+          envelope.missionId,
+        );
+        if (!scope) throw new Error("The Hermes approval review is unavailable for delegation.");
+        const grant = await this.delegation.issuer.issueApproval({
+          serviceId: this.delegation.serviceId,
+          ...scope,
+        });
+        hermesMessage = messageWithApprovalDelegation(record.mission.goal, grant);
+        await this.repository.appendMissionEvent({
+          organizationId: envelope.organizationId,
+          missionId: envelope.missionId,
+          type: "approval.delegation_issued",
+          payload: {
+            approvalId: grant.claims.approvalId,
+            delegationId: grant.claims.delegationId,
+            serviceId: grant.claims.serviceId,
+            expiresAt: grant.claims.expiresAt,
+          },
+          occurredAt: new Date(grant.claims.issuedAt),
+        });
+      } else if (this.delegation) {
         const scope = await this.repository.getHermesDispatchScope(envelope.organizationId, envelope.missionId);
         if (!scope) throw new Error("The Hermes mission is unavailable for delegation.");
         const grant = await this.delegation.issuer.issue({
@@ -248,6 +294,13 @@ export class MissionWorker {
         totalMs: elapsedMs(activeTiming.acceptedAt, persistedAt),
       };
       const completedContext = { ...activeContext, timing: completedTiming };
+      if (record.mission.context?.type === "hermes.approval") {
+        await this.approvals?.escalateUnresolved(
+          envelope.organizationId,
+          envelope.missionId,
+          "hermes_returned_without_decision",
+        );
+      }
       const completed = await this.repository.completeMission({
         organizationId: envelope.organizationId,
         missionId: envelope.missionId,
@@ -291,6 +344,13 @@ export class MissionWorker {
         error instanceof Error ? error.message : "Unknown Hermes failure",
         { ...activeContext, timing: failedTiming },
       );
+      if (record.mission.context?.type === "hermes.approval") {
+        await this.approvals?.escalateUnresolved(
+          envelope.organizationId,
+          envelope.missionId,
+          "hermes_review_failed",
+        );
+      }
       logMission("mission.failed", {
         organizationId: envelope.organizationId,
         missionId: envelope.missionId,
@@ -372,6 +432,7 @@ export async function createConversationRuntime(
   const database = createDatabase(databaseUrl.toString());
   const repository = new ConversationRuntimeRepository(database);
   const devices = new DeviceRuntimeRepository(database);
+  const approvals = new MissionApprovalRepository(database);
   await repository.ensureOrganization({
     id: organizationId,
     slug: organizationSlug,
@@ -382,6 +443,7 @@ export async function createConversationRuntime(
     database,
     repository,
     devices,
+    approvals,
     runnerMissions: new RunnerMissionRepository(database),
     queue,
     worker: new MissionWorker(
@@ -389,6 +451,7 @@ export async function createConversationRuntime(
       queue,
       hermes,
       delegations ? { serviceId: env.HERMES_MCP_SERVICE_ID!, issuer: delegations } : undefined,
+      approvals,
     ),
   };
 }
