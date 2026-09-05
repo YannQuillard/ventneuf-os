@@ -36,6 +36,7 @@ export class RunnerMissionRepository {
     name: string;
     orcaReview?: boolean;
     codexDevelopment?: boolean;
+    claudeDevelopment?: boolean;
   }>) {
     return this.database.withOrganization(scope.organizationId, async (transaction) => {
       await this.authenticate(transaction, scope);
@@ -59,7 +60,7 @@ export class RunnerMissionRepository {
       while (true) {
         const [mission] = await transaction.select().from(missions).where(and(
           eq(missions.organizationId, scope.organizationId), eq(missions.assignedDeviceId, scope.deviceId),
-          sql`${missions.context}->>'type' in ('runner.repository-check', 'runner.orca-review', 'runner.codex-development')`,
+          sql`${missions.context}->>'type' in ('runner.repository-check', 'runner.orca-review', 'runner.codex-development', 'runner.claude-development')`,
           or(eq(missions.status, "queued"), and(eq(missions.status, "running"), lte(missions.leaseExpiresAt, now))),
         )).orderBy(asc(missions.createdAt), asc(missions.id)).for("update", { skipLocked: true }).limit(1);
         if (!mission) return null;
@@ -67,19 +68,23 @@ export class RunnerMissionRepository {
           ? "orca-review"
           : mission.context.type === "runner.codex-development"
             ? "codex-development"
+            : mission.context.type === "runner.claude-development"
+              ? "claude-development"
             : "repository-check";
         const authority = mission.context.authority as { expiresAt?: unknown } | undefined;
         const authorityExpiresAt = typeof authority?.expiresAt === "string" ? Date.parse(authority.expiresAt) : Number.NaN;
-        if (adapter === "codex-development" && (!Number.isFinite(authorityExpiresAt) || authorityExpiresAt <= now.getTime())) {
+        if (["codex-development", "claude-development"].includes(adapter)
+          && (!Number.isFinite(authorityExpiresAt) || authorityExpiresAt <= now.getTime())) {
           await transaction.update(missions).set({ status: "failed", leaseExpiresAt: null, updatedAt: now,
-            context: { ...mission.context, failure: "Codex development authority is unavailable or expired." },
+            context: { ...mission.context, failure: "Development authority is unavailable or expired." },
           }).where(eq(missions.id, mission.id));
           await transaction.insert(missionEvents).values({ organizationId: scope.organizationId,
             missionId: mission.id, type: "run.failed", payload: { reason: "development_authority_expired" }, occurredAt: now });
           continue;
         }
         // Never automatically launch a second coding agent after an ambiguous execution.
-        if (mission.attempts >= (adapter === "orca-review" ? 1 : adapter === "codex-development" ? 32 : maxAttempts)) {
+        if (mission.attempts >= (adapter === "orca-review" ? 1
+          : ["codex-development", "claude-development"].includes(adapter) ? 32 : maxAttempts)) {
           await transaction.update(missions).set({ status: "failed", leaseExpiresAt: null, updatedAt: now,
             context: { ...mission.context, failure: "Runner lease recovery attempts exhausted." },
           }).where(eq(missions.id, mission.id));
@@ -142,7 +147,7 @@ export class RunnerMissionRepository {
           : undefined;
         return { id: mission.id, repositoryId: mission.context.repositoryId, objective: mission.goal,
           adapter, attempt: mission.attempts + 1, leaseExpiresAt: expiresAt.toISOString(),
-          ...(adapter === "codex-development" && typeof authority?.expiresAt === "string"
+          ...(["codex-development", "claude-development"].includes(adapter) && typeof authority?.expiresAt === "string"
             ? { authorityExpiresAt: authority.expiresAt }
             : {}),
           ...(approvalDecision ? { approvalDecision } : {}) };

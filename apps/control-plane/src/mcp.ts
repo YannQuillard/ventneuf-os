@@ -71,7 +71,7 @@ export function createRemoteMcpServer(
         objective: z.string().trim().min(1).max(4_000),
         deviceId: z.string().uuid(),
         repositoryId,
-        adapter: z.enum(["repository-check", "orca-review", "codex-development"]).default("orca-review"),
+        adapter: z.enum(["repository-check", "orca-review", "codex-development", "claude-development"]).default("orca-review"),
         delegationToken: z.string().min(1).max(20_000).optional(),
         requestId: z.string().uuid().optional(),
       },

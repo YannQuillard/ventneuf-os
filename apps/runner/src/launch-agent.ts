@@ -15,6 +15,7 @@ export interface LaunchAgentConfiguration {
   repositoriesFile?: string;
   orcaPath?: string;
   codexPath?: string;
+  claudePath?: string;
   homeDirectory?: string;
   userId?: number;
 }
@@ -70,6 +71,7 @@ export function renderLaunchAgentPlist(configuration: LaunchAgentConfiguration) 
     ${configuration.repositoriesFile ? `<key>VENTNEUF_REPOSITORIES_FILE</key>\n    <string>${escapeXml(configuration.repositoriesFile)}</string>` : ""}
     ${configuration.orcaPath ? `<key>VENTNEUF_ORCA_PATH</key>\n    <string>${escapeXml(configuration.orcaPath)}</string>` : ""}
     ${configuration.codexPath ? `<key>VENTNEUF_CODEX_PATH</key>\n    <string>${escapeXml(configuration.codexPath)}</string>` : ""}
+    ${configuration.claudePath ? `<key>VENTNEUF_CLAUDE_PATH</key>\n    <string>${escapeXml(configuration.claudePath)}</string>` : ""}
   </dict>
   <key>RunAtLoad</key>
   <true/>

@@ -6,6 +6,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { CodexDevelopmentAdapter } from "./codex-development.js";
+import { ClaudeDevelopmentAdapter } from "./claude-development.js";
 import { RepositoryCheckAdapter, type MissionAdapter, type MissionExecution, type MissionMaintenance, type RunnerMission, type RegisteredRepository } from "./repositories.js";
 import { createReviewSnapshot } from "./review-snapshot.js";
 import { writeReviewState } from "./review-supervisor.js";
@@ -119,15 +120,26 @@ export class OrcaReviewAdapter implements MissionAdapter {
 
 export class RunnerAdapters implements MissionAdapter {
   private readonly check = new RepositoryCheckAdapter();
-  constructor(private readonly review?: OrcaReviewAdapter, private readonly development?: CodexDevelopmentAdapter) {}
+  constructor(
+    private readonly review?: OrcaReviewAdapter,
+    private readonly development?: CodexDevelopmentAdapter,
+    private readonly claudeDevelopment?: ClaudeDevelopmentAdapter,
+  ) {}
   execute(mission: RunnerMission, repository: RegisteredRepository, signal: AbortSignal, execution?: MissionExecution) {
     if (mission.adapter === "repository-check") return this.check.execute(mission, repository, signal);
     if (mission.adapter === "orca-review") {
       if (!this.review) throw new Error("Orca review is not configured.");
       return this.review.execute(mission, repository, signal, execution);
     }
-    if (!this.development) throw new Error("Codex development is not configured.");
-    return this.development.execute(mission, repository, signal, execution);
+    if (mission.adapter === "codex-development") {
+      if (!this.development) throw new Error("Codex development is not configured.");
+      return this.development.execute(mission, repository, signal, execution);
+    }
+    if (!this.claudeDevelopment) throw new Error("Claude development is not configured.");
+    return this.claudeDevelopment.execute(mission, repository, signal, execution);
   }
-  maintain(maintenance: MissionMaintenance) { return this.development?.maintain(maintenance) ?? Promise.resolve(); }
+  async maintain(maintenance: MissionMaintenance) {
+    await this.development?.maintain(maintenance);
+    await this.claudeDevelopment?.maintain(maintenance);
+  }
 }

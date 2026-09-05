@@ -36,6 +36,7 @@ export class RunnerCloudClient {
     name: string;
     orcaReview?: boolean;
     codexDevelopment?: boolean;
+    claudeDevelopment?: boolean;
   }>) {
     await this.missionRequest(device, "/api/runner/repositories", { repositories });
   }
@@ -47,10 +48,10 @@ export class RunnerCloudClient {
     if (!mission || typeof mission.id !== "string" || !/^[a-f0-9-]{36}$/.test(mission.id)
       || typeof mission.repositoryId !== "string" || typeof mission.objective !== "string"
       || !mission.objective.trim() || mission.objective.length > 4_000
-      || !["repository-check", "orca-review", "codex-development"].includes(mission.adapter)
+      || !["repository-check", "orca-review", "codex-development", "claude-development"].includes(mission.adapter)
       || typeof mission.leaseToken !== "string" || !/^[a-f0-9]{64}$/.test(mission.leaseToken)
       || !Number.isFinite(Date.parse(mission.leaseExpiresAt))
-      || (mission.adapter === "codex-development"
+      || (["codex-development", "claude-development"].includes(mission.adapter)
         && (!mission.authorityExpiresAt || !Number.isFinite(Date.parse(mission.authorityExpiresAt))))
       || (mission.approvalDecision !== undefined && !this.isApprovalDecision(mission.approvalDecision))) {
       throw new Error("Invalid runner mission response.");
