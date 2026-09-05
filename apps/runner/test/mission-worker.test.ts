@@ -1,0 +1,104 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { LeaseRejectedError, RunnerMissionWorker, type MissionClient, type MissionReport } from "../src/mission-worker.js";
+import { loadRepositories, RepositoryCheckAdapter } from "../src/repositories.js";
+
+const device = { deviceId: "device-1", credential: "private-credential", name: "Test Mac", platform: "darwin" as const };
+const mission = { id: "mission-1", repositoryId: "sample", adapter: "repository-check" as const,
+  leaseToken: "lease-token", leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(), attempt: 1 };
+
+test("repository check uses explicit configuration and never reads source contents or follows entries", async () => {
+  const temporary = await mkdtemp(join(tmpdir(), "runner-check-"));
+  try {
+    const root = join(temporary, "repository");
+    await mkdir(root);
+    await mkdir(join(root, ".git"));
+    await writeFile(join(root, "secret.txt"), "sensitive source content");
+    await symlink("/unavailable", join(root, "external"));
+    const configuration = join(temporary, "repositories.json");
+    await writeFile(configuration, JSON.stringify([{ id: "sample", name: "Sample", path: root }]));
+    const [repository] = await loadRepositories(configuration);
+    assert.ok(repository);
+    const adapter = new RepositoryCheckAdapter();
+    const result = await adapter.execute(mission, repository, new AbortController().signal);
+    assert.match(result, /3 top-level entries/);
+    assert.match(result, /Git metadata is present/);
+    assert.ok(!result.includes(root) && !result.includes("secret") && !result.includes("sensitive"));
+    assert.equal(await readFile(join(root, "secret.txt"), "utf8"), "sensitive source content");
+    await assert.rejects(adapter.execute({ ...mission, repositoryId: "other" }, repository, new AbortController().signal));
+    await assert.rejects(adapter.execute(mission, repository, AbortSignal.abort()));
+    await writeFile(configuration, JSON.stringify([{ id: "sample", name: "Sample", path: "relative" }]));
+    await assert.rejects(loadRepositories(configuration));
+    assert.deepEqual(await loadRepositories(join(temporary, "missing.json")), []);
+  } finally { await rm(temporary, { recursive: true, force: true }); }
+});
+
+function setup(overrides: Partial<MissionClient> = {}) {
+  const reports: MissionReport[] = [];
+  let executions = 0;
+  const worker = new RunnerMissionWorker({
+    store: { load: async () => device, save: async () => {} },
+    repositories: async () => [{ id: "sample", name: "Sample", path: "/private/local/repository" }],
+    adapter: { execute: async () => { executions += 1; return "Read-only result"; } },
+    client: {
+      registerRepositories: async (_device, repositories) => {
+        assert.deepEqual(repositories, [{ id: "sample", name: "Sample" }]);
+      },
+      claimMission: async () => mission,
+      reportMission: async (_device, _id, report) => { reports.push(report); },
+      ...overrides,
+    },
+  });
+  return { worker, reports, executions: () => executions };
+}
+
+test("worker scopes execution and reports progress before a durable result", async () => {
+  const state = setup();
+  await state.worker.tick();
+  assert.equal(state.executions(), 1);
+  assert.deepEqual(state.reports.map(({ kind }) => kind), ["progress", "completed"]);
+  assert.equal(state.reports[0]?.token, mission.leaseToken);
+  assert.equal(state.reports[0]?.owner, state.reports[1]?.owner);
+});
+
+test("lost completion responses retry the same event without re-execution", async () => {
+  const events: MissionReport[] = [];
+  const state = setup({ reportMission: async (_device, _id, report) => {
+    if (report.kind === "completed") {
+      events.push(report);
+      if (events.length === 1) throw new Error("Response lost");
+    }
+  } });
+  await state.worker.tick();
+  assert.equal(state.executions(), 1);
+  assert.equal(events.length, 2);
+  assert.equal(events[0]?.eventId, events[1]?.eventId);
+});
+
+test("lost or cancelled lease prevents adapter execution", async () => {
+  const state = setup({ reportMission: async () => { throw new LeaseRejectedError(); } });
+  await assert.rejects(state.worker.tick(), LeaseRejectedError);
+  assert.equal(state.executions(), 0);
+});
+
+test("unregistered repository fails without executing an adapter", async () => {
+  const state = setup({ claimMission: async () => ({ ...mission, repositoryId: "unauthorized" }) });
+  await state.worker.tick();
+  assert.equal(state.executions(), 0);
+  assert.equal(state.reports.at(-1)?.kind, "failed");
+});
+
+test("polls never overlap", async () => {
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  let claims = 0;
+  const state = setup({ claimMission: async () => { claims += 1; await pending; return mission; } });
+  const first = state.worker.tick();
+  await state.worker.tick();
+  release();
+  await first;
+  assert.equal(claims, 1);
+});

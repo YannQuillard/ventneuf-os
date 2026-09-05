@@ -1,6 +1,6 @@
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
 import type { Database } from "./client.js";
-import { conversations, members, messages, missionEvents, missions, organizations } from "./schema.js";
+import { conversations, devices, members, messages, missionEvents, missions, organizations } from "./schema.js";
 
 export class ConversationRuntimeRepository {
   constructor(private readonly database: Database) {}
@@ -15,6 +15,7 @@ export class ConversationRuntimeRepository {
     organizationId: string;
     externalSubject: string;
     content: string;
+    runner?: { deviceId: string; repositoryId: string };
   }) {
     const acceptedAt = new Date();
     return this.database.withOrganization(input.organizationId, async (transaction) => {
@@ -56,6 +57,23 @@ export class ConversationRuntimeRepository {
       }
       if (!member) throw new Error("Failed to resolve the authenticated member.");
 
+      // Keep concurrent submissions in the same private conversation.
+      await transaction.select({ id: members.id }).from(members).where(and(
+        eq(members.organizationId, input.organizationId), eq(members.id, member.id),
+      )).for("update");
+
+      if (input.runner) {
+        const [device] = await transaction.select().from(devices).where(and(
+          eq(devices.organizationId, input.organizationId),
+          eq(devices.id, input.runner.deviceId),
+          eq(devices.memberId, member.id),
+          isNull(devices.revokedAt),
+        )).for("share").limit(1);
+        if (!device?.repositories.some(({ id }) => id === input.runner!.repositoryId)) {
+          throw new RunnerAssignmentError();
+        }
+      }
+
       let [conversation] = await transaction
         .select()
         .from(conversations)
@@ -96,9 +114,11 @@ export class ConversationRuntimeRepository {
           conversationId: conversation.id,
           requestedByMemberId: member.id,
           goal: input.content,
+          assignedDeviceId: input.runner?.deviceId,
           context: {
             sourceMessageId: message.id,
-            type: "hermes.conversation",
+            type: input.runner ? "runner.repository-check" : "hermes.conversation",
+            ...(input.runner ? { repositoryId: input.runner.repositoryId } : {}),
             timing: { acceptedAt: acceptedAt.toISOString() },
           },
           createdAt: acceptedAt,
@@ -263,19 +283,21 @@ export class ConversationRuntimeRepository {
     missionId: string,
     context: Record<string, unknown>,
   ) {
-    return this.database.withOrganization(organizationId, (transaction) =>
-      transaction
-        .update(missions)
-        .set({ status: "cancelled", context, updatedAt: new Date() })
-        .where(
-          and(
-            eq(missions.organizationId, organizationId),
-            eq(missions.id, missionId),
-            inArray(missions.status, ["queued", "running", "waiting_for_approval"]),
-          ),
-        )
-        .returning({ id: missions.id }),
-    );
+    return this.database.withOrganization(organizationId, async (transaction) => {
+      const cancelledAt = new Date();
+      const cancelled = await transaction.update(missions)
+        .set({ status: "cancelled", context, updatedAt: cancelledAt })
+        .where(and(
+          eq(missions.organizationId, organizationId), eq(missions.id, missionId),
+          inArray(missions.status, ["queued", "running", "waiting_for_approval"]),
+        ))
+        .returning({ id: missions.id, assignedDeviceId: missions.assignedDeviceId });
+      if (cancelled[0]?.assignedDeviceId) {
+        await transaction.insert(missionEvents).values({ organizationId, missionId,
+          type: "run.cancelled", payload: { executor: "runner" }, occurredAt: cancelledAt });
+      }
+      return cancelled.map(({ id }) => ({ id }));
+    });
   }
 
   appendMissionEvent(input: {
@@ -318,4 +340,8 @@ export class ConversationRuntimeRepository {
         .where(and(eq(missions.organizationId, organizationId), eq(missions.id, missionId))),
     );
   }
+}
+
+export class RunnerAssignmentError extends Error {
+  constructor() { super("The device or registered repository is unavailable."); }
 }

@@ -12,6 +12,7 @@ export interface LaunchAgentConfiguration {
   runnerSourceDirectory: string;
   controlPlaneUrl: string;
   webOrigins: string;
+  repositoriesFile?: string;
   homeDirectory?: string;
   userId?: number;
 }
@@ -64,6 +65,7 @@ export function renderLaunchAgentPlist(configuration: LaunchAgentConfiguration) 
     <string>${values.controlPlaneUrl}</string>
     <key>VENTNEUF_WEB_ORIGINS</key>
     <string>${values.webOrigins}</string>
+    ${configuration.repositoriesFile ? `<key>VENTNEUF_REPOSITORIES_FILE</key>\n    <string>${escapeXml(configuration.repositoriesFile)}</string>` : ""}
   </dict>
   <key>RunAtLoad</key>
   <true/>

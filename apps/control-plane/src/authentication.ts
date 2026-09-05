@@ -20,6 +20,7 @@ const authenticatedCapabilities: Capability[] = [
   "system:identity:read",
   "knowledge:shared:read",
   "knowledge:personal:read",
+  "mission:create",
   "mission:read",
   "mission:progress:write",
   "device:manage",

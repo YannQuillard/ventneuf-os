@@ -8,6 +8,7 @@ import { createRemoteMcpServer } from "./mcp.js";
 import type { ConversationRuntime } from "./runtime.js";
 import { assertAuthorized } from "@ventneuf/domain";
 import { z } from "zod";
+import { registerRunnerRoutes } from "./runner-routes.js";
 import {
   createDeviceCredential,
   createEnrollmentToken,
@@ -25,6 +26,8 @@ export interface AppServices {
 
 export function createApp({ verifier, hermes, conversations, host = "127.0.0.1" }: AppServices) {
   const app = createMcpExpressApp({ host });
+
+  registerRunnerRoutes(app, verifier, conversations);
 
   app.get("/health", (_request, response) => {
     response.json({ service: "ventneuf-os-control-plane", status: "ok" });

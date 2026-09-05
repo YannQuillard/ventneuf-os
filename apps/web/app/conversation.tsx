@@ -118,7 +118,7 @@ export function HermesConversation() {
     if (payload.mission) {
       setAwaitingReply(payload.mission.status === "queued" || payload.mission.status === "running");
       if (payload.mission.status === "failed") {
-        setError(payload.mission.failure ?? "Hermes could not complete the request.");
+        setError(payload.mission.failure ?? "The mission could not complete.");
       }
     }
     const lastMessage = payload.messages.at(-1);
@@ -365,7 +365,7 @@ export function HermesConversation() {
                       <div className="mission-progress" role="status">
                         <Spinner aria-hidden="true" size="sm" />
                         <span className="thinking-shimmer">
-                          {mission?.status === "queued" ? "Queued" : "Hermes is working"}
+                          {mission?.status === "queued" ? "Queued" : "Mission is running"}
                         </span>
                         <span className="mission-elapsed">
                           {formatDuration(mission?.timing?.acceptedAt
@@ -380,6 +380,11 @@ export function HermesConversation() {
                           clickAction={stopMission}
                         />
                       </div>
+                      {missionEvents.filter((event) => event.type === "runner.progress").slice(-1).map((event) => (
+                        <Text key={event.id} type="supporting" color="secondary">
+                          {typeof event.payload.content === "string" ? event.payload.content : "Runner is working"}
+                        </Text>
+                      ))}
                       {visibleActivities.length > 0 ? (
                         <div className="mission-activity" aria-label="Mission activity">
                           <div className="mission-activity-heading">

@@ -12,6 +12,7 @@ interface Device {
   id: string;
   name: string;
   platform: string;
+  repositories?: Array<{ id: string; name: string }>;
   lastSeenAt?: string;
 }
 
@@ -28,6 +29,7 @@ export function RunnerSetup() {
   const [local, setLocal] = useState<LocalStatus>();
   const [cloudDevices, setCloudDevices] = useState<Device[]>([]);
   const [error, setError] = useState<string>();
+  const [missionNotice, setMissionNotice] = useState<string>();
 
   const refresh = useCallback(async () => {
     const [localResult, cloudResult] = await Promise.allSettled([
@@ -77,6 +79,21 @@ export function RunnerSetup() {
     }
   }, [refresh]);
 
+  const checkRepository = async (deviceId: string, repositoryId: string) => {
+    setMissionNotice(undefined);
+    setError(undefined);
+    try {
+      const response = await fetch("/api/missions/runner", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ deviceId, repositoryId }),
+      });
+      if (!response.ok) throw new Error("Unable to start the repository check.");
+      setMissionNotice("Repository check queued. Progress and results appear in the conversation.");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to start the repository check.");
+    }
+  };
+
   const currentDevice = local?.device;
   const onlineCount = cloudDevices.filter(recentlySeen).length;
   const isOnline = local?.status === "online" || onlineCount > 0;
@@ -94,6 +111,18 @@ export function RunnerSetup() {
           <Text type="supporting" color="secondary" maxLines={2}>{detail}</Text>
         </VStack>
       </HStack>
+      {cloudDevices.flatMap((device) => (device.repositories ?? []).map((repository) => (
+        <HStack key={`${device.id}:${repository.id}`} gap={2} vAlign="center">
+          <VStack gap={0}>
+            <Text type="label">{repository.name}</Text>
+            <Text type="supporting" color="secondary">{device.name}</Text>
+          </VStack>
+          <Button label="Check" tooltip="Check this repository without changing files" size="sm" variant="ghost"
+            isDisabled={!recentlySeen(device)} clickAction={() => checkRepository(device.id, repository.id)} />
+        </HStack>
+      )))}
+      {missionNotice ? <Text type="supporting" color="secondary" role="status">{missionNotice}</Text> : null}
+      {error ? <Text type="supporting" role="alert">{error}</Text> : null}
       {local?.status !== "online" ? (
         <Button label="Connect this Mac" variant="secondary" size="sm" width="100%" clickAction={connect} />
       ) : null}
