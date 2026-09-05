@@ -8,6 +8,11 @@ import type { HermesClient } from "./hermes.js";
 import { createRemoteMcpServer } from "./mcp.js";
 import type { ConversationRuntime } from "./runtime.js";
 import { assertAuthorized } from "@ventneuf/domain";
+import {
+  MissionApprovalConflictError,
+  MissionApprovalPolicyError,
+  MissionApprovalUnavailableError,
+} from "@ventneuf/database";
 import { z } from "zod";
 import { registerRunnerRoutes } from "./runner-routes.js";
 import type { MissionDelegationVerifier } from "./mission-delegation.js";
@@ -166,9 +171,10 @@ export function createApp({ verifier, hermes, conversations, delegations, host =
         organizationId: context.organizationId,
         externalSubject: context.principalId,
       };
-      const [items, mission] = await Promise.all([
+      const [items, mission, approvals] = await Promise.all([
         conversations.repository.listPrivateMessages(query),
         conversations.repository.getLatestPrivateMission(query),
+        conversations.approvals?.listForMember(query) ?? Promise.resolve([]),
       ]);
       const events = mission
         ? await conversations.repository.listMissionEvents(context.organizationId, mission.id)
@@ -185,6 +191,7 @@ export function createApp({ verifier, hermes, conversations, delegations, host =
           failure: typeof missionContext?.failure === "string" ? missionContext.failure : undefined,
         } : null,
         events,
+        approvals,
       });
     } catch (error) {
       next(error);
@@ -213,6 +220,10 @@ export function createApp({ verifier, hermes, conversations, delegations, host =
         const events = mission
           ? await conversations.repository.listMissionEvents(context.organizationId, mission.id)
           : [];
+        const approvals = await conversations.approvals?.listForMember({
+          organizationId: context.organizationId,
+          externalSubject: context.principalId,
+        }) ?? [];
         const missionContext = mission?.context;
         const snapshot = JSON.stringify({
           mission: mission ? {
@@ -224,6 +235,7 @@ export function createApp({ verifier, hermes, conversations, delegations, host =
             failure: typeof missionContext?.failure === "string" ? missionContext.failure : undefined,
           } : null,
           events,
+          approvals,
         });
         if (snapshot !== previous) {
           response.write(`event: snapshot\ndata: ${snapshot}\n\n`);
@@ -250,6 +262,41 @@ export function createApp({ verifier, hermes, conversations, delegations, host =
         response.status(400).json({ error: "invalid_request" });
         return;
       }
+      next(error);
+    }
+  });
+
+  app.post("/api/conversations/hermes/approvals/:approvalId/decision", async (
+    request: Request,
+    response: Response,
+    next: NextFunction,
+  ) => {
+    try {
+      const context = await authenticate(request, response);
+      if (!context) return;
+      if (context.principalType !== "user") return void response.status(403).json({ error: "forbidden" });
+      try { assertAuthorized(context, "approval:decide"); }
+      catch { return void response.status(403).json({ error: "forbidden" }); }
+      if (!conversations?.approvals) return void response.status(503).json({ error: "conversation_runtime_unavailable" });
+      const approvalId = z.string().uuid().parse(request.params.approvalId);
+      const input = z.object({
+        requestId: z.string().uuid(),
+        decision: z.enum(["approved", "rejected"]),
+        rationale: z.string().trim().min(1).max(2_000),
+      }).strict().parse(request.body);
+      response.json(await conversations.approvals.decideByMember({
+        organizationId: context.organizationId,
+        externalSubject: context.principalId,
+        approvalId,
+        decisionRequestId: input.requestId,
+        decision: input.decision,
+        rationale: input.rationale,
+      }));
+    } catch (error) {
+      if (error instanceof z.ZodError) return void response.status(400).json({ error: "invalid_request" });
+      if (error instanceof MissionApprovalPolicyError) return void response.status(403).json({ error: "approval_forbidden" });
+      if (error instanceof MissionApprovalConflictError) return void response.status(409).json({ error: "approval_conflict" });
+      if (error instanceof MissionApprovalUnavailableError) return void response.status(404).json({ error: "approval_not_found" });
       next(error);
     }
   });

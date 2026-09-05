@@ -213,3 +213,82 @@ test("MCP dispatches for Hermes only through a matching parent delegation", asyn
     assert.equal(rejected.isError, true);
   }
 });
+
+test("MCP lets Hermes decide only the exact delegated approval", async () => {
+  const organizationId = "00000000-0000-4000-8000-000000000001";
+  const approvalId = "00000000-0000-4000-8000-000000000002";
+  const service: AuthorizationContext = {
+    organizationId,
+    principalId: "hermes-supervisor",
+    principalType: "service",
+    capabilities: ["approval:decide"],
+    projectIds: [],
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  };
+  const args = {
+    approvalId,
+    delegationToken: "signed-approval-delegation",
+    requestId: "00000000-0000-4000-8000-000000000003",
+    decision: "approved",
+    rationale: "The command is within the delegated development policy.",
+  };
+  const claims = {
+    version: 1 as const,
+    issuer: "ventneuf-control-plane" as const,
+    audience: "ventneuf-mcp" as const,
+    delegationId: "00000000-0000-4000-8000-000000000004",
+    serviceId: service.principalId,
+    organizationId,
+    parentMissionId: "00000000-0000-4000-8000-000000000005",
+    conversationId: "00000000-0000-4000-8000-000000000006",
+    memberId: "00000000-0000-4000-8000-000000000007",
+    capabilities: ["approval:decide" as const] as ["approval:decide"],
+    approvalId,
+    issuedAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  };
+  let received: unknown;
+  const services: RemoteMcpServices = {
+    delegations: { verify: async () => claims },
+    conversations: {
+      repository: {} as never,
+      queue: {} as never,
+      approvals: {
+        decideByService: async (input: unknown) => {
+          received = input;
+          return { id: approvalId, status: "approved" };
+        },
+      } as never,
+    },
+  };
+  const result = await callTool(services, service, "approval.decide", args);
+  assert.equal(result.isError, undefined);
+  assert.deepEqual(received, {
+    organizationId,
+    serviceId: service.principalId,
+    approvalId,
+    reviewMissionId: claims.parentMissionId,
+    conversationId: claims.conversationId,
+    memberId: claims.memberId,
+    decisionRequestId: args.requestId,
+    decision: args.decision,
+    rationale: args.rationale,
+  });
+
+  for (const [context, delegatedClaims] of [
+    [{ ...service, capabilities: [] }, claims],
+    [service, { ...claims, approvalId: "00000000-0000-4000-8000-000000000099" }],
+    [service, { ...claims, serviceId: "foreign-service" }],
+    [service, { ...claims, organizationId: "00000000-0000-4000-8000-000000000099" }],
+  ] as const) {
+    const rejected = await callTool({
+      delegations: { verify: async () => delegatedClaims },
+      conversations: {
+        repository: {} as never,
+        queue: {} as never,
+        approvals: { decideByService: async () => assert.fail("Foreign approval scope must fail first") } as never,
+      },
+    }, context, "approval.decide", args);
+    assert.equal(rejected.isError, true);
+  }
+});

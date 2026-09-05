@@ -242,6 +242,117 @@ test("persists and queues an authenticated Hermes message", async () => {
   }
 });
 
+test("records an explicit approval decision for the authenticated initiating member", async () => {
+  const organizationId = "00000000-0000-4000-8000-000000000001";
+  const approvalId = "00000000-0000-4000-8000-000000000002";
+  const requestId = "00000000-0000-4000-8000-000000000003";
+  let received: unknown;
+  const app = createApp({
+    verifier: { verify: async () => ({
+      organizationId,
+      principalId: "member-subject",
+      principalType: "user",
+      projectIds: [],
+      capabilities: ["approval:decide"],
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    }) },
+    hermes: { ask: async () => ({ contextId: "unused", text: "unused" }) },
+    conversations: {
+      approvals: {
+        decideByMember: async (input: unknown) => {
+          received = input;
+          return { id: approvalId, status: "approved" };
+        },
+      },
+    } as unknown as ConversationRuntime,
+  });
+  const server = createServer(app);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const response = await postJson(
+      server,
+      `/api/conversations/hermes/approvals/${approvalId}/decision`,
+      { requestId, decision: "approved", rationale: "The exact action is expected." },
+      "member-token",
+    );
+    assert.equal(response.statusCode, 200);
+    assert.deepEqual(received, {
+      organizationId,
+      externalSubject: "member-subject",
+      approvalId,
+      decisionRequestId: requestId,
+      decision: "approved",
+      rationale: "The exact action is expected.",
+    });
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("accepts a lease-bound runner approval request and queues its Hermes review", async () => {
+  const organizationId = "00000000-0000-4000-8000-000000000001";
+  const deviceId = "00000000-0000-4000-8000-000000000002";
+  const missionId = "00000000-0000-4000-8000-000000000003";
+  const approvalId = "00000000-0000-4000-8000-000000000004";
+  const reviewMissionId = "00000000-0000-4000-8000-000000000005";
+  const conversationId = "00000000-0000-4000-8000-000000000006";
+  const credential = `vnod.${organizationId}.${deviceId}.${"a".repeat(43)}`;
+  const leaseToken = "b".repeat(64);
+  const requestId = "00000000-0000-4000-8000-000000000007";
+  let received: unknown;
+  const published: unknown[] = [];
+  const app = createApp({
+    verifier: { verify: async () => undefined },
+    hermes: { ask: async () => ({ contextId: "unused", text: "unused" }) },
+    conversations: {
+      approvals: {
+        requestFromRunner: async (scope: unknown, input: unknown) => {
+          received = { scope, input };
+          return {
+            created: true,
+            approval: {
+              id: approvalId,
+              status: "pending",
+              route: "hermes",
+              expiresAt: new Date(Date.now() + 60_000).toISOString(),
+            },
+            reviewMission: { id: reviewMissionId, conversationId },
+          };
+        },
+      },
+      queue: { publish: async (...input: unknown[]) => { published.push(input); } },
+    } as unknown as ConversationRuntime,
+  });
+  const server = createServer(app);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const body = {
+      owner: "00000000-0000-4000-8000-000000000008",
+      token: leaseToken,
+      requestId,
+      action: {
+        category: "development.command",
+        target: "npm test",
+        argumentsDigest: "c".repeat(64),
+        summary: "Run the repository test suite.",
+        expectedEffect: "The test process reads the worktree and writes temporary output.",
+      },
+      reason: "The agent needs validation before opening a pull request.",
+      evidence: { command: "npm test" },
+      resume: { adapter: "codex", sessionId: "session-1" },
+    };
+    const response = await postJson(server, `/api/runner/missions/${missionId}/approvals`, body, credential);
+    assert.equal(response.statusCode, 202);
+    assert.deepEqual(received, {
+      scope: { organizationId, deviceId, credentialHash: hashDeviceToken(credential) },
+      input: { ...body, missionId, tokenHash: hashDeviceToken(leaseToken) },
+    });
+    assert.deepEqual(published, [[{ organizationId, missionId: reviewMissionId }, conversationId]]);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
 test("stops and cancels only the authenticated member's latest mission", async () => {
   const stopped: string[] = [];
   const cancelled: string[] = [];

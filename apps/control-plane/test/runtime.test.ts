@@ -136,12 +136,84 @@ test("gives Hermes a short parent-scoped dispatch grant without persisting the t
           expiresAt,
         },
       }),
+      issueApproval: async () => assert.fail("A normal mission must not receive approval delegation"),
     },
   });
 
   await worker.process({ organizationId: "organization-1", missionId: parentMissionId });
   assert.equal(JSON.stringify(persisted).includes("signed-delegation"), false);
   assert.equal((persisted[0] as { type: string }).type, "mission.delegation_issued");
+});
+
+test("gives Hermes one approval grant and escalates when it returns without a decision", async () => {
+  const approvalId = "00000000-0000-4000-8000-000000000001";
+  const reviewMissionId = "00000000-0000-4000-8000-000000000002";
+  const conversationId = "00000000-0000-4000-8000-000000000003";
+  const memberId = "00000000-0000-4000-8000-000000000004";
+  const organizationId = "00000000-0000-4000-8000-000000000005";
+  const issuedAt = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + 60_000).toISOString();
+  const persisted: unknown[] = [];
+  const escalations: unknown[] = [];
+  const base = repository();
+  const worker = new MissionWorker(repository({
+    getMission: async () => ({
+      ...(await base.getMission(organizationId, reviewMissionId)),
+      mission: {
+        ...(await base.getMission(organizationId, reviewMissionId))!.mission,
+        id: reviewMissionId,
+        conversationId,
+        context: { type: "hermes.approval", approvalId, childMissionId: "child-mission" },
+      },
+    }),
+    appendMissionEvent: async (input: unknown) => { persisted.push(input); },
+    completeMission: async (input: unknown) => { persisted.push(input); return true; },
+  }), unusedQueue, {
+    ask: async ({ message }) => {
+      assert.match(message, /signed-approval-delegation/);
+      assert.match(message, new RegExp(approvalId));
+      assert.match(message, /approval\.decide/);
+      return { contextId: "context-after", text: "Escalating to the member." };
+    },
+  }, {
+    serviceId: "hermes-supervisor",
+    issuer: {
+      verify: async () => assert.fail("The worker only issues delegations"),
+      issue: async () => assert.fail("An approval review must not receive dispatch delegation"),
+      issueApproval: async () => ({
+        token: "signed-approval-delegation",
+        claims: {
+          version: 1,
+          issuer: "ventneuf-control-plane",
+          audience: "ventneuf-mcp",
+          delegationId: "00000000-0000-4000-8000-000000000006",
+          serviceId: "hermes-supervisor",
+          organizationId,
+          parentMissionId: reviewMissionId,
+          conversationId,
+          memberId,
+          capabilities: ["approval:decide"],
+          approvalId,
+          issuedAt,
+          expiresAt,
+        },
+      }),
+    },
+  }, {
+    getHermesDecisionScope: async () => ({
+      approvalId,
+      organizationId,
+      parentMissionId: reviewMissionId,
+      conversationId,
+      memberId,
+    }),
+    escalateUnresolved: async (...input: unknown[]) => { escalations.push(input); },
+  } as never);
+
+  await worker.process({ organizationId, missionId: reviewMissionId });
+  assert.equal(JSON.stringify(persisted).includes("signed-approval-delegation"), false);
+  assert.equal((persisted[0] as { type: string }).type, "approval.delegation_issued");
+  assert.deepEqual(escalations, [[organizationId, reviewMissionId, "hermes_returned_without_decision"]]);
 });
 
 test("does not run an already completed mission", async () => {

@@ -1,7 +1,14 @@
 import { randomBytes } from "node:crypto";
 import type { Express } from "express";
-import { assertAuthorized } from "@ventneuf/domain";
-import { RunnerAccessError, RunnerAssignmentError, RunnerLeaseError } from "@ventneuf/database";
+import { approvalActionCategories, assertAuthorized } from "@ventneuf/domain";
+import {
+  MissionApprovalConflictError,
+  MissionApprovalPolicyError,
+  MissionApprovalUnavailableError,
+  RunnerAccessError,
+  RunnerAssignmentError,
+  RunnerLeaseError,
+} from "@ventneuf/database";
 import { z } from "zod";
 import { bearerToken, type TokenVerifier } from "./authentication.js";
 import { hashDeviceToken, parseDeviceCredential } from "./device-auth.js";
@@ -14,6 +21,27 @@ const lease = z.object({ owner: z.string().uuid(), token: z.string().regex(/^[a-
 const report = z.object({
   owner: z.string().uuid(), token: z.string().regex(/^[a-f0-9]{64}$/), eventId: z.string().uuid(),
   kind: z.enum(["progress", "completed", "failed"]), content: z.string().trim().min(1).max(16_000),
+}).strict();
+const approvalRequest = z.object({
+  owner: z.string().uuid(),
+  token: z.string().regex(/^[a-f0-9]{64}$/),
+  requestId: z.string().uuid(),
+  action: z.object({
+    category: z.enum(approvalActionCategories),
+    target: z.string().trim().min(1).max(500),
+    argumentsDigest: z.string().regex(/^[a-f0-9]{64}$/),
+    summary: z.string().trim().min(1).max(500),
+    expectedEffect: z.string().trim().min(1).max(1_000),
+  }).strict(),
+  reason: z.string().trim().min(1).max(2_000),
+  evidence: z.record(z.string().min(1).max(100), z.unknown()).refine(
+    (value) => JSON.stringify(value).length <= 16_000,
+    "Approval evidence is too large.",
+  ),
+  resume: z.object({
+    adapter: z.enum(["codex", "claude"]),
+    sessionId: z.string().trim().min(1).max(256).regex(/^[a-zA-Z0-9._:-]+$/),
+  }).strict(),
 }).strict();
 
 export function registerRunnerRoutes(app: Express, verifier: TokenVerifier, runtime?: ConversationRuntime) {
@@ -36,6 +64,44 @@ export function registerRunnerRoutes(app: Express, verifier: TokenVerifier, runt
     } catch (error) {
       if (error instanceof z.ZodError) return void response.status(400).json({ error: "invalid_request" });
       if (error instanceof RunnerAssignmentError) return void response.status(404).json({ error: "repository_unavailable" });
+      next(error);
+    }
+  });
+
+  app.post("/api/runner/missions/:missionId/approvals", async (request, response, next) => {
+    try {
+      if (!runtime) return void response.status(503).json({ error: "runtime_unavailable" });
+      const token = bearerToken(request);
+      const parsed = token ? parseDeviceCredential(token) : undefined;
+      if (!token || !parsed) return void response.status(401).json({ error: "unauthorized" });
+      const missionId = z.string().uuid().parse(request.params.missionId);
+      const input = approvalRequest.parse(request.body);
+      let result = await runtime.approvals.requestFromRunner(
+        { ...parsed, credentialHash: hashDeviceToken(token) },
+        { ...input, missionId, tokenHash: hashDeviceToken(input.token) },
+      );
+      if (result.reviewMission) {
+        try {
+          await runtime.queue.publish(
+            { organizationId: parsed.organizationId, missionId: result.reviewMission.id },
+            result.reviewMission.conversationId,
+          );
+        } catch {
+          const escalated = await runtime.approvals.escalateUnresolved(
+            parsed.organizationId,
+            result.reviewMission.id,
+            "approval_review_dispatch_failed",
+          );
+          if (escalated) result = { approval: escalated, created: result.created };
+        }
+      }
+      response.status(result.approval.status === "approved" ? 200 : 202).json(result);
+    } catch (error) {
+      if (error instanceof z.ZodError) return void response.status(400).json({ error: "invalid_request" });
+      if (error instanceof RunnerAccessError) return void response.status(401).json({ error: "unauthorized" });
+      if (error instanceof MissionApprovalPolicyError) return void response.status(403).json({ error: "approval_forbidden" });
+      if (error instanceof MissionApprovalConflictError) return void response.status(409).json({ error: "approval_conflict" });
+      if (error instanceof MissionApprovalUnavailableError) return void response.status(409).json({ error: "approval_unavailable" });
       next(error);
     }
   });

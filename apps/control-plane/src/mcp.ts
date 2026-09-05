@@ -9,6 +9,7 @@ import type { ConversationRuntime } from "./runtime.js";
 import { submitPrivateMessage } from "./conversations.js";
 import { dispatchReadOnlyRunnerMission } from "./missions.js";
 import type { MissionDelegationVerifier } from "./mission-delegation.js";
+import { decideApprovalAsService } from "./approvals.js";
 
 const repositoryId = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/);
 
@@ -20,7 +21,8 @@ function jsonResult(value: unknown) {
 }
 
 export interface RemoteMcpServices {
-  conversations?: Pick<ConversationRuntime, "repository" | "queue">;
+  conversations?: Pick<ConversationRuntime, "repository" | "queue">
+    & Partial<Pick<ConversationRuntime, "approvals">>;
   delegations?: MissionDelegationVerifier;
 }
 
@@ -79,6 +81,30 @@ export function createRemoteMcpServer(
       return jsonResult(await dispatchReadOnlyRunnerMission(
         context,
         services.conversations,
+        input,
+        services.delegations,
+      ));
+    },
+  );
+
+  server.registerTool(
+    "approval.decide",
+    {
+      title: "Decide a delegated approval request",
+      description: "Approve, reject, or escalate one exact coding-agent operation. A parent-scoped delegation and stable request ID are required.",
+      inputSchema: {
+        approvalId: z.string().uuid(),
+        delegationToken: z.string().min(1).max(20_000),
+        requestId: z.string().uuid(),
+        decision: z.enum(["approved", "rejected", "escalated"]),
+        rationale: z.string().trim().min(1).max(2_000),
+      },
+    },
+    async (input) => {
+      if (!services.conversations?.approvals) throw new Error("The approval runtime is unavailable.");
+      return jsonResult(await decideApprovalAsService(
+        context,
+        { approvals: services.conversations.approvals },
         input,
         services.delegations,
       ));

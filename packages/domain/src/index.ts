@@ -8,9 +8,54 @@ export type Capability =
   | "mission:dispatch"
   | "mission:read"
   | "mission:progress:write"
+  | "approval:decide"
   | "device:manage"
   | "device:heartbeat"
   | "hermes:ask";
+
+export const approvalActionCategories = [
+  "repository.write",
+  "development.command",
+  "network.access",
+  "pull_request.create",
+  "pull_request.merge",
+  "deployment.apply",
+  "connector.write",
+] as const;
+
+export type ApprovalActionCategory = typeof approvalActionCategories[number];
+export type ApprovalPolicyDecision = "allow" | "hermes" | "human" | "deny";
+
+export interface MissionAuthority {
+  version: 1;
+  expiresAt: string;
+  actions: Partial<Record<ApprovalActionCategory, ApprovalPolicyDecision>>;
+}
+
+export interface ApprovalAction {
+  category: ApprovalActionCategory;
+  target: string;
+  argumentsDigest: string;
+  summary: string;
+  expectedEffect: string;
+}
+
+export function evaluateApprovalPolicy(
+  authority: unknown,
+  category: ApprovalActionCategory,
+  now = new Date(),
+): ApprovalPolicyDecision {
+  if (!authority || typeof authority !== "object") return "deny";
+  const candidate = authority as Partial<MissionAuthority>;
+  if (candidate.version !== 1 || typeof candidate.expiresAt !== "string"
+    || !Number.isFinite(Date.parse(candidate.expiresAt))
+    || Date.parse(candidate.expiresAt) <= now.getTime()
+    || !candidate.actions || typeof candidate.actions !== "object") return "deny";
+  const decision = candidate.actions[category];
+  return decision === "allow" || decision === "hermes" || decision === "human"
+    ? decision
+    : "deny";
+}
 
 export interface AuthorizationContext {
   organizationId: string;
