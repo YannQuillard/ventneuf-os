@@ -110,3 +110,106 @@ test("MCP dispatches an objective only through the authenticated member's runner
     assert.equal(rejected.isError, true);
   }
 });
+
+test("MCP dispatches for Hermes only through a matching parent delegation", async () => {
+  const organizationId = "00000000-0000-4000-8000-000000000001";
+  const service = {
+    organizationId,
+    principalId: "hermes-supervisor",
+    principalType: "service" as const,
+    capabilities: ["mission:dispatch" as const],
+    projectIds: [],
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  };
+  const args = {
+    objective: "Inspect the repository",
+    deviceId: "00000000-0000-4000-8000-000000000002",
+    repositoryId: "ventneuf-os",
+    adapter: "orca-review",
+    delegationToken: "signed-parent-delegation",
+    requestId: "00000000-0000-4000-8000-000000000003",
+  };
+  const claims = {
+    version: 1 as const,
+    issuer: "ventneuf-control-plane" as const,
+    audience: "ventneuf-mcp" as const,
+    delegationId: "00000000-0000-4000-8000-000000000004",
+    serviceId: service.principalId,
+    organizationId,
+    parentMissionId: "00000000-0000-4000-8000-000000000005",
+    conversationId: "00000000-0000-4000-8000-000000000006",
+    memberId: "00000000-0000-4000-8000-000000000007",
+    capabilities: ["mission:dispatch" as const] as ["mission:dispatch"],
+    targets: [{
+      deviceId: args.deviceId,
+      repositoryId: args.repositoryId,
+      adapters: ["orca-review" as const],
+    }],
+    issuedAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  };
+  let received: unknown;
+  const services: RemoteMcpServices = {
+    delegations: {
+      verify: async (token) => {
+        assert.equal(token, args.delegationToken);
+        return claims;
+      },
+    },
+    conversations: { repository: {
+      enqueueDelegatedRunnerMission: async (input: unknown) => {
+        received = input;
+        return { conversationId: claims.conversationId, mission: { id: "child-mission", status: "queued" } };
+      },
+    } as never },
+  };
+  const result = await callTool(services, service, "mission.dispatch", args);
+  assert.equal(result.isError, undefined);
+  assert.deepEqual(result.structuredContent, {
+    conversationId: claims.conversationId,
+    missionId: "child-mission",
+    status: "queued",
+  });
+  assert.deepEqual(received, {
+    organizationId,
+    parentMissionId: claims.parentMissionId,
+    conversationId: claims.conversationId,
+    memberId: claims.memberId,
+    serviceId: service.principalId,
+    delegationId: claims.delegationId,
+    requestId: args.requestId,
+    expiresAt: new Date(claims.expiresAt),
+    objective: args.objective,
+    deviceId: args.deviceId,
+    repositoryId: args.repositoryId,
+    adapter: args.adapter,
+  });
+
+  for (const [context, input, delegated] of [
+    [{ ...service, capabilities: [] }, args, services.delegations],
+    [service, { ...args, delegationToken: undefined }, services.delegations],
+    [service, { ...args, requestId: undefined }, services.delegations],
+    [service, { ...args, repositoryId: "foreign" }, services.delegations],
+    [service, args, undefined],
+  ] as const) {
+    const rejected = await callTool({
+      conversations: { repository: {
+        enqueueDelegatedRunnerMission: async () => assert.fail("Invalid delegation must fail before database access"),
+      } as never },
+      delegations: delegated,
+    }, context, "mission.dispatch", input);
+    assert.equal(rejected.isError, true);
+  }
+  for (const foreignClaims of [
+    { ...claims, serviceId: "other-service" },
+    { ...claims, organizationId: "00000000-0000-4000-8000-000000000099" },
+  ]) {
+    const rejected = await callTool({
+      conversations: { repository: {
+        enqueueDelegatedRunnerMission: async () => assert.fail("Foreign claims must fail before database access"),
+      } as never },
+      delegations: { verify: async () => foreignClaims },
+    }, service, "mission.dispatch", args);
+    assert.equal(rejected.isError, true);
+  }
+});

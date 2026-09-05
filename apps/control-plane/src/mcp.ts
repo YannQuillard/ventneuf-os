@@ -8,6 +8,7 @@ import {
 import type { ConversationRuntime } from "./runtime.js";
 import { submitPrivateMessage } from "./conversations.js";
 import { dispatchReadOnlyRunnerMission } from "./missions.js";
+import type { MissionDelegationVerifier } from "./mission-delegation.js";
 
 const repositoryId = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/);
 
@@ -20,6 +21,7 @@ function jsonResult(value: unknown) {
 
 export interface RemoteMcpServices {
   conversations?: Pick<ConversationRuntime, "repository" | "queue">;
+  delegations?: MissionDelegationVerifier;
 }
 
 export function createRemoteMcpServer(
@@ -62,17 +64,24 @@ export function createRemoteMcpServer(
     "mission.dispatch",
     {
       title: "Dispatch a read-only runner mission",
-      description: "Queue a bounded read-only task on one of your enrolled devices and registered repositories.",
+      description: "Queue a bounded read-only task. User calls are ownership-scoped directly; Hermes service calls require the current parent-mission delegation and a stable request ID.",
       inputSchema: {
         objective: z.string().trim().min(1).max(4_000),
         deviceId: z.string().uuid(),
         repositoryId,
         adapter: z.enum(["repository-check", "orca-review"]).default("orca-review"),
+        delegationToken: z.string().min(1).max(20_000).optional(),
+        requestId: z.string().uuid().optional(),
       },
     },
     async (input) => {
       if (!services.conversations) throw new Error("The conversation runtime is unavailable.");
-      return jsonResult(await dispatchReadOnlyRunnerMission(context, services.conversations, input));
+      return jsonResult(await dispatchReadOnlyRunnerMission(
+        context,
+        services.conversations,
+        input,
+        services.delegations,
+      ));
     },
   );
 

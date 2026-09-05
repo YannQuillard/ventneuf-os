@@ -1,10 +1,11 @@
-export type PrincipalType = "user" | "device" | "mission";
+export type PrincipalType = "user" | "service" | "device" | "mission";
 
 export type Capability =
   | "system:identity:read"
   | "knowledge:shared:read"
   | "knowledge:personal:read"
   | "mission:create"
+  | "mission:dispatch"
   | "mission:read"
   | "mission:progress:write"
   | "device:manage"

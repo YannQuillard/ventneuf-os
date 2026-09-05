@@ -75,7 +75,7 @@ export class SecretsManagerTokenProvider implements TokenProvider {
       new GetSecretValueCommand({ SecretId: this.secretId }),
     );
     const token = response.SecretString?.trim();
-    if (!token) throw new Error("The Hermes A2A secret has no string value.");
+    if (!token) throw new Error("The configured secret has no string value.");
     this.cached = { token, expiresAt: Date.now() + this.cacheTtlMs };
     return token;
   }

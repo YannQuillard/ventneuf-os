@@ -79,6 +79,71 @@ test("processes a queued Hermes mission and persists its reply", async () => {
   assert.deepEqual(events, ["running", "running", "completed:context-after:Issue found"]);
 });
 
+test("gives Hermes a short parent-scoped dispatch grant without persisting the token", async () => {
+  const parentMissionId = "00000000-0000-4000-8000-000000000001";
+  const conversationId = "00000000-0000-4000-8000-000000000002";
+  const memberId = "00000000-0000-4000-8000-000000000003";
+  const deviceId = "00000000-0000-4000-8000-000000000004";
+  const issuedAt = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + 60_000).toISOString();
+  const persisted: unknown[] = [];
+  const base = repository();
+  const worker = new MissionWorker(repository({
+    getMission: async () => ({
+      ...(await base.getMission("organization-1", parentMissionId)),
+      mission: {
+        ...(await base.getMission("organization-1", parentMissionId))!.mission,
+        id: parentMissionId,
+        conversationId,
+      },
+    }),
+    getHermesDispatchScope: async () => ({
+      organizationId: "00000000-0000-4000-8000-000000000005",
+      parentMissionId,
+      conversationId,
+      memberId,
+      targets: [{ deviceId, repositoryId: "ventneuf-os", adapters: ["orca-review"] }],
+    }),
+    appendMissionEvent: async (input: unknown) => { persisted.push(input); },
+    completeMission: async (input: unknown) => { persisted.push(input); return true; },
+  }), unusedQueue, {
+    ask: async ({ message }) => {
+      assert.match(message, /Investigate the issue/);
+      assert.match(message, /signed-delegation/);
+      assert.match(message, new RegExp(parentMissionId));
+      assert.match(message, new RegExp(deviceId));
+      return { contextId: "context-after", text: "Delegated" };
+    },
+  }, {
+    serviceId: "hermes-supervisor",
+    issuer: {
+      verify: async () => assert.fail("The worker only issues delegations"),
+      issue: async () => ({
+        token: "signed-delegation",
+        claims: {
+          version: 1,
+          issuer: "ventneuf-control-plane",
+          audience: "ventneuf-mcp",
+          delegationId: "00000000-0000-4000-8000-000000000006",
+          serviceId: "hermes-supervisor",
+          organizationId: "00000000-0000-4000-8000-000000000005",
+          parentMissionId,
+          conversationId,
+          memberId,
+          capabilities: ["mission:dispatch"],
+          targets: [{ deviceId, repositoryId: "ventneuf-os", adapters: ["orca-review"] }],
+          issuedAt,
+          expiresAt,
+        },
+      }),
+    },
+  });
+
+  await worker.process({ organizationId: "organization-1", missionId: parentMissionId });
+  assert.equal(JSON.stringify(persisted).includes("signed-delegation"), false);
+  assert.equal((persisted[0] as { type: string }).type, "mission.delegation_issued");
+});
+
 test("does not run an already completed mission", async () => {
   let calls = 0;
   const worker = new MissionWorker(
