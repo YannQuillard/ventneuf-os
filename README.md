@@ -44,11 +44,11 @@ MCP is the tool boundary for coding agents and future device runners. A2A is cur
 
 The next product milestones are:
 
-1. mission status, retries, latency telemetry, and operational hardening;
+1. mission retries, latency optimization, and operational hardening;
 2. configurable workspaces, project channels, private conversations, and memberships;
 3. authorized knowledge tools over MCP;
-4. a local device runner with repository discovery, secure enrollment, and outbound-only connectivity;
-5. live terminal events, browser evidence, and approval controls;
+4. device-assigned mission leases, outbound runner delivery, and configuration-driven repository discovery;
+5. scoped local execution, live terminal events, browser evidence, and approval controls;
 6. GitHub, AWS, and project-management connectors;
 7. policy-based agent and model routing with usage and cost attribution;
 8. automated member and device onboarding;
