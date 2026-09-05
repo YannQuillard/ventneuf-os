@@ -193,3 +193,7 @@ body {
   border-radius: var(--radius-inner);
   background: var(--color-background-muted);
 }
+
+.prototype-chat-region > .astryx-banner {
+  flex: 0 0 auto;
+}

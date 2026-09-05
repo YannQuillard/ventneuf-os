@@ -4,7 +4,7 @@ import type { Conversation, PrototypeData } from "./types";
 export const RECENT_CONVERSATION_LIMIT = 5;
 const RECENT_VISIT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-export type NavigationEntryKind = "main" | "conversation" | "temporary" | "thread" | "channel";
+export type NavigationEntryKind = "main" | "conversation" | "temporary" | "thread" | "channel" | "devices" | "usage";
 
 export type NavigationStatus = "running" | "attention";
 
@@ -20,13 +20,39 @@ export interface NavigationEntry {
 }
 
 export interface NavigationGroup {
-  id: "personal" | "projects";
+  id: "personal" | "projects" | "workspace";
   title: string;
   entries: NavigationEntry[];
 }
 
 export function conversationHref(conversationId: string): string {
   return `/prototype/c/${conversationId}`;
+}
+
+export type ProjectTab = "overview" | "missions" | "knowledge" | "members";
+
+export const PROJECT_TABS: readonly ProjectTab[] = ["overview", "missions", "knowledge", "members"];
+
+export function isProjectTab(value: string | null | undefined): value is ProjectTab {
+  return PROJECT_TABS.includes(value as ProjectTab);
+}
+
+export function projectHref(projectId: string, tab?: ProjectTab): string {
+  return tab && tab !== "overview" ? `/prototype/p/${projectId}?tab=${tab}` : `/prototype/p/${projectId}`;
+}
+
+export const DEVICES_HREF = "/prototype/devices";
+
+export const USAGE_HREF = "/prototype/usage";
+
+export function selectionFromPath(pathname: string): string | undefined {
+  const conversation = /^\/prototype\/c\/([^/]+)/.exec(pathname);
+  if (conversation) return conversation[1];
+  const project = /^\/prototype\/p\/([^/]+)/.exec(pathname);
+  if (project) return `project:${project[1]}`;
+  if (pathname.startsWith(DEVICES_HREF)) return "devices";
+  if (pathname.startsWith(USAGE_HREF)) return "usage";
+  return undefined;
 }
 
 export type MissionTab = "overview" | "activity" | "changes" | "terminal" | "evidence";
@@ -60,7 +86,7 @@ export function conversationStatus(data: PrototypeData, conversationId: string):
 
 function threadEntries(data: PrototypeData, parentId: string, selectedId: string | undefined): NavigationEntry[] {
   return data.conversations
-    .filter((conversation) => conversation.kind === "thread" && conversation.parentId === parentId)
+    .filter((conversation) => conversation.kind === "thread" && conversation.parentId === parentId && !conversation.isArchived)
     .filter((thread) => isThreadVisible(thread, selectedId, data.now))
     .sort((left, right) => right.lastActivityAt.localeCompare(left.lastActivityAt))
     .map((thread) => ({
@@ -76,7 +102,7 @@ function threadEntries(data: PrototypeData, parentId: string, selectedId: string
 
 export function recentPersonalConversations(data: PrototypeData): Conversation[] {
   return data.conversations
-    .filter((conversation) => conversation.kind === "personal" || conversation.kind === "temporary")
+    .filter((conversation) => (conversation.kind === "personal" || conversation.kind === "temporary") && !conversation.isArchived)
     .sort((left, right) => right.lastActivityAt.localeCompare(left.lastActivityAt))
     .slice(0, RECENT_CONVERSATION_LIMIT);
 }
@@ -109,14 +135,36 @@ export function buildNavigation(data: PrototypeData, selectedId: string | undefi
     kind: "channel",
     label: project.name,
     href: conversationHref(project.channelId),
-    isSelected: project.channelId === selectedId,
+    isSelected: project.channelId === selectedId || `project:${project.id}` === selectedId,
     status: conversationStatus(data, project.channelId),
     children: threadEntries(data, project.channelId, selectedId),
   }));
 
+  const onlineDevices = data.devices.filter((device) => device.isOnline && !device.isRevoked).length;
+  const workspaceEntries: NavigationEntry[] = [
+    {
+      id: "devices",
+      kind: "devices",
+      label: "Devices and connections",
+      href: DEVICES_HREF,
+      isSelected: selectedId === "devices",
+      status: onlineDevices > 0 ? "running" : undefined,
+      children: [],
+    },
+    {
+      id: "usage",
+      kind: "usage",
+      label: "Usage and costs",
+      href: USAGE_HREF,
+      isSelected: selectedId === "usage",
+      children: [],
+    },
+  ];
+
   return [
     { id: "personal", title: "Personal", entries: personalEntries },
     { id: "projects", title: "Projects", entries: projectEntries },
+    { id: "workspace", title: "Workspace", entries: workspaceEntries },
   ];
 }
 

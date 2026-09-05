@@ -19,16 +19,30 @@ import { Timestamp } from "@astryxdesign/core/Timestamp";
 import { PaperClipIcon } from "@heroicons/react/24/outline";
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import type { MissionTab } from "../../../lib/prototype/navigation";
-import { approvalById, approvalsForMission, missionById, projectForConversation } from "../../../lib/prototype/state";
+import {
+  approvalById,
+  approvalsForMission,
+  conversationById,
+  missionById,
+  projectForConversation,
+} from "../../../lib/prototype/state";
 import type { Conversation, ConversationEntry } from "../../../lib/prototype/types";
 import { ApprovalRequest } from "./approval-request";
-import { HermesMessage, MemberMessage, MilestoneNote, SystemNote } from "./conversation-entries";
+import {
+  HermesMessage,
+  MemberMessage,
+  MilestoneNote,
+  SnapshotEntry,
+  SystemNote,
+  type ThreadReference,
+} from "./conversation-entries";
 import { MissionSummary } from "./mission-summary";
 import { usePrototype } from "./prototype-provider";
 
 interface ConversationTimelineProps {
   conversation: Conversation;
   onOpenMission: (missionId: string, tab?: MissionTab) => void;
+  onStartThread: (messageId: string) => void;
 }
 
 function dayKey(value: string): string {
@@ -41,7 +55,12 @@ function scopeLabel(conversation: Conversation, projectName: string | undefined)
   return "Personal knowledge";
 }
 
-export function ConversationTimeline({ conversation, onOpenMission }: ConversationTimelineProps) {
+function conversationLabel(conversation: Conversation | undefined): string {
+  if (!conversation) return "the conversation";
+  return conversation.kind === "project-channel" ? `#${conversation.title}` : conversation.title;
+}
+
+export function ConversationTimeline({ conversation, onOpenMission, onStartThread }: ConversationTimelineProps) {
   const { data, sendMessage, cancelMission, retryMission, decideApproval } = usePrototype();
   const entries = data.entries[conversation.id] ?? [];
   const project = projectForConversation(data, conversation);
@@ -72,9 +91,25 @@ export function ConversationTimeline({ conversation, onOpenMission }: Conversati
     composerInput.current?.focus();
   }, []);
 
+  const threadReference = (threadId: string | undefined): ThreadReference | undefined => {
+    const thread = threadId ? conversationById(data, threadId) : undefined;
+    if (!thread || thread.isArchived) return undefined;
+    const replyCount = (data.entries[thread.id] ?? []).filter((entry) => entry.kind === "message").length;
+    return { thread, replyCount };
+  };
+
   const renderEntry = (entry: ConversationEntry) => {
     if (entry.kind === "message" && entry.role === "hermes") {
-      return <HermesMessage content={entry.content} createdAt={entry.createdAt} timing={entry.timing} onQuote={quote} />;
+      return (
+        <HermesMessage
+          content={entry.content}
+          createdAt={entry.createdAt}
+          timing={entry.timing}
+          thread={threadReference(entry.threadId)}
+          onQuote={quote}
+          onStartThread={() => onStartThread(entry.id)}
+        />
+      );
     }
     if (entry.kind === "message") {
       const author = entry.authorId ? data.members.find((member) => member.id === entry.authorId) : undefined;
@@ -84,11 +119,23 @@ export function ConversationTimeline({ conversation, onOpenMission }: Conversati
           isCurrentUser={!author || Boolean(author.isCurrentUser)}
           content={entry.content}
           createdAt={entry.createdAt}
+          thread={threadReference(entry.threadId)}
+          onStartThread={() => onStartThread(entry.id)}
         />
       );
     }
     if (entry.kind === "system") {
       return <SystemNote icon={entry.icon} content={entry.content} createdAt={entry.createdAt} />;
+    }
+    if (entry.kind === "snapshot") {
+      return (
+        <SnapshotEntry
+          content={entry.content}
+          authorName={entry.authorName}
+          sourceConversationId={entry.sourceConversationId}
+          sourceLabel={conversationLabel(conversationById(data, entry.sourceConversationId))}
+        />
+      );
     }
     if (entry.kind === "milestone") {
       return <MilestoneNote title={entry.title} description={entry.description} href={entry.href} createdAt={entry.createdAt} />;
@@ -130,60 +177,54 @@ export function ConversationTimeline({ conversation, onOpenMission }: Conversati
   };
 
   return (
-    <div className="prototype-chat-region">
-      <ChatLayout
-        className="prototype-chat"
-        composer={(
-          <ChatComposer
-            value={content}
-            onChange={setContent}
-            onSubmit={submit}
-            placeholder={conversation.kind === "project-channel" ? `Message #${conversation.title}` : "Message Hermes"}
-            status={conversation.kind === "temporary"
-              ? { type: "warning", message: "Temporary conversation. Nothing here is written to durable knowledge." }
-              : undefined}
-            statusPosition="top"
-            headerActions={(
-              <IconButton
-                label="Attach a file or screenshot"
-                tooltip="Attach"
-                variant="ghost"
-                size="sm"
-                icon={<Icon icon={PaperClipIcon} size="sm" />}
-              />
-            )}
-            footerActions={<Text type="supporting">{scopeLabel(conversation, project?.name)}</Text>}
-            input={<ChatComposerInput handleRef={composerInput} />}
-          />
-        )}
-      >
-        <ChatMessageList isStreaming={isAwaitingReply}>
-          {entries.map((entry, index) => {
-            const previous = entries[index - 1];
-            const isDayStart = !previous || dayKey(previous.createdAt) !== dayKey(entry.createdAt);
-            return (
-              <Fragment key={entry.id}>
-                {isDayStart ? (
-                  <ChatSystemMessage variant="divider">
-                    <Timestamp value={entry.createdAt} format="date_weekday" hasTooltip={false} />
-                  </ChatSystemMessage>
-                ) : null}
-                {renderEntry(entry)}
-              </Fragment>
-            );
-          })}
-          {isAwaitingReply ? (
-            <ChatMessage sender="assistant">
-              <ChatMessageBubble variant="ghost" name="Hermes">
-                <HStack gap={2} vAlign="center" role="status">
-                  <Spinner size="sm" aria-label="Hermes is working" />
-                  <Text type="supporting">Hermes is working</Text>
-                </HStack>
-              </ChatMessageBubble>
-            </ChatMessage>
-          ) : null}
-        </ChatMessageList>
-      </ChatLayout>
-    </div>
+    <ChatLayout
+      className="prototype-chat"
+      composer={(
+        <ChatComposer
+          value={content}
+          onChange={setContent}
+          onSubmit={submit}
+          placeholder={conversation.kind === "project-channel" ? `Message #${conversation.title}` : "Message Hermes"}
+          headerActions={(
+            <IconButton
+              label="Attach a file or screenshot"
+              tooltip="Attach"
+              variant="ghost"
+              size="sm"
+              icon={<Icon icon={PaperClipIcon} size="sm" />}
+            />
+          )}
+          footerActions={<Text type="supporting">{scopeLabel(conversation, project?.name)}</Text>}
+          input={<ChatComposerInput handleRef={composerInput} />}
+        />
+      )}
+    >
+      <ChatMessageList isStreaming={isAwaitingReply}>
+        {entries.map((entry, index) => {
+          const previous = entries[index - 1];
+          const isDayStart = !previous || dayKey(previous.createdAt) !== dayKey(entry.createdAt);
+          return (
+            <Fragment key={entry.id}>
+              {isDayStart ? (
+                <ChatSystemMessage variant="divider">
+                  <Timestamp value={entry.createdAt} format="date_weekday" hasTooltip={false} />
+                </ChatSystemMessage>
+              ) : null}
+              {renderEntry(entry)}
+            </Fragment>
+          );
+        })}
+        {isAwaitingReply ? (
+          <ChatMessage sender="assistant">
+            <ChatMessageBubble variant="ghost" name="Hermes">
+              <HStack gap={2} vAlign="center" role="status">
+                <Spinner size="sm" aria-label="Hermes is working" />
+                <Text type="supporting">Hermes is working</Text>
+              </HStack>
+            </ChatMessageBubble>
+          </ChatMessage>
+        ) : null}
+      </ChatMessageList>
+    </ChatLayout>
   );
 }
