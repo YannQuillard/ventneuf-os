@@ -139,3 +139,15 @@ test("deletes a timed-out mission instead of executing it twice", async () => {
   assert.equal(deleted, 1);
   assert.equal(released, 0);
 });
+
+
+test("Hermes worker never executes a device-assigned mission", async () => {
+  const repository = {
+    getMission: async () => ({ mission: { status: "queued", assignedDeviceId: "device-1", context: { type: "runner.repository-check" } } }),
+    setMissionRunning: async () => { throw new Error("Must not run a runner mission through Hermes."); },
+  };
+  const worker = new MissionWorker(repository as never, {} as never, {
+    ask: async () => { throw new Error("Must not call Hermes."); },
+  });
+  await worker.process({ organizationId: "organization-1", missionId: "mission-1" });
+});

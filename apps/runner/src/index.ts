@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 import { RunnerCloudClient } from "./cloud-client.js";
 import { MacOSKeychainCredentialStore } from "./credential-store.js";
 import { installLaunchAgent, launchAgentStatus, uninstallLaunchAgent } from "./launch-agent.js";
+import { RunnerMissionWorker } from "./mission-worker.js";
+import { defaultRepositoriesFile, loadRepositories, RepositoryCheckAdapter } from "./repositories.js";
 import { LocalRunnerBridge } from "./local-bridge.js";
 
 if (process.platform !== "darwin") throw new Error("The first runner release supports macOS only.");
@@ -24,6 +26,7 @@ if (command === "install") {
     runnerSourceDirectory: dirname(fileURLToPath(import.meta.url)),
     controlPlaneUrl: controlPlaneUrl(),
     webOrigins: process.env.VENTNEUF_WEB_ORIGINS ?? defaultWebOrigins,
+    repositoriesFile: process.env.VENTNEUF_REPOSITORIES_FILE,
   });
   console.info(`Installed ventneuf.os runner at ${paths.supportDirectory}`);
 } else if (command === "uninstall") {
@@ -42,13 +45,18 @@ if (command === "install") {
   const port = Number.parseInt(process.env.VENTNEUF_RUNNER_PORT ?? "41929", 10);
   if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new Error("VENTNEUF_RUNNER_PORT is invalid.");
 
+  const client = new RunnerCloudClient(new URL(controlPlaneUrl()));
+  const store = new MacOSKeychainCredentialStore(userInfo().username);
   const bridge = new LocalRunnerBridge({
-    client: new RunnerCloudClient(new URL(controlPlaneUrl())),
-    store: new MacOSKeychainCredentialStore(userInfo().username),
+    client,
+    store,
     deviceName: hostname(),
     allowedOrigins,
   });
   await bridge.start(port);
+  new RunnerMissionWorker({ client, store, adapter: new RepositoryCheckAdapter(),
+    repositories: () => loadRepositories(process.env.VENTNEUF_REPOSITORIES_FILE ?? defaultRepositoriesFile()),
+  }).start();
   console.info(`ventneuf.os runner listening on http://127.0.0.1:${port}`);
 } else {
   throw new Error(`Unknown runner command: ${command}`);

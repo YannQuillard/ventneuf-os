@@ -10,6 +10,7 @@ import {
   ConversationRuntimeRepository,
   createDatabase,
   DeviceRuntimeRepository,
+  RunnerMissionRepository,
   type Database,
 } from "@ventneuf/database";
 import {
@@ -73,6 +74,7 @@ export interface ConversationRuntime {
   database: Database;
   repository: ConversationRuntimeRepository;
   devices: DeviceRuntimeRepository;
+  runnerMissions: RunnerMissionRepository;
   queue: MissionQueue;
   worker: MissionWorker;
 }
@@ -124,6 +126,8 @@ export class MissionWorker {
   async process(envelope: MissionEnvelope): Promise<void> {
     const record = await this.repository.getMission(envelope.organizationId, envelope.missionId);
     if (!record || record.mission.status === "completed" || record.mission.status === "cancelled") return;
+
+    if (record.mission.assignedDeviceId || record.mission.context?.type === "runner.repository-check") return;
 
     const workerReceivedAt = new Date();
     const initialContext = record.mission.context ?? {};
@@ -314,5 +318,5 @@ export async function createConversationRuntime(hermes: HermesClient, env = proc
     name: organizationName,
   });
   const queue = new MissionQueue(new SQSClient({ region }), queueUrl);
-  return { database, repository, devices, queue, worker: new MissionWorker(repository, queue, hermes) };
+  return { database, repository, devices, runnerMissions: new RunnerMissionRepository(database), queue, worker: new MissionWorker(repository, queue, hermes) };
 }
