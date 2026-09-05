@@ -93,6 +93,17 @@ test("browser API delivers a read-only mission through the real runner client an
     assert.ok(snapshot.events.some(({ type }) => type === "run.completed"));
     assert.ok(!JSON.stringify(snapshot).includes(credential.token));
     assert.ok(!JSON.stringify(snapshot).includes(temporary));
+    assert.equal((await post("/api/missions/runner", { deviceId, repositoryId: "sample", adapter: "orca-review" })).status, 404);
+    await cloud.registerRepositories(device, [{ id: "sample", name: "Sample", orcaReview: true }]);
+    assert.equal((await post("/api/missions/runner", { deviceId, repositoryId: "sample", adapter: "orca-review" })).status, 202);
+    const owner = randomUUID();
+    const review = await cloud.claimMission(device, owner);
+    assert.equal(review?.adapter, "orca-review");
+    assert.ok(review);
+    await assert.rejects(cloud.renewMission(device, review.id, { owner: randomUUID(), token: review.leaseToken }));
+    assert.ok(Date.parse(await cloud.renewMission(device, review.id, { owner, token: review.leaseToken })) >= Date.parse(review.leaseExpiresAt));
+    await repository.cancelMission(organizationId, review.id, {});
+    await assert.rejects(cloud.renewMission(device, review.id, { owner, token: review.leaseToken }));
   } finally {
     await new Promise<void>((resolve) => { server.close(() => resolve()); server.closeAllConnections(); });
     for (const table of ["mission_events", "missions", "messages", "conversations", "device_credentials", "devices", "members"]) {

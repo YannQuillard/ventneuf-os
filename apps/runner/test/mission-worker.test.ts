@@ -102,3 +102,31 @@ test("polls never overlap", async () => {
   await first;
   assert.equal(claims, 1);
 });
+
+test("long reviews renew their lease and abort when renewal is rejected", async () => {
+  let renewals = 0;
+  let aborted = false;
+  const reports: MissionReport[] = [];
+  const worker = new RunnerMissionWorker({
+    store: { load: async () => device, save: async () => {} },
+    repositories: async () => [{ id: "sample", name: "Sample", path: "/repository", orcaReview: true }],
+    renewalIntervalMs: 10,
+    client: {
+      registerRepositories: async () => {},
+      claimMission: async () => ({ ...mission, adapter: "orca-review" }),
+      reportMission: async (_device, _id, report) => { reports.push(report); },
+      renewMission: async () => {
+        renewals += 1;
+        if (renewals > 1) throw new LeaseRejectedError("Cancelled");
+        return new Date(Date.now() + 60_000).toISOString();
+      },
+    },
+    adapter: { execute: async (_mission, _repository, signal) => new Promise((_resolve, reject) => {
+      signal.addEventListener("abort", () => { aborted = true; reject(signal.reason); }, { once: true });
+    }) },
+  });
+  await worker.tick();
+  assert.equal(renewals, 2);
+  assert.equal(aborted, true);
+  assert.equal(reports.some(({ kind }) => kind === "completed"), false);
+});

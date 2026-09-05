@@ -15,7 +15,7 @@ export class ConversationRuntimeRepository {
     organizationId: string;
     externalSubject: string;
     content: string;
-    runner?: { deviceId: string; repositoryId: string };
+    runner?: { deviceId: string; repositoryId: string; adapter?: "repository-check" | "orca-review" };
   }) {
     const acceptedAt = new Date();
     return this.database.withOrganization(input.organizationId, async (transaction) => {
@@ -69,7 +69,8 @@ export class ConversationRuntimeRepository {
           eq(devices.memberId, member.id),
           isNull(devices.revokedAt),
         )).for("share").limit(1);
-        if (!device?.repositories.some(({ id }) => id === input.runner!.repositoryId)) {
+        if (!device?.repositories.some(({ id, orcaReview }) => id === input.runner!.repositoryId
+          && (input.runner!.adapter !== "orca-review" || orcaReview === true))) {
           throw new RunnerAssignmentError();
         }
       }
@@ -117,7 +118,7 @@ export class ConversationRuntimeRepository {
           assignedDeviceId: input.runner?.deviceId,
           context: {
             sourceMessageId: message.id,
-            type: input.runner ? "runner.repository-check" : "hermes.conversation",
+            type: input.runner ? `runner.${input.runner.adapter ?? "repository-check"}` : "hermes.conversation",
             ...(input.runner ? { repositoryId: input.runner.repositoryId } : {}),
             timing: { acceptedAt: acceptedAt.toISOString() },
           },

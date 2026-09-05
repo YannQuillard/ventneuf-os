@@ -58,10 +58,14 @@ test("runner assignment, concurrent claims, fenced retries, cancellation and ten
     await assert.rejects(runner.report(scope, { ...progress, owner: randomUUID() }), RunnerLeaseError);
     await assert.rejects(runner.report(scope, { ...progress, tokenHash: "wrong" }), RunnerLeaseError);
     await runner.report(scope, progress);
+    await assert.rejects(runner.renew(scope, { missionId: claimed.id, owner, tokenHash: "wrong" }), RunnerLeaseError);
+    const renewed = await runner.renew(scope, { missionId: claimed.id, owner, tokenHash: "lease-one" });
+    assert.ok(Date.parse(renewed.leaseExpiresAt) >= Date.parse(claimed.leaseExpiresAt));
     await runner.report(scope, progress);
     assert.equal((await conversations.listMissionEvents(organizationId, claimed.id)).filter(({ id }) => id === progress.eventId).length, 1);
     await assert.rejects(runner.report(scope, { ...progress, content: "Changed" }), RunnerLeaseError);
     await expire(claimed.id);
+    await assert.rejects(runner.renew(scope, { missionId: claimed.id, owner, tokenHash: "lease-one" }), RunnerLeaseError);
     await assert.rejects(runner.report(scope, { ...progress, eventId: randomUUID() }), RunnerLeaseError);
     const recovered = await runner.claim(scope, owner, "lease-two");
     assert.equal(recovered?.attempt, 2);
@@ -76,6 +80,7 @@ test("runner assignment, concurrent claims, fenced retries, cancellation and ten
     const cancelled = await enqueue();
     await runner.claim(scope, owner, "cancel-lease");
     await conversations.cancelMission(organizationId, cancelled.mission.id, cancelled.mission.context);
+    await assert.rejects(runner.renew(scope, { missionId: cancelled.mission.id, owner, tokenHash: "cancel-lease" }), RunnerLeaseError);
     assert.ok((await conversations.listMissionEvents(organizationId, cancelled.mission.id)).some(({ type }) => type === "run.cancelled"));
     await assert.rejects(runner.report(scope, { ...completion, missionId: cancelled.mission.id, tokenHash: "cancel-lease", eventId: randomUUID() }), RunnerLeaseError);
 
@@ -87,9 +92,19 @@ test("runner assignment, concurrent claims, fenced retries, cancellation and ten
     assert.equal(await runner.claim(scope, owner, "fourth"), null);
     assert.equal((await conversations.getMission(organizationId, exhausted.mission.id))?.mission.status, "failed");
     assert.ok((await conversations.listMissionEvents(organizationId, exhausted.mission.id)).some(({ type }) => type === "run.failed"));
+    const reviewInput = { organizationId, externalSubject: "runner-subject", content: "Review source",
+      runner: { deviceId, repositoryId: "sample", adapter: "orca-review" as const } };
+    await assert.rejects(conversations.enqueuePrivateMessage(reviewInput), RunnerAssignmentError);
+    await runner.register(scope, [{ id: "sample", name: "Sample", orcaReview: true }]);
+    const review = await conversations.enqueuePrivateMessage(reviewInput);
+    assert.equal((await runner.claim(scope, owner, "review-lease"))?.adapter, "orca-review");
+    await expire(review.mission.id);
+    assert.equal(await runner.claim(scope, owner, "second-review"), null);
+    assert.equal((await conversations.getMission(organizationId, review.mission.id))?.mission.status, "failed");
     const revoked = await enqueue();
     await runner.claim(scope, owner, "revoked-lease");
     await client`update devices set revoked_at = now() where id = ${deviceId}`;
+    await assert.rejects(runner.renew(scope, { missionId: revoked.mission.id, owner, tokenHash: "revoked-lease" }), RunnerAccessError);
     await assert.rejects(runner.report(scope, { ...completion, missionId: revoked.mission.id, tokenHash: "revoked-lease" }), RunnerAccessError);
     await assert.rejects(enqueue(), RunnerAssignmentError);
   } finally {

@@ -12,7 +12,7 @@ interface Device {
   id: string;
   name: string;
   platform: string;
-  repositories?: Array<{ id: string; name: string }>;
+  repositories?: Array<{ id: string; name: string; orcaReview?: boolean }>;
   lastSeenAt?: string;
 }
 
@@ -79,16 +79,16 @@ export function RunnerSetup() {
     }
   }, [refresh]);
 
-  const checkRepository = async (deviceId: string, repositoryId: string) => {
+  const checkRepository = async (deviceId: string, repositoryId: string, adapter = "repository-check") => {
     setMissionNotice(undefined);
     setError(undefined);
     try {
       const response = await fetch("/api/missions/runner", {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ deviceId, repositoryId }),
+        body: JSON.stringify({ deviceId, repositoryId, adapter }),
       });
-      if (!response.ok) throw new Error("Unable to start the repository check.");
-      setMissionNotice("Repository check queued. Progress and results appear in the conversation.");
+      if (!response.ok) throw new Error("Unable to start the repository mission.");
+      setMissionNotice(`${adapter === "orca-review" ? "Read-only review" : "Repository check"} queued. Progress and results appear in the conversation.`);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to start the repository check.");
     }
@@ -119,6 +119,8 @@ export function RunnerSetup() {
           </VStack>
           <Button label="Check" tooltip="Check this repository without changing files" size="sm" variant="ghost"
             isDisabled={!recentlySeen(device)} clickAction={() => checkRepository(device.id, repository.id)} />
+          {repository.orcaReview ? <Button label="Review" tooltip="Review committed source with Codex in read-only mode" size="sm" variant="ghost"
+            isDisabled={!recentlySeen(device)} clickAction={() => checkRepository(device.id, repository.id, "orca-review")} /> : null}
         </HStack>
       )))}
       {missionNotice ? <Text type="supporting" color="secondary" role="status">{missionNotice}</Text> : null}

@@ -24,7 +24,7 @@ export class RunnerCloudClient {
     return response.json();
   }
 
-  async registerRepositories(device: StoredDevice, repositories: Array<{ id: string; name: string }>) {
+  async registerRepositories(device: StoredDevice, repositories: Array<{ id: string; name: string; orcaReview?: boolean }>) {
     await this.missionRequest(device, "/api/runner/repositories", { repositories });
   }
 
@@ -33,7 +33,7 @@ export class RunnerCloudClient {
     if (payload.mission === null) return null;
     const mission = payload.mission;
     if (!mission || typeof mission.id !== "string" || !/^[a-f0-9-]{36}$/.test(mission.id)
-      || typeof mission.repositoryId !== "string" || mission.adapter !== "repository-check"
+      || typeof mission.repositoryId !== "string" || !["repository-check", "orca-review"].includes(mission.adapter)
       || typeof mission.leaseToken !== "string" || !/^[a-f0-9]{64}$/.test(mission.leaseToken)
       || !Number.isFinite(Date.parse(mission.leaseExpiresAt))) throw new Error("Invalid runner mission response.");
     return mission;
@@ -42,6 +42,12 @@ export class RunnerCloudClient {
   async reportMission(device: StoredDevice, missionId: string, report: MissionReport) {
     const result = await this.missionRequest(device, `/api/runner/missions/${encodeURIComponent(missionId)}/report`, report) as { status?: string };
     if (report.kind === "progress" && result.status !== "running") throw new LeaseRejectedError("The mission stopped.");
+  }
+
+  async renewMission(device: StoredDevice, missionId: string, lease: { owner: string; token: string }) {
+    const result = await this.missionRequest(device, `/api/runner/missions/${encodeURIComponent(missionId)}/renew`, lease) as { leaseExpiresAt?: string };
+    if (!result.leaseExpiresAt || !Number.isFinite(Date.parse(result.leaseExpiresAt))) throw new Error("Invalid runner lease response.");
+    return result.leaseExpiresAt;
   }
 
   async enroll(token: string, name: string): Promise<StoredDevice> {

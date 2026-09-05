@@ -13,6 +13,8 @@ export interface LaunchAgentConfiguration {
   controlPlaneUrl: string;
   webOrigins: string;
   repositoriesFile?: string;
+  orcaPath?: string;
+  codexPath?: string;
   homeDirectory?: string;
   userId?: number;
 }
@@ -66,6 +68,8 @@ export function renderLaunchAgentPlist(configuration: LaunchAgentConfiguration) 
     <key>VENTNEUF_WEB_ORIGINS</key>
     <string>${values.webOrigins}</string>
     ${configuration.repositoriesFile ? `<key>VENTNEUF_REPOSITORIES_FILE</key>\n    <string>${escapeXml(configuration.repositoriesFile)}</string>` : ""}
+    ${configuration.orcaPath ? `<key>VENTNEUF_ORCA_PATH</key>\n    <string>${escapeXml(configuration.orcaPath)}</string>` : ""}
+    ${configuration.codexPath ? `<key>VENTNEUF_CODEX_PATH</key>\n    <string>${escapeXml(configuration.codexPath)}</string>` : ""}
   </dict>
   <key>RunAtLoad</key>
   <true/>
