@@ -11,7 +11,7 @@ export async function proxyControlPlane(path: string, method: "GET" | "POST", re
   let refreshed: Awaited<ReturnType<typeof refreshAccessToken>> = null;
   if (accessTokenNeedsRefresh(token)) {
     if (!refreshToken) return unauthorized();
-    refreshed = await refreshAccessToken(refreshToken, getAuthConfig());
+    refreshed = await refreshAccessToken(refreshToken, await getAuthConfig());
     if (!refreshed) return unauthorized();
     token = refreshed.accessToken;
   }

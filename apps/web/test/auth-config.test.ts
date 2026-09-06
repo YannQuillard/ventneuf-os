@@ -10,8 +10,8 @@ const baseEnvironment = {
   NODE_ENV: "production",
 };
 
-test("reads the session secret from the Amplify environment secret payload", () => {
-  const config = getAuthConfig({
+test("reads the session secret from the Amplify environment secret payload", async () => {
+  const config = await getAuthConfig({
     ...baseEnvironment,
     secrets: JSON.stringify({
       AUTH_SESSION_SECRET: "an-amplify-secret-that-is-at-least-32-characters",
@@ -22,8 +22,8 @@ test("reads the session secret from the Amplify environment secret payload", () 
   assert.equal(config.redirectUri, "https://app.example.com/auth/callback");
 });
 
-test("prefers an explicit environment value over the Amplify secret payload", () => {
-  const config = getAuthConfig({
+test("prefers an explicit environment value over the Amplify secret payload", async () => {
+  const config = await getAuthConfig({
     ...baseEnvironment,
     AUTH_SESSION_SECRET: "an-explicit-secret-that-is-at-least-32-characters",
     secrets: JSON.stringify({
@@ -34,13 +34,30 @@ test("prefers an explicit environment value over the Amplify secret payload", ()
   assert.equal(config.sessionSecret, "an-explicit-secret-that-is-at-least-32-characters");
 });
 
-test("fails closed when the Amplify secret payload is invalid or incomplete", () => {
-  assert.throws(
-    () => getAuthConfig({ ...baseEnvironment, secrets: "not-json" }),
+test("reads the session secret from the configured SSM parameter", async () => {
+  let requestedParameter: string | undefined;
+  const config = await getAuthConfig(
+    {
+      ...baseEnvironment,
+      AUTH_SESSION_SECRET_PARAMETER: "/amplify/app/main/AUTH_SESSION_SECRET",
+    },
+    async (parameterName) => {
+      requestedParameter = parameterName;
+      return "an-ssm-secret-that-is-at-least-32-characters";
+    },
+  );
+
+  assert.equal(requestedParameter, "/amplify/app/main/AUTH_SESSION_SECRET");
+  assert.equal(config.sessionSecret, "an-ssm-secret-that-is-at-least-32-characters");
+});
+
+test("fails closed when no valid session secret is available", async () => {
+  await assert.rejects(
+    getAuthConfig({ ...baseEnvironment, secrets: "not-json" }),
     /AUTH_SESSION_SECRET is required/,
   );
-  assert.throws(
-    () => getAuthConfig({ ...baseEnvironment, secrets: JSON.stringify({ AUTH_SESSION_SECRET: 42 }) }),
+  await assert.rejects(
+    getAuthConfig({ ...baseEnvironment, secrets: JSON.stringify({ AUTH_SESSION_SECRET: 42 }) }),
     /AUTH_SESSION_SECRET is required/,
   );
 });

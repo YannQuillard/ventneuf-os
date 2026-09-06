@@ -23,7 +23,7 @@ async function proxy(method: "GET" | "POST", request?: NextRequest) {
 
   if (accessTokenNeedsRefresh(token)) {
     if (!refreshToken) return unauthorized();
-    refreshed = await refreshAccessToken(refreshToken, getAuthConfig());
+    refreshed = await refreshAccessToken(refreshToken, await getAuthConfig());
     if (!refreshed) return unauthorized();
     token = refreshed.accessToken;
   }
