@@ -1,5 +1,6 @@
 "use client";
 
+import { AssistantMessage } from "../../_components/assistant-message";
 import { Blockquote } from "@astryxdesign/core/Blockquote";
 import { ChatMessage, ChatMessageBubble, ChatMessageMetadata, ChatSystemMessage } from "@astryxdesign/core/Chat";
 import { Icon } from "@astryxdesign/core/Icon";
@@ -73,10 +74,7 @@ export function HermesMessage({ content, createdAt, timing, thread, onQuote, onS
     .join(" · ");
 
   return (
-    <ChatMessage sender="assistant">
-      <ChatMessageBubble variant="ghost" width="100%" name="Hermes">
-        <Markdown contentWidth={760} headingLevelStart={3}>{content}</Markdown>
-      </ChatMessageBubble>
+    <AssistantMessage footer={thread ? <ThreadLink reference={thread} /> : null} metadata={(
       <ChatMessageMetadata
         timestamp={<Timestamp value={createdAt} format="time" />}
         footer={(
@@ -102,8 +100,9 @@ export function HermesMessage({ content, createdAt, timing, thread, onQuote, onS
           </HStack>
         )}
       />
-      {thread ? <ThreadLink reference={thread} /> : null}
-    </ChatMessage>
+    )}>
+      <Markdown contentWidth={760} headingLevelStart={3}>{content}</Markdown>
+    </AssistantMessage>
   );
 }
 

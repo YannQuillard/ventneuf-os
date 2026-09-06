@@ -4,11 +4,11 @@ import { BottomSheet } from "@astryxdesign/core/BottomSheet";
 import { useMediaQuery } from "@astryxdesign/core/hooks";
 import { missionStatusPresentation } from "../lib/mission-presentation";
 import executionStyles from "./agent-execution.module.css";
-import { Avatar } from "@astryxdesign/core/Avatar";
+import { PageHeader } from "./_components/page-header";
+import { ConversationSurface } from "./_components/conversation-surface";
+import { useWorkspaceNavigation } from "./workspace";
+import { ChatBubbleLeftRightIcon } from "@heroicons/react/24/outline";
 import {
-  ChatComposer,
-  ChatComposerInput,
-  ChatLayout,
   ChatMessage,
   ChatMessageBubble,
   ChatMessageList,
@@ -19,7 +19,7 @@ import { ClickableCard } from "@astryxdesign/core/ClickableCard";
 import { Button } from "@astryxdesign/core/Button";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { Grid } from "@astryxdesign/core/Grid";
-import { HStack, VStack } from "@astryxdesign/core/Layout";
+import { HStack, VStack, Layout, LayoutContent } from "@astryxdesign/core/Layout";
 import { Spinner } from "@astryxdesign/core/Spinner";
 import { Heading, Text } from "@astryxdesign/core/Text";
 import { Timestamp } from "@astryxdesign/core/Timestamp";
@@ -32,7 +32,6 @@ import { AgentExecutionPanel } from "./agent-execution";
 import type { AgentExecution } from "../lib/agent-execution";
 
 const chatColumn: CSSProperties = { flex: 1, minWidth: 0, height: "100%" };
-const chatLayout: CSSProperties = { flex: 1, minHeight: 0 };
 
 const suggestions = [
   {
@@ -86,6 +85,7 @@ function lastAssistantRetry(messages: Message[]) {
 }
 
 export function HermesConversation() {
+  const { isMobile, openNavigation } = useWorkspaceNavigation();
   const [messages, setMessages] = useState<Message[]>([]);
   const [pending, setPending] = useState<PendingMessage[]>([]);
   const [content, setContent] = useState("");
@@ -296,28 +296,18 @@ export function HermesConversation() {
   }, [selected, selectedMessageId]);
 
   return (
-    <VStack height="100%" className="conversation-surface">
+    <>
+      <Layout height="fill" header={
+        <PageHeader title="Hermes" subtitle="Private · personal knowledge" icon={ChatBubbleLeftRightIcon}
+          onOpenNavigation={isMobile ? openNavigation : undefined}
+          actions={agentExecution ? <Button
+            label={isMobile ? "Mission" : `Mission · ${missionStatusPresentation[agentExecution.status].label}`}
+            variant="ghost" size="sm" clickAction={() => setIsAgentOpen(true)} /> : undefined} />
+      } content={<LayoutContent padding={0} isScrollable={false}>
       <HStack height="100%">
         <VStack style={chatColumn}>
-          {agentExecution ? <HStack padding={3}>
-            <Button label={`${agentExecution.provider === "claude" ? "Claude Code" : "Codex"} · ${missionStatusPresentation[agentExecution.status].label} · Open mission`}
-              variant="secondary" size="sm" clickAction={() => setIsAgentOpen(true)} />
-          </HStack> : null}
-          <ChatLayout
-            style={chatLayout}
-            composer={(
-              <ChatComposer
-                value={content}
-                onChange={setContent}
-                onSubmit={(value) => {
-                  setContent("");
-                  void submit(value);
-                }}
-                placeholder="Message Hermes"
-                status={error ? { type: "error", message: error } : undefined}
-                input={<ChatComposerInput handleRef={composerInput} />}
-              />
-            )}
+          <ConversationSurface value={content} onChange={setContent} inputRef={composerInput} error={error}
+            onSubmit={(value) => { setContent(""); void submit(value); }}
             emptyState={isLoaded ? (
               <VStack gap={6} hAlign="center" width="100%" maxWidth={560} padding={4}>
                 <EmptyState
@@ -378,8 +368,8 @@ export function HermesConversation() {
                   );
                 })}
                 {awaitingReply ? (
-                  <ChatMessage sender="assistant" avatar={<Avatar name="Hermes" size="md" />}>
-                    <ChatMessageBubble variant="ghost">
+                  <ChatMessage sender="assistant">
+                    <ChatMessageBubble variant="ghost" name="Hermes">
                       <div className="mission-progress" role="status">
                         <Spinner aria-hidden="true" size="sm" />
                         <span className="thinking-shimmer">
@@ -439,7 +429,7 @@ export function HermesConversation() {
                 ) : null}
               </ChatMessageList>
             ) : null}
-          </ChatLayout>
+          </ConversationSurface>
         </VStack>
         {agentExecution && isAgentOpen && !isCompact ? <aside className={executionStyles.panel}>
           <AgentExecutionPanel key={agentExecution.missionId} execution={agentExecution} presentation="panel"
@@ -447,10 +437,11 @@ export function HermesConversation() {
         </aside> : null}
         {selected ? <MessageDetailsPanel message={selected} onClose={closeDetails} /> : null}
       </HStack>
+      </LayoutContent>} />
       {agentExecution && isCompact ? <BottomSheet isOpen={isAgentOpen} onOpenChange={setIsAgentOpen} label="Mission details" height="tall">
         <AgentExecutionPanel key={agentExecution.missionId} execution={agentExecution} presentation="sheet"
           onClose={() => setIsAgentOpen(false)} onStop={() => void stopMission(agentExecution.missionId)} isStopping={isStopping} />
       </BottomSheet> : null}
-    </VStack>
+    </>
   );
 }

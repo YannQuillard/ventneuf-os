@@ -1,6 +1,6 @@
 "use client";
 
-import { Avatar } from "@astryxdesign/core/Avatar";
+import { AssistantMessage } from "./_components/assistant-message";
 import {
   ChatMessage,
   ChatMessageBubble,
@@ -41,7 +41,7 @@ function RevealingMarkdown({ content, onRevealed }: { content: string; onReveale
     if (displayed === content) onRevealed();
   }, [content, displayed, onRevealed]);
 
-  return <Markdown contentWidth={840} isStreaming>{displayed}</Markdown>;
+  return <Markdown contentWidth={760} headingLevelStart={3} isStreaming>{displayed}</Markdown>;
 }
 
 function InspectAction({ onInspect }: { onInspect?: () => void }) {
@@ -164,14 +164,7 @@ export function ConversationMessage({
   const duration = formatDuration(timing(message)?.totalMs);
 
   return (
-    <ChatMessage sender="assistant" avatar={<Avatar name="Hermes" size="md" />}>
-      <ChatMessageBubble variant="ghost" width="100%">
-        {isRevealing && onRevealed ? (
-          <RevealingMarkdown content={message.content} onRevealed={onRevealed} />
-        ) : (
-          <Markdown contentWidth={840}>{message.content}</Markdown>
-        )}
-      </ChatMessageBubble>
+    <AssistantMessage metadata={(
       <ChatMessageMetadata
         timestamp={<Timestamp value={message.createdAt} format="time" />}
         footer={(
@@ -209,6 +202,12 @@ export function ConversationMessage({
           </div>
         )}
       />
-    </ChatMessage>
+    )}>
+        {isRevealing && onRevealed ? (
+          <RevealingMarkdown content={message.content} onRevealed={onRevealed} />
+        ) : (
+          <Markdown contentWidth={760} headingLevelStart={3}>{message.content}</Markdown>
+        )}
+    </AssistantMessage>
   );
 }

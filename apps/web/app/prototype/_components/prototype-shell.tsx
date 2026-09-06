@@ -1,11 +1,10 @@
 "use client";
 
-import { AppShell } from "@astryxdesign/core/AppShell";
+import { WorkspaceFrame } from "../../_components/workspace-frame";
 import { CommandPalette, CommandPaletteFooter } from "@astryxdesign/core/CommandPalette";
 import { useHotkeys, useMediaQuery } from "@astryxdesign/core/hooks";
 import { Icon, type IconType } from "@astryxdesign/core/Icon";
 import { Item } from "@astryxdesign/core/Item";
-import { Theme } from "@astryxdesign/core/theme";
 import { createStaticSource } from "@astryxdesign/core/Typeahead";
 import {
   ArrowTopRightOnSquareIcon,
@@ -28,7 +27,6 @@ import { conversationById, currentMember } from "../../../lib/prototype/state";
 import { NewConversationDialog } from "./conversation-dialogs";
 import { NavigationRows } from "./navigation-rows";
 import { usePrototype } from "./prototype-provider";
-import { prototypeTheme } from "./prototype-theme";
 import { buildSearchItems, SEARCH_ACTIONS, type SearchItem, type SearchItemKind } from "./search-items";
 import { ShellContext, type ShellContextValue } from "./shell-context";
 import { WorkspaceSideNav } from "./workspace-side-nav";
@@ -133,12 +131,8 @@ export function PrototypeShell({ children }: { children: ReactNode }) {
 
   return (
     <ShellContext value={shell}>
-      <Theme theme={prototypeTheme}>
-        <AppShell
-          variant="section"
-          contentPadding={0}
-          mobileNav={false}
-          sideNav={(
+      <WorkspaceFrame
+          navigation={(
             <WorkspaceSideNav
               navigation={navigation}
               member={member}
@@ -146,18 +140,7 @@ export function PrototypeShell({ children }: { children: ReactNode }) {
               onNewConversation={() => openNewConversation(false)}
             />
           )}
-        >
-          {showsNavigationRows ? (
-            <NavigationRows
-              navigation={navigation}
-              member={member}
-              device={device}
-              onNavigate={navigate}
-              onOpenSearch={openSearch}
-              onNewConversation={() => openNewConversation(false)}
-            />
-          ) : children}
-        </AppShell>
+          overlays={<>
         <CommandPalette
           isOpen={isPaletteOpen}
           onOpenChange={setPaletteOpen}
@@ -174,7 +157,20 @@ export function PrototypeShell({ children }: { children: ReactNode }) {
           onOpenChange={(isOpen) => setNewConversation((current) => ({ ...current, isOpen }))}
           onCreate={createConversation}
         />
-      </Theme>
+          </>}
+        >
+          {showsNavigationRows ? (
+            <NavigationRows
+              navigation={navigation}
+              member={member}
+              device={device}
+              onNavigate={navigate}
+              onOpenSearch={openSearch}
+              onNewConversation={() => openNewConversation(false)}
+            />
+          ) : children}
+      </WorkspaceFrame>
+
     </ShellContext>
   );
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import { DeviceSection } from "../../_components/device-section";
 import { Button } from "@astryxdesign/core/Button";
 import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
 import { FormLayout } from "@astryxdesign/core/FormLayout";
@@ -145,17 +146,8 @@ function DeviceRows({ device }: { device: Device }) {
   ].filter(Boolean).join(" · ");
 
   return (
-    <VStack gap={1}>
-      <HStack gap={2} vAlign="center" paddingBlock={1}>
-        <StatusDot variant={device.isOnline ? "success" : "neutral"} label={device.isOnline ? "Online" : "Offline"} />
-        <Text weight="semibold">{device.name}</Text>
-        <StackItem size="fill">
-          <Text type="supporting" maxLines={1}>{detail}</Text>
-        </StackItem>
-        <Text type="supporting">
-          {device.isOnline ? "Heartbeat " : "Last seen "}
-          <Timestamp value={device.lastSeenAt} format="time" />
-        </Text>
+    <DeviceSection name={device.name} isOnline={device.isOnline} detail={detail} lastSeenAt={device.lastSeenAt}
+      actions={
         <MoreMenu
           label={`${device.name} options`}
           size="sm"
@@ -165,7 +157,7 @@ function DeviceRows({ device }: { device: Device }) {
             { label: "Revoke device credential", variant: "destructive", onClick: () => dispatch({ type: "revokeDevice", deviceId: device.id, at: clock() }) },
           ]}
         />
-      </HStack>
+      }>
       {device.repositories.length > 0 ? (
         <List density="compact" hasDividers>
           {device.repositories.map((assignment) => {
@@ -203,7 +195,7 @@ function DeviceRows({ device }: { device: Device }) {
           })}
         </List>
       ) : <Text type="supporting">No repository assigned. Register one from the runner configuration on this Mac.</Text>}
-    </VStack>
+    </DeviceSection>
   );
 }
 

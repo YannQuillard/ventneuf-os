@@ -1,0 +1,2 @@
+.page { height: 100%; min-height: 0; min-width: 0; }
+.page[hidden] { display: none; }

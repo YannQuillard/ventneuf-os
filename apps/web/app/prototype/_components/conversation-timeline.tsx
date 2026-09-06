@@ -1,15 +1,13 @@
 "use client";
 
 import {
-  ChatComposer,
-  ChatComposerInput,
-  ChatLayout,
   ChatMessage,
   ChatMessageBubble,
   ChatMessageList,
   ChatSystemMessage,
   type ChatComposerInputHandle,
 } from "@astryxdesign/core/Chat";
+import { ConversationSurface } from "../../_components/conversation-surface";
 import { Icon } from "@astryxdesign/core/Icon";
 import { IconButton } from "@astryxdesign/core/IconButton";
 import { HStack } from "@astryxdesign/core/Layout";
@@ -177,14 +175,9 @@ export function ConversationTimeline({ conversation, onOpenMission, onStartThrea
   };
 
   return (
-    <ChatLayout
-      className="prototype-chat"
-      composer={(
-        <ChatComposer
-          value={content}
-          onChange={setContent}
-          onSubmit={submit}
-          placeholder={conversation.kind === "project-channel" ? `Message #${conversation.title}` : "Message Hermes"}
+    <ConversationSurface value={content} onChange={setContent} onSubmit={submit} inputRef={composerInput}
+      placeholder={conversation.kind === "project-channel" ? `Message #${conversation.title}` : "Message Hermes"}
+      scope={scopeLabel(conversation, project?.name)}
           headerActions={(
             <IconButton
               label="Attach a file or screenshot"
@@ -194,10 +187,6 @@ export function ConversationTimeline({ conversation, onOpenMission, onStartThrea
               icon={<Icon icon={PaperClipIcon} size="sm" />}
             />
           )}
-          footerActions={<Text type="supporting">{scopeLabel(conversation, project?.name)}</Text>}
-          input={<ChatComposerInput handleRef={composerInput} />}
-        />
-      )}
     >
       <ChatMessageList isStreaming={isAwaitingReply}>
         {entries.map((entry, index) => {
@@ -225,6 +214,6 @@ export function ConversationTimeline({ conversation, onOpenMission, onStartThrea
           </ChatMessage>
         ) : null}
       </ChatMessageList>
-    </ChatLayout>
+    </ConversationSurface>
   );
 }
