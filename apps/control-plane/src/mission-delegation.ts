@@ -1,6 +1,7 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { GenerateMacCommand, KMSClient, VerifyMacCommand } from "@aws-sdk/client-kms";
 import { z } from "zod";
+import { postgresUuidSchema } from "./device-auth.js";
 import { StaticTokenProvider, type TokenProvider } from "./hermes.js";
 
 const adapterSchema = z.enum(["repository-check", "orca-review", "codex-development", "claude-development"]);
@@ -17,7 +18,7 @@ const baseClaimsSchema = z.object({
   audience: z.literal("ventneuf-mcp"),
   delegationId: z.string().uuid(),
   serviceId: z.string().min(1).max(100),
-  organizationId: z.string().uuid(),
+  organizationId: postgresUuidSchema,
   parentMissionId: z.string().uuid(),
   conversationId: z.string().uuid(),
   memberId: z.string().uuid(),
