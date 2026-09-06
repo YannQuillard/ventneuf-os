@@ -12,6 +12,15 @@ Use English exclusively in code, comments, tests, commit messages, user-facing p
 - Keep human, device, runner, and mission identities distinct.
 - Keep vaults, projects, profiles, and devices configuration-driven. Never hard-code member names or personal paths.
 
+## Coding agent adapters
+
+- Treat Codex and Claude Code as complete execution harnesses. Use their native autonomy, sandbox, tool, workflow, subagent, and approval mechanisms instead of rebuilding them in Ventneuf.
+- The runner coordinates mission identity, worktree ownership, model and capability selection, leases, cancellation, observable events, approval routing, and result collection.
+- Do not add language, executable, package-manager, or shell-syntax allowlists. Do not wrap runtimes such as Node.js or Python to compensate for an adapter policy.
+- Let routine development work run under the coding agent's native automatic mode. Route an agent's concrete request for elevated or external action to Hermes, which either decides within delegated authority or escalates to the initiating member.
+- Keep mandatory authority boundaries for credentials, connectors, merge, deployment, and writes outside the mission scope in the control plane or runner broker.
+- Add an adapter restriction only for a reproduced risk that the upstream harness does not already address. Document the evidence and prefer an upstream configuration or fix over a parallel security layer.
+
 ## Security
 
 - Never commit secrets, private vault data, production configuration, infrastructure state, or conversation exports.
