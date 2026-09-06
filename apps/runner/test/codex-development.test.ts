@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { CodexDevelopmentAdapter } from "../src/codex-development.js";
+import { CodexDevelopmentAdapter, developmentOrcaRequestTimeoutMs } from "../src/codex-development.js";
 import { writeReviewState } from "../src/review-supervisor.js";
 
 test("maintenance rotates through retained missions and stops cloud failures", async () => {
@@ -45,4 +45,10 @@ test("maintenance rotates through retained missions and stops cloud failures", a
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("worktree creation outlives the ordinary Orca request timeout", () => {
+  assert.equal(developmentOrcaRequestTimeoutMs(["repo", "show"]), 20_000);
+  assert.equal(developmentOrcaRequestTimeoutMs(["terminal", "create"]), 20_000);
+  assert.equal(developmentOrcaRequestTimeoutMs(["worktree", "create"]), 120_000);
 });
