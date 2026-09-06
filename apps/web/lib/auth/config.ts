@@ -4,6 +4,7 @@ export interface AuthConfig {
   clientId: string;
   issuerBaseUrl: string;
   logoutUri: string;
+  region: string;
   redirectUri: string;
   sessionSecret: string;
   sessionMaxAgeSeconds: number;
@@ -86,6 +87,10 @@ export async function getAuthConfig(
     throw new Error("COGNITO_DOMAIN must use HTTPS in production.");
   }
 
+  const inferredRegion = parsedIssuer.hostname.match(/\.auth\.([a-z0-9-]+)\.amazoncognito\.com$/)?.[1];
+  const region = environment.COGNITO_REGION?.trim() || inferredRegion;
+  if (!region) throw new Error("COGNITO_REGION is required to use native authentication.");
+
   const sessionSecret = await resolveSessionSecret(environment, secretReader);
 
   if (sessionSecret.length < 32) {
@@ -96,6 +101,7 @@ export async function getAuthConfig(
     clientId: required(environment, "COGNITO_CLIENT_ID"),
     issuerBaseUrl,
     logoutUri: required(environment, "AUTH_LOGOUT_URI"),
+    region,
     redirectUri: required(environment, "AUTH_REDIRECT_URI"),
     sessionSecret,
     sessionMaxAgeSeconds: DEFAULT_SESSION_MAX_AGE_SECONDS,

@@ -7,6 +7,7 @@ const baseEnvironment = {
   AUTH_REDIRECT_URI: "https://app.example.com/auth/callback",
   COGNITO_CLIENT_ID: "client-id",
   COGNITO_DOMAIN: "https://auth.example.com",
+  COGNITO_REGION: "eu-west-1",
   NODE_ENV: "production",
 };
 
@@ -59,5 +60,27 @@ test("fails closed when no valid session secret is available", async () => {
   await assert.rejects(
     getAuthConfig({ ...baseEnvironment, secrets: JSON.stringify({ AUTH_SESSION_SECRET: 42 }) }),
     /AUTH_SESSION_SECRET is required/,
+  );
+});
+
+test("infers the Cognito region from the standard hosted domain", async () => {
+  const config = await getAuthConfig({
+    ...baseEnvironment,
+    AUTH_SESSION_SECRET: "an-explicit-secret-that-is-at-least-32-characters",
+    COGNITO_DOMAIN: "https://workspace.auth.eu-central-1.amazoncognito.com",
+    COGNITO_REGION: undefined,
+  });
+
+  assert.equal(config.region, "eu-central-1");
+});
+
+test("fails closed when the Cognito region cannot be resolved", async () => {
+  await assert.rejects(
+    getAuthConfig({
+      ...baseEnvironment,
+      AUTH_SESSION_SECRET: "an-explicit-secret-that-is-at-least-32-characters",
+      COGNITO_REGION: undefined,
+    }),
+    /COGNITO_REGION is required/,
   );
 });
