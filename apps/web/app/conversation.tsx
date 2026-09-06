@@ -5,12 +5,11 @@ import { useMediaQuery } from "@astryxdesign/core/hooks";
 import { missionStatusPresentation } from "../lib/mission-presentation";
 import executionStyles from "./agent-execution.module.css";
 import { PageHeader } from "./_components/page-header";
+import { AssistantMessage } from "./_components/assistant-message";
 import { ConversationSurface } from "./_components/conversation-surface";
 import { useWorkspaceNavigation } from "./workspace";
 import { ChatBubbleLeftRightIcon } from "@heroicons/react/24/outline";
 import {
-  ChatMessage,
-  ChatMessageBubble,
   ChatMessageList,
   ChatSystemMessage,
   type ChatComposerInputHandle,
@@ -368,64 +367,62 @@ export function HermesConversation() {
                   );
                 })}
                 {awaitingReply ? (
-                  <ChatMessage sender="assistant">
-                    <ChatMessageBubble variant="ghost" name="Hermes">
-                      <div className="mission-progress" role="status">
-                        <Spinner aria-hidden="true" size="sm" />
-                        <span className="thinking-shimmer">
-                          {mission?.status === "queued" ? "Queued" : "Mission is running"}
-                        </span>
-                        <span className="mission-elapsed">
-                          {formatDuration(mission?.timing?.acceptedAt
-                            ? Math.max(0, now - new Date(mission.timing.acceptedAt).getTime())
-                            : undefined)}
-                        </span>
-                        <Button
-                          label="Stop"
-                          variant="ghost"
-                          size="sm"
-                          isLoading={isStopping}
-                          clickAction={() => { if (mission) void stopMission(mission.id); }}
-                        />
-                      </div>
-                      {missionEvents.filter((event) => event.type === "runner.progress").slice(-1).map((event) => (
-                        <Text key={event.id} type="supporting" color="secondary">
-                          {typeof event.payload.content === "string" ? event.payload.content : "Runner is working"}
-                        </Text>
-                      ))}
-                      {visibleActivities.length > 0 ? (
-                        <div className="mission-activity" aria-label="Mission activity">
-                          <div className="mission-activity-heading">
-                            <span>Activity</span>
-                            <span>{activities.length} {activities.length === 1 ? "tool" : "tools"}</span>
-                          </div>
-                          {visibleActivities.map((activity) => (
-                            <div className="mission-event" data-status={activity.status} key={activity.id}>
-                              <span className="mission-event-indicator" aria-hidden="true" />
-                              <div className="mission-event-content">
-                                <div className="mission-event-summary">
-                                  <strong>{activity.label}</strong>
-                                  <span>
-                                    {activity.status === "running"
-                                      ? "Running"
-                                      : activity.status === "failed"
-                                        ? "Failed"
-                                        : formatDuration(activity.durationMs) ?? "Done"}
-                                  </span>
-                                </div>
-                                {activity.preview ? (
-                                  <details className="mission-event-details">
-                                    <summary>Show input</summary>
-                                    <code>{activity.preview}</code>
-                                  </details>
-                                ) : null}
-                              </div>
-                            </div>
-                          ))}
+                  <AssistantMessage>
+                    <div className="mission-progress" role="status">
+                      <Spinner aria-hidden="true" size="sm" />
+                      <span className="thinking-shimmer">
+                        {mission?.status === "queued" ? "Queued" : "Mission is running"}
+                      </span>
+                      <span className="mission-elapsed">
+                        {formatDuration(mission?.timing?.acceptedAt
+                          ? Math.max(0, now - new Date(mission.timing.acceptedAt).getTime())
+                          : undefined)}
+                      </span>
+                      <Button
+                        label="Stop"
+                        variant="ghost"
+                        size="sm"
+                        isLoading={isStopping}
+                        clickAction={() => { if (mission) void stopMission(mission.id); }}
+                      />
+                    </div>
+                    {missionEvents.filter((event) => event.type === "runner.progress").slice(-1).map((event) => (
+                      <Text key={event.id} type="supporting" color="secondary">
+                        {typeof event.payload.content === "string" ? event.payload.content : "Runner is working"}
+                      </Text>
+                    ))}
+                    {visibleActivities.length > 0 ? (
+                      <div className="mission-activity" aria-label="Mission activity">
+                        <div className="mission-activity-heading">
+                          <span>Activity</span>
+                          <span>{activities.length} {activities.length === 1 ? "tool" : "tools"}</span>
                         </div>
-                      ) : null}
-                    </ChatMessageBubble>
-                  </ChatMessage>
+                        {visibleActivities.map((activity) => (
+                          <div className="mission-event" data-status={activity.status} key={activity.id}>
+                            <span className="mission-event-indicator" aria-hidden="true" />
+                            <div className="mission-event-content">
+                              <div className="mission-event-summary">
+                                <strong>{activity.label}</strong>
+                                <span>
+                                  {activity.status === "running"
+                                    ? "Running"
+                                    : activity.status === "failed"
+                                      ? "Failed"
+                                      : formatDuration(activity.durationMs) ?? "Done"}
+                                </span>
+                              </div>
+                              {activity.preview ? (
+                                <details className="mission-event-details">
+                                  <summary>Show input</summary>
+                                  <code>{activity.preview}</code>
+                                </details>
+                              ) : null}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </AssistantMessage>
                 ) : null}
               </ChatMessageList>
             ) : null}
