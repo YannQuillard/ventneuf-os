@@ -12,7 +12,7 @@ const localMac = (secret: string) => new HmacMissionDelegationMac(new StaticToke
 
 const input = {
   serviceId: "hermes-supervisor",
-  organizationId: "00000000-0000-4000-8000-000000000001",
+  organizationId: "4fa55520-fa01-d779-8b85-4d2b823e0abb",
   parentMissionId: "00000000-0000-4000-8000-000000000002",
   conversationId: "00000000-0000-4000-8000-000000000003",
   memberId: "00000000-0000-4000-8000-000000000004",
