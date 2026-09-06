@@ -10,6 +10,7 @@ const config = {
   clientId: "client-id",
   issuerBaseUrl: "https://auth.example.com",
   logoutUri: "https://app.example.com",
+  region: "eu-west-1",
   redirectUri: "https://app.example.com/auth/callback",
   sessionMaxAgeSeconds: 2_592_000,
   sessionSecret: "a-secret-that-is-at-least-32-characters",

@@ -1,0 +1,83 @@
+.page {
+  position: relative;
+  min-height: 100svh;
+  overflow: hidden auto;
+  background:
+    radial-gradient(circle at 50% 0%, var(--color-accent-muted), transparent 42%),
+    var(--color-background-body);
+}
+
+.page::before {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(var(--color-border) 1px, transparent 1px),
+    linear-gradient(90deg, var(--color-border) 1px, transparent 1px);
+  background-size: 32px 32px;
+  content: "";
+  mask-image: linear-gradient(to bottom, black, transparent 72%);
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.glow {
+  position: absolute;
+  top: -25%;
+  left: 50%;
+  width: 48rem;
+  height: 48rem;
+  border-radius: var(--radius-full);
+  background: var(--color-accent-muted);
+  filter: blur(96px);
+  opacity: 0.45;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.shell {
+  min-width: 0;
+}
+
+.brand {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+  width: fit-content;
+  margin-inline: auto;
+}
+
+.setup {
+  display: grid;
+  gap: var(--spacing-4);
+  justify-items: center;
+  padding: var(--spacing-4);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-element);
+  background: var(--color-background-muted);
+  text-align: center;
+}
+
+.qrCode {
+  display: block;
+  width: 192px;
+  max-width: 100%;
+  border-radius: var(--radius-inner);
+}
+
+@media (max-width: 480px) {
+  .page::before {
+    background-size: 24px 24px;
+  }
+
+  .glow {
+    width: 32rem;
+    height: 32rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .glow {
+    filter: blur(72px);
+  }
+}
