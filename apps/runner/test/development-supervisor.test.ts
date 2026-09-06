@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   classifyCodexApproval,
   codexAppServerArguments,
+  codexProcessEnvironment,
   superviseDevelopment,
   type DevelopmentJob,
 } from "../src/development-supervisor.js";
@@ -13,7 +14,7 @@ import { writeReviewState } from "../src/review-supervisor.js";
 
 const sessionId = "00000000-0000-4000-8000-000000000002";
 
-test("classifies exact Codex operations and rejects paths outside the mission worktree", () => {
+test("classifies native Codex approval requests without restricting shell syntax", () => {
   const worktree = "/workspace/mission";
   const base = { threadId: "thread-1", itemId: "item-1", cwd: worktree, command: "npm test" };
   assert.equal(classifyCodexApproval("item/commandExecution/requestApproval", base, worktree, sessionId)?.action.category,
@@ -34,11 +35,17 @@ test("classifies exact Codex operations and rejects paths outside the mission wo
   assert.equal(classifyCodexApproval("item/commandExecution/requestApproval", { ...base, cwd: "/workspace/other" }, worktree, sessionId), undefined);
   assert.equal(classifyCodexApproval("item/commandExecution/requestApproval", {
     ...base, command: "git push origin HEAD && gh pr merge 42",
-  }, worktree, sessionId), undefined);
+  }, worktree, sessionId)?.action.category, "pull_request.merge");
   assert.equal(classifyCodexApproval("item/commandExecution/requestApproval", {
+    ...base, command: "python3 - <<'PY'\nprint('hello')\nPY",
+  }, worktree, sessionId)?.action.category, "development.command");
+  const external = classifyCodexApproval("item/commandExecution/requestApproval", {
     ...base,
     additionalPermissions: { fileSystem: { write: ["/workspace/other"] } },
-  }, worktree, sessionId), undefined);
+  }, worktree, sessionId);
+  assert.equal(external?.action.category, "development.command");
+  assert.equal(external?.action.target, "filesystem access outside the mission worktree");
+  assert.equal(external?.evidence.filesystem, "external");
   assert.equal(classifyCodexApproval("item/fileChange/requestApproval", {
     threadId: "thread-1", itemId: "item-2", grantRoot: "/workspace/other",
   }, worktree, sessionId), undefined);
@@ -65,6 +72,19 @@ test("classifies exact Codex operations and rejects paths outside the mission wo
   });
   assert.equal(JSON.stringify(sensitive).includes("secret-value"), false);
   assert.equal(JSON.stringify(sensitive).includes("password"), false);
+  const permissions = classifyCodexApproval("item/permissions/requestApproval", {
+    threadId: "thread-1",
+    itemId: "item-3",
+    cwd: worktree,
+    permissions: { network: { enabled: true } },
+  }, worktree, sessionId);
+  assert.equal(permissions?.action.category, "network.access");
+  assert.deepEqual(permissions?.evidence, {
+    method: "item/permissions/requestApproval",
+    cwd: ".",
+    filesystem: "none",
+    network: true,
+  });
 });
 
 test("runs a durable App Server turn through a structured approval", { timeout: 10_000 }, async () => {
@@ -86,14 +106,13 @@ test("runs a durable App Server turn through a structured approval", { timeout: 
     await writeFile(gitBranchRef, "ref\n");
     const executable = join(directory, "fake-codex");
     await writeFile(executable, `#!${process.execPath}\n`
-      + "if (process.argv[2] === 'sandbox') { const index = process.argv.lastIndexOf('probe'); require('node:fs').writeFileSync(process.argv[index + 1], 'changed\\n'); console.log('isolated'); process.exit(0); }\n"
       + "const readline = require('node:readline').createInterface({ input: process.stdin });\n"
       + "readline.on('line', (line) => { const message = JSON.parse(line);\n"
       + "if (message.method === 'initialize') console.log(JSON.stringify({ id: message.id, result: { userAgent: 'fake', codexHome: '/fake', platformFamily: 'unix', platformOs: 'macos' } }));\n"
-      + "if (message.method === 'thread/start') console.log(JSON.stringify({ id: message.id, result: { thread: { id: 'thread-1', sessionId: '00000000-0000-4000-8000-000000000002' } } }));\n"
-      + "if (message.method === 'turn/start') { console.log(JSON.stringify({ id: message.id, result: { turn: { id: 'turn-1' } } }));"
-      + ` console.log(JSON.stringify({ method: 'item/commandExecution/requestApproval', id: 99, params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1', command: 'git push origin HEAD', cwd: ${JSON.stringify(worktree)}, networkApprovalContext: { host: 'github.com', protocol: 'https' } } })); }\n`
-      + "if (message.id === 99 && message.result?.decision === 'accept') {"
+      + "if (message.method === 'thread/start') { if (message.params.sandbox !== 'workspace-write' || message.params.permissions !== undefined || message.params.approvalPolicy !== 'on-request' || message.params.approvalsReviewer !== 'user') process.exit(20); console.log(JSON.stringify({ id: message.id, result: { thread: { id: 'thread-1', sessionId: '00000000-0000-4000-8000-000000000002' } } })); }\n"
+      + "if (message.method === 'turn/start') { if (message.params.permissions !== undefined || message.params.approvalPolicy !== 'on-request' || message.params.approvalsReviewer !== 'user') process.exit(21); console.log(JSON.stringify({ id: message.id, result: { turn: { id: 'turn-1' } } }));"
+      + ` console.log(JSON.stringify({ method: 'item/permissions/requestApproval', id: 99, params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1', cwd: ${JSON.stringify(worktree)}, startedAtMs: Date.now(), permissions: { network: { enabled: true } } } })); }\n`
+      + "if (message.id === 99 && message.result?.permissions?.network?.enabled === true && message.result?.scope === 'turn') {"
       + " console.log(JSON.stringify({ method: 'item/completed', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'agentMessage', text: 'Opened https://github.com/example/repository/pull/1' } } }));"
       + " console.log(JSON.stringify({ method: 'turn/completed', params: { threadId: 'thread-1', turn: { id: 'turn-1', status: 'completed' } } })); } });\n"
       + "setInterval(() => {}, 1000);\n", { mode: 0o700 });
@@ -132,16 +151,23 @@ test("runs a durable App Server turn through a structured approval", { timeout: 
     assert.equal(JSON.parse(await readFile(join(directory, "approval-consumed.json"), "utf8")).approvalId,
       "00000000-0000-4000-8000-000000000003");
     assert.match(await readFile(join(directory, "result.txt"), "utf8"), /pull\/1/);
-    const args = codexAppServerArguments(job);
-    assert.ok(args.includes("--strict-config"));
-    assert.ok(args.some((value) => value.includes("permissions.ventneuf-development.network.enabled=false")));
+    const args = codexAppServerArguments();
+    assert.deepEqual(args.slice(0, 2), ["app-server", "--stdio"]);
+    assert.ok(!args.includes("--strict-config"));
+    assert.ok(!args.some((value) => value.includes("permissions.")));
     assert.ok(args.includes("web_search=\"live\""));
     assert.ok(args.includes("features.skill_search=true"));
     assert.ok(args.includes("features.skip_host_skill_discovery=false"));
     assert.ok(args.includes("features.multi_agent=true"));
     assert.ok(args.includes("features.view_image=true"));
     assert.ok(args.includes("features.image_generation=true"));
+    assert.ok(!args.includes("apps._default.enabled=false"));
+    assert.ok(!args.includes("features.plugins=false"));
     assert.ok(!args.join(" ").includes("credential"));
+    const environment = codexProcessEnvironment(job);
+    assert.ok(environment.PATH.includes("/usr/bin"));
+    assert.equal(environment.GIT_AUTHOR_NAME, "Test Author");
+    assert.equal("GIT_CONFIG_GLOBAL" in environment, false);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

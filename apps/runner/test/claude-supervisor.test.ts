@@ -1,14 +1,16 @@
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import type { DevelopmentJob } from "../src/development-supervisor.js";
 import {
   claudeArguments,
   claudeMissionSettings,
+  claudeProcessEnvironment,
   classifyClaudeTool,
   handleClaudeHook,
+  renderClaudeStreamEvent,
   superviseClaudeDevelopment,
 } from "../src/claude-supervisor.js";
 import { writeReviewState } from "../src/review-supervisor.js";
@@ -76,14 +78,23 @@ test("confines Claude tools and exposes only bounded approval evidence", async (
       file_path: join(state.directory, "private.txt"),
     })).behavior, "deny");
     assert.equal(classifyClaudeTool(state.job, hook(state.job, "WebSearch", { query: "Node.js documentation" })).behavior,
-      "allow");
-    assert.equal(classifyClaudeTool(state.job, hook(state.job, "AskUserQuestion", {})).behavior, "deny");
-    assert.equal(classifyClaudeTool(state.job, hook(state.job, "Bash", { command: "npm test" })).behavior, "allow");
+      "passthrough");
+    assert.equal(classifyClaudeTool(state.job, hook(state.job, "AskUserQuestion", {})).behavior, "passthrough");
+    assert.equal(classifyClaudeTool(state.job, hook(state.job, "Bash", { command: "npm test" })).behavior,
+      "passthrough");
     assert.equal(classifyClaudeTool(state.job, hook(state.job, "Bash", {
-      command: "git push origin HEAD && gh pr create --fill",
+      command: "python3 -m pytest && npm test",
+    })).behavior, "passthrough");
+    assert.equal(classifyClaudeTool(state.job, hook(state.job, "Bash", {
+      command: "npm test",
+      cwd: state.directory,
     })).behavior, "deny");
-    assert.equal(classifyClaudeTool(state.job, hook(state.job, "Bash", { command: "terraform apply" })).behavior,
-      "deny");
+
+    const deployment = classifyClaudeTool(state.job, hook(state.job, "Bash", { command: "terraform apply" }));
+    assert.equal(deployment.behavior, "defer");
+    if (deployment.behavior === "defer") {
+      assert.equal(deployment.candidate.request.action.category, "deployment.apply");
+    }
 
     const push = classifyClaudeTool(state.job, hook(state.job, "Bash", { command: "git push origin HEAD" }));
     assert.equal(push.behavior, "defer");
@@ -91,15 +102,28 @@ test("confines Claude tools and exposes only bounded approval evidence", async (
     assert.equal(push.candidate.request.action.category, "network.access");
     assert.equal(push.candidate.request.action.target, "github.com");
     assert.match(push.candidate.request.action.argumentsDigest, /^[a-f0-9]{64}$/);
-    assert.deepEqual(push.candidate.domains, ["github.com"]);
+
+    assert.equal(classifyClaudeTool(state.job, hook(state.job, "Bash", {
+      command: "npm install",
+    }, "tool-2")).behavior, "passthrough");
 
     const sensitive = classifyClaudeTool(state.job, hook(state.job, "Bash", {
       command: "npm install --token=private-token",
       description: "Use private-token",
-    }, "tool-2"));
+      dangerouslyDisableSandbox: true,
+    }, "tool-3"));
     assert.equal(sensitive.behavior, "defer");
     if (sensitive.behavior !== "defer") return;
     assert.equal(JSON.stringify(sensitive.candidate.request).includes("private-token"), false);
+
+    const elevated = classifyClaudeTool(state.job, hook(state.job, "Bash", {
+      command: "python3 scripts/release.py",
+      dangerouslyDisableSandbox: true,
+    }, "tool-4"));
+    assert.equal(elevated.behavior, "defer");
+    if (elevated.behavior === "defer") {
+      assert.equal(elevated.candidate.request.action.category, "development.command");
+    }
   } finally {
     await rm(state.directory, { recursive: true, force: true });
   }
@@ -152,29 +176,41 @@ test("binds an approval decision to one exact deferred Claude tool", async () =>
   }
 });
 
-test("builds a fail-closed Claude CLI and sandbox configuration", async () => {
+test("uses Claude native autonomy with mission-scoped authority boundaries", async () => {
   const state = await fixture();
   try {
-    const settings = claudeMissionSettings(state.job, ["registry.npmjs.org"], state.directory);
+    const settings = claudeMissionSettings(state.job, state.directory);
     assert.equal(settings.permissions.disableBypassPermissionsMode, "disable");
     assert.equal(settings.sandbox.enabled, true);
     assert.equal(settings.sandbox.failIfUnavailable, true);
-    assert.equal(settings.sandbox.allowUnsandboxedCommands, false);
-    assert.equal(settings.sandbox.network.strictAllowlist, true);
-    assert.deepEqual(settings.sandbox.network.allowedDomains, ["registry.npmjs.org"]);
-    assert.ok(settings.sandbox.filesystem.denyRead.includes(homedir()));
-    assert.ok(settings.sandbox.filesystem.allowRead.some((path) => path.endsWith("/cwd-*")));
-    assert.ok(!settings.sandbox.filesystem.allowRead.includes(join(homedir(), ".ssh")));
-    assert.ok(!settings.sandbox.filesystem.allowRead.includes(join(homedir(), ".config", "gh")));
+    assert.equal(settings.sandbox.autoAllowBashIfSandboxed, true);
+    assert.equal(settings.sandbox.allowUnsandboxedCommands, true);
+    assert.equal("network" in settings.sandbox, false);
+    assert.equal("denyRead" in settings.sandbox.filesystem, false);
+    assert.equal("allowRead" in settings.sandbox.filesystem, false);
+    assert.equal("denyWrite" in settings.sandbox.filesystem, false);
+    for (const path of [state.job.gitDirectory, state.job.gitObjectsDirectory, state.job.gitBranchRef,
+      `${state.job.gitBranchRef}.lock`, state.job.gitBranchLog, `${state.job.gitBranchLog}.lock`]) {
+      assert.ok(settings.sandbox.filesystem.allowWrite.includes(path));
+    }
     assert.ok(settings.sandbox.credentials.envVars.every(({ mode }) => mode === "deny"));
+    const environment = claudeProcessEnvironment(state.job);
+    assert.equal(environment.PATH.split(":")[0], dirname(state.job.agentPath!));
+    assert.ok(environment.PATH.split(":").includes(dirname(process.execPath)));
+    for (const name of ["TMPDIR", "CLAUDE_CODE_TMPDIR", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "NPM_CONFIG_CACHE",
+      "NPM_CONFIG_USERCONFIG", "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"]) assert.equal(name in environment, false);
+    assert.equal(environment.GIT_CONFIG_NOSYSTEM, "1");
+    for (const name of ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "GH_TOKEN", "GITHUB_TOKEN", "NPM_TOKEN",
+      "ANTHROPIC_API_KEY"]) assert.equal(name in environment, false);
     const args = claudeArguments(state.job, { directory: state.directory, resume: false });
-    assert.ok(args.includes("--restricted"));
+    assert.ok(!args.includes("--restricted"));
     assert.equal(args[args.indexOf("--model") + 1], "opus");
-    assert.ok(args.includes("manual"));
+    assert.ok(args.includes("auto"));
     assert.ok(args.includes("none"));
+    assert.ok(args.includes("--forward-subagent-text"));
+    assert.ok(args.includes("--include-hook-events"));
     assert.ok(args.includes("--strict-mcp-config"));
-    const tools = args[args.indexOf("--tools") + 1] ?? "";
-    for (const tool of ["WebSearch", "WebFetch", "Agent", "Skill"]) assert.match(tools, new RegExp(`\\b${tool}\\b`));
+    assert.ok(!args.includes("--tools"));
     assert.throws(() => claudeArguments({ ...state.job, model: undefined }, {
       directory: state.directory,
       resume: false,
@@ -182,6 +218,25 @@ test("builds a fail-closed Claude CLI and sandbox configuration", async () => {
   } finally {
     await rm(state.directory, { recursive: true, force: true });
   }
+});
+
+test("renders Claude messages, tools, results, and subagent output in the terminal", () => {
+  assert.equal(renderClaudeStreamEvent({
+    type: "assistant",
+    message: { content: [
+      { type: "text", text: "Inspecting the repository." },
+      { type: "tool_use", name: "Bash", input: { command: "python3 -m pytest && npm test" } },
+    ] },
+  }), "Inspecting the repository.\n[Bash] python3 -m pytest && npm test\n");
+  assert.equal(renderClaudeStreamEvent({
+    type: "user",
+    parent_tool_use_id: "agent-1",
+    message: { content: [{ type: "tool_result", content: "All checks passed." }] },
+  }), "[Subagent] [result] All checks passed.\n");
+  assert.equal(renderClaudeStreamEvent({
+    type: "assistant",
+    message: { content: [{ type: "thinking", thinking: "private reasoning" }] },
+  }), "");
 });
 
 async function waitForJson<T>(path: string): Promise<T> {

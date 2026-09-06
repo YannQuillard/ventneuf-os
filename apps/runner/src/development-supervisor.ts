@@ -1,12 +1,10 @@
-import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import { readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { userInfo } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
-import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import type { AgentApprovalRequest, ClaudeModel } from "./repositories.js";
 import { writeReviewState } from "./review-supervisor.js";
 
@@ -33,8 +31,6 @@ export interface DevelopmentJob {
   authorityExpiresAt: number;
 }
 
-const execute = promisify(execFile);
-
 interface RpcMessage {
   id?: string | number;
   method?: string;
@@ -44,8 +40,36 @@ interface RpcMessage {
 }
 
 interface PendingApproval extends AgentApprovalRequest {
-  method: "item/commandExecution/requestApproval" | "item/fileChange/requestApproval";
+  method: "item/commandExecution/requestApproval" | "item/fileChange/requestApproval"
+    | "item/permissions/requestApproval";
   rpcRequestId: string | number;
+}
+
+function localUserEnvironment() {
+  const account = userInfo();
+  return {
+    HOME: account.homedir,
+    USER: account.username,
+    LOGNAME: account.username,
+    SHELL: account.shell || "/bin/sh",
+  };
+}
+
+export function codexProcessEnvironment(job: DevelopmentJob) {
+  const codexPath = job.agentPath ?? job.codexPath;
+  const inheritedPaths = (process.env.PATH ?? "").split(":").filter((path) => isAbsolute(path));
+  const sshAgent = process.env.SSH_AUTH_SOCK;
+  return {
+    ...localUserEnvironment(),
+    PATH: [...new Set([...(codexPath ? [dirname(codexPath)] : []), dirname(process.execPath), dirname(job.gitPath),
+      ...inheritedPaths, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"])].join(":"),
+    LANG: "en_US.UTF-8",
+    GIT_AUTHOR_NAME: job.gitAuthorName,
+    GIT_AUTHOR_EMAIL: job.gitAuthorEmail,
+    GIT_COMMITTER_NAME: job.gitAuthorName,
+    GIT_COMMITTER_EMAIL: job.gitAuthorEmail,
+    ...(sshAgent && isAbsolute(sshAgent) ? { SSH_AUTH_SOCK: sshAgent } : {}),
+  };
 }
 
 function within(root: string, candidate: string) {
@@ -70,6 +94,41 @@ function commandCategory(command: string, params: Record<string, unknown>): Agen
 
 function bounded(value: unknown, limit: number) {
   return typeof value === "string" ? value.trim().slice(0, limit) : "";
+}
+
+function requestedFilesystemScope(value: unknown, worktree: string): "none" | "mission" | "external" {
+  if (!value || typeof value !== "object") return "none";
+  const fileSystem = (value as { fileSystem?: unknown }).fileSystem;
+  if (fileSystem === null || fileSystem === undefined) return "none";
+  if (typeof fileSystem !== "object") return "external";
+  const request = fileSystem as { read?: unknown; write?: unknown; entries?: unknown };
+  const paths: unknown[] = [];
+  let malformed = false;
+  for (const legacy of [request.read, request.write]) {
+    if (legacy === null || legacy === undefined) continue;
+    if (!Array.isArray(legacy)) malformed = true;
+    else paths.push(...legacy);
+  }
+  if (request.entries !== null && request.entries !== undefined) {
+    if (!Array.isArray(request.entries)) malformed = true;
+    else {
+      for (const entry of request.entries) {
+        if (!entry || typeof entry !== "object") { malformed = true; continue; }
+        const path = (entry as { path?: unknown }).path;
+        if (!path || typeof path !== "object") { malformed = true; continue; }
+        const typed = path as { type?: unknown; path?: unknown; value?: unknown };
+        if (typed.type === "path") paths.push(typed.path);
+        else if (typed.type === "special"
+          && typeof typed.value === "object" && typed.value !== null
+          && (typed.value as { kind?: unknown }).kind === "project_roots") paths.push(worktree);
+        else malformed = true;
+      }
+    }
+  }
+  if (malformed || paths.length === 0) return "external";
+  return paths.every((path) => typeof path === "string" && isAbsolute(path) && within(worktree, path))
+    ? "mission"
+    : "external";
 }
 
 function commandProgram(command: string) {
@@ -107,6 +166,51 @@ export function classifyCodexApproval(
   sessionId: string,
 ): Omit<PendingApproval, "rpcRequestId" | "method"> | undefined {
   if (typeof params.threadId !== "string") return undefined;
+  if (method === "item/permissions/requestApproval") {
+    const cwd = bounded(params.cwd, 1_000);
+    const permissions = params.permissions as {
+      fileSystem?: { read?: unknown; write?: unknown; entries?: unknown } | null;
+      network?: { enabled?: unknown } | null;
+    } | undefined;
+    if (!cwd || !isAbsolute(cwd) || !within(worktree, cwd) || !permissions || typeof permissions !== "object") {
+      return undefined;
+    }
+    const filesystemScope = requestedFilesystemScope(permissions, worktree);
+    const fileSystemRequested = filesystemScope !== "none";
+    const networkRequested = permissions.network?.enabled === true;
+    if (!fileSystemRequested && !networkRequested) return undefined;
+    const category = networkRequested && !fileSystemRequested
+      ? "network.access"
+      : filesystemScope === "mission" && !networkRequested ? "repository.write" : "development.command";
+    const target = filesystemScope === "external"
+      ? networkRequested ? "external filesystem and network access" : "filesystem access outside the mission worktree"
+      : networkRequested && !fileSystemRequested ? "network access" : "mission worktree permissions";
+    const material = JSON.stringify({ method, cwd: relative(worktree, cwd) || ".", permissions });
+    return {
+      requestId: randomUUID(),
+      action: {
+        category,
+        target,
+        argumentsDigest: createHash("sha256").update(material).digest("hex"),
+        summary: networkRequested && !fileSystemRequested
+          ? "Allow Codex to use network access for the active mission."
+          : "Allow Codex to use additional permissions for the active mission.",
+        expectedEffect: fileSystemRequested && networkRequested
+          ? "Codex may use the requested filesystem and network permissions for the current turn."
+          : fileSystemRequested
+            ? "Codex may use the requested filesystem permissions for the current turn."
+            : "Codex may access the network for the current turn.",
+      },
+      reason: "Codex requested additional native permissions for the development mission.",
+      evidence: {
+        method,
+        cwd: relative(worktree, cwd) || ".",
+        filesystem: filesystemScope,
+        network: networkRequested,
+      },
+      resume: { adapter: "codex", sessionId },
+    };
+  }
   if (method === "item/fileChange/requestApproval") {
     const grantRoot = params.grantRoot;
     if (grantRoot !== null && grantRoot !== undefined
@@ -130,20 +234,12 @@ export function classifyCodexApproval(
 
   const command = bounded(params.command, 8_000);
   const cwd = bounded(params.cwd, 1_000);
-  if (!command || !cwd || !isAbsolute(cwd) || !within(worktree, cwd)
-    || /[\n\r;&|`<>]|\$\(/.test(command) || /\b(?:ba|z|c|k)?sh\s+-c\b/i.test(command)) return undefined;
-  const extra = params.additionalPermissions as {
-    fileSystem?: { read?: unknown; write?: unknown; entries?: Array<{ path?: unknown }> } | null;
-  } | undefined;
-  const legacyPaths = [extra?.fileSystem?.read, extra?.fileSystem?.write]
-    .flatMap((value) => Array.isArray(value) ? value : []);
-  const entries = Array.isArray(extra?.fileSystem?.entries) ? extra.fileSystem.entries : [];
-  if (entries.some(({ path }) => !path || typeof path !== "object"
-    || (path as { type?: unknown }).type !== "path" || typeof (path as { path?: unknown }).path !== "string")) return undefined;
-  const extraPaths = legacyPaths.concat(entries.map(({ path }) => (path as { path: string }).path));
-  if (extraPaths.some((path) => typeof path !== "string" || !isAbsolute(path) || !within(worktree, path))) return undefined;
+  if (!command || !cwd || !isAbsolute(cwd) || !within(worktree, cwd)) return undefined;
   const category = commandCategory(command, params);
-  const review = commandReviewDetails(command, category, params);
+  const filesystemScope = requestedFilesystemScope(params.additionalPermissions, worktree);
+  const review = filesystemScope === "external" && category === "development.command"
+    ? { target: "filesystem access outside the mission worktree", command: `${commandProgram(command)} command` }
+    : commandReviewDetails(command, category, params);
   const network = params.networkApprovalContext as { host?: unknown; protocol?: unknown } | undefined;
   const material = JSON.stringify({ method, command, cwd: relative(worktree, cwd) || ".", category,
     network: params.networkApprovalContext ?? null, additionalPermissions: params.additionalPermissions ?? null });
@@ -171,6 +267,7 @@ export function classifyCodexApproval(
       commandLength: command.length,
       cwd: relative(worktree, cwd) || ".",
       ...(category === "network.access" ? { destination: review.target } : {}),
+      ...(filesystemScope !== "none" ? { filesystem: filesystemScope } : {}),
       ...(network?.protocol && ["git", "http", "https", "ssh"].includes(String(network.protocol).toLowerCase())
         ? { protocol: String(network.protocol).toLowerCase() }
         : {}),
@@ -179,127 +276,20 @@ export function classifyCodexApproval(
   };
 }
 
-export function codexDevelopmentConfig(job: DevelopmentJob): string[] {
-  const codexPath = job.agentPath ?? job.codexPath;
-  if ((job.agent !== undefined && job.agent !== "codex") || !codexPath) {
-    throw new Error("The development job is not a Codex mission.");
-  }
-  const filesystem = {
-    ":minimal": "read",
-    "/private/tmp/**": "deny",
-    "/tmp/**": "deny",
-    "/private/var/tmp/**": "deny",
-    "/var/tmp/**": "deny",
-    [codexPath]: "read",
-    [job.gitPath]: "read",
-    [job.worktree]: "write",
-    [job.gitDirectory]: "write",
-    [job.gitCommonDirectory]: "read",
-    [job.gitObjectsDirectory]: "write",
-    [job.gitBranchRef]: "write",
-    [`${job.gitBranchRef}.lock`]: "write",
-    [job.gitBranchLog]: "write",
-    [`${job.gitBranchLog}.lock`]: "write",
-  };
-  const filesystemToml = Object.entries(filesystem)
-    .map(([path, access]) => `${JSON.stringify(path)}=${JSON.stringify(access)}`).join(", ");
-  const toolPath = [...new Set([dirname(process.execPath), dirname(codexPath), dirname(job.gitPath),
-    "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"])]
-    .join(":");
-  const toolEnvironment = {
-    HOME: homedir(),
-    PATH: toolPath,
-    TMPDIR: join(job.worktree, ".ventneuf-tmp"),
-    GIT_CONFIG_COUNT: "1",
-    GIT_CONFIG_KEY_0: "core.hooksPath",
-    GIT_CONFIG_VALUE_0: "/dev/null",
-    GIT_CONFIG_GLOBAL: "/dev/null",
-    GIT_AUTHOR_NAME: job.gitAuthorName,
-    GIT_AUTHOR_EMAIL: job.gitAuthorEmail,
-    GIT_COMMITTER_NAME: job.gitAuthorName,
-    GIT_COMMITTER_EMAIL: job.gitAuthorEmail,
-  };
+export function codexDevelopmentConfig(): string[] {
   return [
-    "default_permissions=\"ventneuf-development\"",
-    `permissions.ventneuf-development.filesystem={ ${filesystemToml} }`,
-    "permissions.ventneuf-development.network.enabled=false",
     "web_search=\"live\"",
-    "allow_login_shell=false",
-    "shell_environment_policy.inherit=\"none\"",
-    `shell_environment_policy.set={ ${Object.entries(toolEnvironment)
-      .map(([name, value]) => `${name}=${JSON.stringify(value)}`).join(", ")} }`,
-    "apps._default.enabled=false",
     "features.skip_host_skill_discovery=false",
     "features.skill_search=true",
     "features.multi_agent=true",
     "features.view_image=true",
     "features.image_generation=true",
-    ...["apps", "plugins", "hooks", "memories", "multi_agent_v2", "browser_use", "browser_use_external",
-      "browser_use_full_cdp_access", "in_app_browser", "in_app_chat", "artifact", "computer_use",
-      "shell_snapshot", "skill_mcp_dependency_install", "workspace_dependencies", "remote_plugin", "code_mode",
-      "in_app_local_automation"].map((name) => `features.${name}=false`),
   ];
 }
 
-export function codexAppServerArguments(job: DevelopmentJob): string[] {
-  return ["app-server", "--stdio", "--strict-config",
-    ...codexDevelopmentConfig(job).flatMap((value) => ["-c", value])];
-}
-
-export async function verifyDevelopmentIsolation(job: DevelopmentJob, directory: string) {
-  const codexPath = job.agentPath ?? job.codexPath;
-  if ((job.agent !== undefined && job.agent !== "codex") || !codexPath) {
-    throw new Error("The development job is not a Codex mission.");
-  }
-  const marker = `.isolation-${randomUUID()}`;
-  const source = join(job.worktree, marker);
-  const gitWorktreeProbe = join(job.gitDirectory, marker);
-  const gitObjectProbe = join(job.gitObjectsDirectory, marker);
-  const gitBranchLockProbe = `${job.gitBranchRef}.lock`;
-  const gitBranchLogLockProbe = `${job.gitBranchLog}.lock`;
-  const gitCommonProbe = join(job.gitCommonDirectory, marker);
-  const outside = join(directory, marker);
-  const temporary = await realpath(await mkdtemp("/tmp/ventneuf-development-isolation-"));
-  const server = createServer((_request, response) => response.end("probe"));
-  try {
-    await new Promise<void>((resolveServer, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolveServer);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Isolation probe unavailable.");
-    await writeFile(source, "source", { mode: 0o600 });
-    await writeFile(outside, "outside", { mode: 0o600 });
-    await writeFile(join(temporary, "probe"), "temporary", { mode: 0o600 });
-    const config = codexDevelopmentConfig(job);
-    const { stdout } = await execute(codexPath, ["sandbox", "-P", "ventneuf-development", "-C", job.worktree,
-      ...config.flatMap((value) => ["-c", value]), "--", "/bin/sh", "-c",
-      'cat "$1" >/dev/null || exit 1; echo changed >"$1" || exit 2; echo git >"$2" || exit 3; '
-      + 'echo object >"$3" || exit 4; echo branch >"$4" || exit 5; echo log >"$5" || exit 6; '
-      + 'if echo common >"$6" 2>/dev/null; then exit 7; fi; if cat "$7" >/dev/null 2>&1; then exit 8; fi; '
-      + 'if cat "$8/probe" >/dev/null 2>&1; then exit 9; fi; if echo changed >"$8/new" 2>/dev/null; then exit 10; fi; '
-      + 'if /usr/bin/curl --silent --fail --max-time 2 "$9" >/dev/null; then exit 11; fi; echo isolated',
-      "probe", source, gitWorktreeProbe, gitObjectProbe, gitBranchLockProbe, gitBranchLogLockProbe,
-      gitCommonProbe, outside, temporary, `http://127.0.0.1:${address.port}`], {
-      timeout: 15_000,
-      maxBuffer: 16_000,
-      env: { HOME: homedir(), PATH: `${dirname(codexPath)}:/usr/bin:/bin`, LANG: "en_US.UTF-8" },
-    });
-    const sourceContent = await readFile(source, "utf8");
-    if (stdout.trim() !== "isolated" || sourceContent !== "changed\n") {
-      throw new Error(`Development isolation verification failed (${JSON.stringify(stdout.trim())}, write=${sourceContent === "changed\n"}).`);
-    }
-  } finally {
-    await new Promise<void>((resolveServer) => { server.close(() => resolveServer()); server.closeAllConnections(); });
-    await rm(source, { force: true });
-    await rm(gitWorktreeProbe, { force: true });
-    await rm(gitObjectProbe, { force: true });
-    await rm(gitBranchLockProbe, { force: true });
-    await rm(gitBranchLogLockProbe, { force: true });
-    await rm(gitCommonProbe, { force: true });
-    await rm(outside, { force: true });
-    await rm(temporary, { recursive: true, force: true });
-  }
+export function codexAppServerArguments(): string[] {
+  return ["app-server", "--stdio",
+    ...codexDevelopmentConfig().flatMap((value) => ["-c", value])];
 }
 
 class AppServerClient {
@@ -394,14 +384,20 @@ class AppServerClient {
 
   private async handleServerRequest(message: RpcMessage) {
     if ((message.method !== "item/commandExecution/requestApproval"
-      && message.method !== "item/fileChange/requestApproval") || !message.params || message.id === undefined) {
+      && message.method !== "item/fileChange/requestApproval"
+      && message.method !== "item/permissions/requestApproval") || !message.params || message.id === undefined) {
       this.send({ id: message.id, error: { code: -32601, message: "The mission client does not support this request." } });
       return;
     }
     const session = JSON.parse(await readFile(join(this.directory, "session.json"), "utf8")) as { sessionId: string };
     const request = classifyCodexApproval(message.method, message.params, this.job.worktree, session.sessionId);
     if (!request) {
-      this.send({ id: message.id, result: { decision: "decline" } });
+      this.send({
+        id: message.id,
+        result: message.method === "item/permissions/requestApproval"
+          ? { permissions: {}, scope: "turn" }
+          : { decision: "decline" },
+      });
       return;
     }
     const pending: PendingApproval = { ...request, method: message.method, rpcRequestId: message.id };
@@ -420,7 +416,13 @@ class AppServerClient {
           status: decision.status,
           consumedAt: new Date().toISOString(),
         });
-        this.send({ id: message.id, result: { decision: decision.status === "approved" ? "accept" : "decline" } });
+        const approved = decision.status === "approved";
+        this.send({
+          id: message.id,
+          result: message.method === "item/permissions/requestApproval"
+            ? { permissions: approved ? message.params?.permissions : {}, scope: "turn" }
+            : { decision: approved ? "accept" : "decline" },
+        });
         await rm(join(this.directory, "approval-request.json"), { force: true });
         await rm(join(this.directory, "approval-decision.json"), { force: true });
         return;
@@ -465,7 +467,6 @@ function missionPrompt(job: DevelopmentJob, resumed: boolean) {
     "You may delegate bounded parallel work to subagents; they remain inside this mission's permissions and worktree.",
     "Make the requested changes, run the required checks, correct failures, commit the result, push the mission branch with a simple `git push origin HEAD`, and open a pull request.",
     "Do not merge the pull request or apply a deployment. Resolve routine implementation choices independently. If an operation needs more authority, request approval through the normal Codex approval mechanism.",
-    "Use separate simple commands for operations that require approval; approval requests containing shell chaining or redirection are declined.",
     "Return a concise English result with the pull request URL, validation performed, and any material limitation. Never expose credentials or absolute local paths.",
     "",
     `Mission objective:\n${job.objective.trim()}`,
@@ -490,15 +491,14 @@ export async function superviseDevelopment(directory: string) {
     || job.authorityExpiresAt > Date.now() + 121 * 60_000) throw new Error("Invalid development job.");
   const worktree = await realpath(job.worktree);
   if (worktree !== job.worktree) throw new Error("The mission worktree moved.");
-  await mkdir(join(worktree, ".ventneuf-tmp"), { mode: 0o700 });
   const codexPath = await realpath(configuredCodexPath);
-  await verifyDevelopmentIsolation({ ...job, agent: "codex", agentPath: codexPath, codexPath }, directory);
   const previousSession = await readJsonIfPresent<{ threadId?: string; sessionId?: string }>(join(directory, "session.json"));
-  const child = spawn(codexPath, codexAppServerArguments({ ...job, agent: "codex", agentPath: codexPath, codexPath }), {
+  const codexJob = { ...job, agent: "codex" as const, agentPath: codexPath, codexPath };
+  const child = spawn(codexPath, codexAppServerArguments(), {
     cwd: worktree,
     detached: true,
     stdio: ["pipe", "pipe", "pipe"],
-    env: { HOME: homedir(), PATH: `${dirname(codexPath)}:/usr/bin:/bin`, LANG: "en_US.UTF-8" },
+    env: codexProcessEnvironment(codexJob),
   });
   let diagnostic = "";
   child.stderr.on("data", (data: Buffer) => {
@@ -554,7 +554,7 @@ export async function superviseDevelopment(directory: string) {
         cwd: worktree,
         approvalPolicy: "on-request",
         approvalsReviewer: "user",
-        permissions: "ventneuf-development",
+        sandbox: "workspace-write",
         excludeTurns: true,
       }) as { thread?: { id?: string; sessionId?: string } };
       threadId = resumed.thread?.id ?? previousSession.threadId;
@@ -565,7 +565,7 @@ export async function superviseDevelopment(directory: string) {
         runtimeWorkspaceRoots: [worktree],
         approvalPolicy: "on-request",
         approvalsReviewer: "user",
-        permissions: "ventneuf-development",
+        sandbox: "workspace-write",
         ephemeral: false,
         serviceName: "ventneuf.os",
         developerInstructions: "Work autonomously within the active mission. Never merge pull requests or deploy. Do not ask the user routine implementation questions.",
@@ -584,7 +584,6 @@ export async function superviseDevelopment(directory: string) {
       runtimeWorkspaceRoots: [worktree],
       approvalPolicy: "on-request",
       approvalsReviewer: "user",
-      permissions: "ventneuf-development",
     }) as { turn?: { id?: string } };
     if (!turn.turn?.id) throw new Error("Codex App Server returned no turn.");
     const completed = await client.waitForTurn(turn.turn.id);
