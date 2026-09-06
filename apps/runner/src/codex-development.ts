@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { mkdir, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type { DevelopmentJob } from "./development-supervisor.js";
@@ -21,6 +21,10 @@ const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 const ORCA_REQUEST_TIMEOUT_MS = 20_000;
 // Orca can spend up to 60 seconds refreshing Git before it creates the worktree.
 const ORCA_WORKTREE_CREATE_TIMEOUT_MS = 120_000;
+// A timed-out Orca client can leave its create operation running in the desktop runtime.
+const ORCA_WORKTREE_RECOVERY_TIMEOUT_MS = 90_000;
+const ORCA_WORKTREE_RECOVERY_POLL_MS = 500;
+const ORCA_WORKTREE_INDEX_DELAY_MS = 1_000;
 
 export function developmentOrcaRequestTimeoutMs(args: readonly string[]) {
   return args[0] === "worktree" && args[1] === "create"
@@ -45,6 +49,11 @@ interface DevelopmentOrcaWorktree {
   isMainWorktree?: boolean;
 }
 
+interface GitWorktree {
+  path?: string;
+  branch?: string;
+}
+
 interface DevelopmentStatus {
   status?: "running" | "completed" | "failed";
   failedAt?: string;
@@ -55,6 +64,17 @@ interface SupervisorHeartbeat { updatedAt?: string }
 function within(root: string, candidate: string) {
   const pathFromRoot = relative(root, candidate);
   return candidate === root || (pathFromRoot !== ".." && !pathFromRoot.startsWith(`..${sep}`) && !isAbsolute(pathFromRoot));
+}
+
+function parseGitWorktrees(value: string) {
+  return value.split("\0\0").map((record) => {
+    const worktree: GitWorktree = {};
+    for (const field of record.split("\0")) {
+      if (field.startsWith("worktree ")) worktree.path = field.slice("worktree ".length);
+      else if (field.startsWith("branch ")) worktree.branch = field.slice("branch ".length);
+    }
+    return worktree;
+  }).filter((worktree) => worktree.path);
 }
 
 function remoteLocation(value: string) {
@@ -116,14 +136,40 @@ export class AgentDevelopmentAdapter implements MissionAdapter {
     return envelope.result;
   }
 
-  private async recoverCreatedWorktree(worktreeName: string, repositoryId: string) {
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-      const shown = await this.orca(["worktree", "show", "--worktree", `name:${worktreeName}`], 1_000)
-        .catch(() => undefined);
-      const worktree = shown?.worktree as DevelopmentOrcaWorktree | undefined;
-      if (worktree?.displayName === worktreeName && worktree.repoId === repositoryId) return shown;
-      if (attempt < 19) await new Promise((resolveDelay) => setTimeout(resolveDelay, 250));
-    }
+  private async recoverCreatedWorktree(
+    worktreeName: string,
+    repositoryId: string,
+    repositoryPath: string,
+    gitPath: string,
+    signal: AbortSignal,
+  ) {
+    const deadline = Date.now() + ORCA_WORKTREE_RECOVERY_TIMEOUT_MS;
+    do {
+      signal.throwIfAborted();
+      const listed = await execute(gitPath, ["-C", repositoryPath, "worktree", "list", "--porcelain", "-z"], {
+        timeout: 10_000,
+        maxBuffer: 256_000,
+        env: { HOME: homedir(), PATH: `${dirname(gitPath)}:/usr/bin:/bin`, LANG: "en_US.UTF-8" },
+      }).catch(() => undefined);
+      const expectedBranch = `refs/heads/${worktreeName}`;
+      const branchSuffix = `/${worktreeName}`;
+      const matches = listed ? parseGitWorktrees(listed.stdout).filter((worktree) => worktree.path
+        && basename(worktree.path) === worktreeName
+        && (worktree.branch === expectedBranch || worktree.branch?.endsWith(branchSuffix))) : [];
+      if (matches.length === 1) {
+        const worktreePath = await realpath(matches[0]!.path!).catch(() => undefined);
+        if (worktreePath) {
+          // Orca indexes linked worktrees asynchronously before terminal selectors can resolve them.
+          await new Promise((resolveDelay) => setTimeout(resolveDelay, ORCA_WORKTREE_INDEX_DELAY_MS));
+          signal.throwIfAborted();
+          return { worktree: { id: `${repositoryId}::${worktreePath}`, repoId: repositoryId,
+            displayName: worktreeName, path: worktreePath, isMainWorktree: false } };
+        }
+      }
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return undefined;
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, Math.min(ORCA_WORKTREE_RECOVERY_POLL_MS, remaining)));
+    } while (Date.now() < deadline);
     return undefined;
   }
 
@@ -171,6 +217,7 @@ export class AgentDevelopmentAdapter implements MissionAdapter {
     repository: RegisteredRepository,
     directory: string,
     authorityExpiresAt: number,
+    signal: AbortSignal,
   ) {
     await mkdir(directory, { mode: 0o700 });
     const registration = (await this.orca(["repo", "show", "--repo", `path:${repository.path}`])).repo as {
@@ -178,13 +225,14 @@ export class AgentDevelopmentAdapter implements MissionAdapter {
       path?: string;
     } | undefined;
     if (!registration?.id || registration.path !== repository.path) throw new Error("Unexpected Orca repository response.");
+    const gitPath = await this.gitExecutable();
     const worktreeName = `ventneuf-mission-${mission.id}`;
     let created: Record<string, unknown> | undefined;
     try {
       created = await this.orca(["worktree", "create", "--repo", `path:${repository.path}`,
         "--name", worktreeName, "--setup", "skip", "--no-parent"]);
     } catch (error) {
-      created = await this.recoverCreatedWorktree(worktreeName, registration.id);
+      created = await this.recoverCreatedWorktree(worktreeName, registration.id, repository.path, gitPath, signal);
       if (!created) throw error;
     }
     const worktree = created.worktree as DevelopmentOrcaWorktree | undefined;
@@ -201,7 +249,6 @@ export class AgentDevelopmentAdapter implements MissionAdapter {
       createdAt: new Date().toISOString(),
     };
     await writeReviewState(join(directory, "orca.json"), state);
-    const gitPath = await this.gitExecutable();
     const { stdout } = await execute(gitPath, ["-C", worktreePath, "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"], {
       timeout: 10_000,
       maxBuffer: 16_000,
@@ -222,7 +269,8 @@ export class AgentDevelopmentAdapter implements MissionAdapter {
     });
     const branchRef = branchOutput.trim();
     if (!/^refs\/heads\/[A-Za-z0-9][A-Za-z0-9._/-]{0,240}$/.test(branchRef)
-      || branchRef.includes("..") || branchRef.includes("//") || branchRef.endsWith("/") || branchRef.endsWith(".")) {
+      || branchRef.includes("..") || branchRef.includes("//") || branchRef.endsWith("/") || branchRef.endsWith(".")
+      || (branchRef !== `refs/heads/${worktreeName}` && !branchRef.endsWith(`/${worktreeName}`))) {
       throw new Error("The Orca worktree did not create a safe mission branch.");
     }
     const gitObjectsDirectory = await realpath(join(gitCommonDirectory, "objects"));
@@ -358,7 +406,7 @@ export class AgentDevelopmentAdapter implements MissionAdapter {
     await mkdir(this.root, { recursive: true, mode: 0o700 });
     const directory = this.directory(mission.id);
     let state = await readJsonIfPresent<DevelopmentOrcaState>(join(directory, "orca.json"));
-    if (!state) state = await this.createMission(mission, repository, directory, authorityExpiresAt);
+    if (!state) state = await this.createMission(mission, repository, directory, authorityExpiresAt, signal);
     if (state.missionId !== mission.id || state.repositoryId !== repository.id
       || !isAbsolute(state.worktreePath) || !state.worktreeId || !state.terminalHandle) {
       throw new Error("Invalid or incomplete local development mission state.");
