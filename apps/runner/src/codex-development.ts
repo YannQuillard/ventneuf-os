@@ -18,6 +18,15 @@ import { writeReviewState } from "./review-supervisor.js";
 
 const execute = promisify(execFile);
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+const ORCA_REQUEST_TIMEOUT_MS = 20_000;
+// Orca can spend up to 60 seconds refreshing Git before it creates the worktree.
+const ORCA_WORKTREE_CREATE_TIMEOUT_MS = 120_000;
+
+export function developmentOrcaRequestTimeoutMs(args: readonly string[]) {
+  return args[0] === "worktree" && args[1] === "create"
+    ? ORCA_WORKTREE_CREATE_TIMEOUT_MS
+    : ORCA_REQUEST_TIMEOUT_MS;
+}
 
 interface DevelopmentOrcaState {
   missionId: string;
@@ -90,7 +99,7 @@ export class AgentDevelopmentAdapter implements MissionAdapter {
 
   private async orca(args: string[]) {
     const { stdout } = await execute(this.options.orcaPath, [...args, "--json"], {
-      timeout: 20_000,
+      timeout: developmentOrcaRequestTimeoutMs(args),
       maxBuffer: 256_000,
       env: { HOME: homedir(), PATH: "/usr/bin:/bin", LANG: "en_US.UTF-8" },
     });
