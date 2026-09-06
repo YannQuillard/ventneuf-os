@@ -37,6 +37,14 @@ interface DevelopmentOrcaState {
   createdAt: string;
 }
 
+interface DevelopmentOrcaWorktree {
+  id?: string;
+  repoId?: string;
+  displayName?: string;
+  path?: string;
+  isMainWorktree?: boolean;
+}
+
 interface DevelopmentStatus {
   status?: "running" | "completed" | "failed";
   failedAt?: string;
@@ -97,15 +105,26 @@ export class AgentDevelopmentAdapter implements MissionAdapter {
     this.retentionMs = options.diagnosticRetentionMs ?? 24 * 60 * 60_000;
   }
 
-  private async orca(args: string[]) {
+  protected async orca(args: string[], timeout = developmentOrcaRequestTimeoutMs(args)) {
     const { stdout } = await execute(this.options.orcaPath, [...args, "--json"], {
-      timeout: developmentOrcaRequestTimeoutMs(args),
+      timeout,
       maxBuffer: 256_000,
       env: { HOME: homedir(), PATH: "/usr/bin:/bin", LANG: "en_US.UTF-8" },
     });
     const envelope = JSON.parse(stdout) as { ok?: boolean; result?: Record<string, unknown> };
     if (!envelope.ok || !envelope.result) throw new Error("Orca request failed.");
     return envelope.result;
+  }
+
+  private async recoverCreatedWorktree(worktreeName: string, repositoryId: string) {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const shown = await this.orca(["worktree", "show", "--worktree", `name:${worktreeName}`], 1_000)
+        .catch(() => undefined);
+      const worktree = shown?.worktree as DevelopmentOrcaWorktree | undefined;
+      if (worktree?.displayName === worktreeName && worktree.repoId === repositoryId) return shown;
+      if (attempt < 19) await new Promise((resolveDelay) => setTimeout(resolveDelay, 250));
+    }
+    return undefined;
   }
 
   private async gitExecutable() {
@@ -160,15 +179,15 @@ export class AgentDevelopmentAdapter implements MissionAdapter {
     } | undefined;
     if (!registration?.id || registration.path !== repository.path) throw new Error("Unexpected Orca repository response.");
     const worktreeName = `ventneuf-mission-${mission.id}`;
-    const created = await this.orca(["worktree", "create", "--repo", `path:${repository.path}`,
-      "--name", worktreeName, "--setup", "skip", "--no-parent"]);
-    const worktree = created.worktree as {
-      id?: string;
-      repoId?: string;
-      displayName?: string;
-      path?: string;
-      isMainWorktree?: boolean;
-    } | undefined;
+    let created: Record<string, unknown> | undefined;
+    try {
+      created = await this.orca(["worktree", "create", "--repo", `path:${repository.path}`,
+        "--name", worktreeName, "--setup", "skip", "--no-parent"]);
+    } catch (error) {
+      created = await this.recoverCreatedWorktree(worktreeName, registration.id);
+      if (!created) throw error;
+    }
+    const worktree = created.worktree as DevelopmentOrcaWorktree | undefined;
     if (!worktree?.id || !worktree.path || !isAbsolute(worktree.path) || worktree.path === repository.path
       || worktree.repoId !== registration.id || worktree.displayName !== worktreeName || worktree.isMainWorktree !== false) {
       throw new Error("Unexpected Orca worktree response.");
