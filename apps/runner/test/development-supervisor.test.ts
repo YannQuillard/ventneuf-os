@@ -113,7 +113,8 @@ test("runs a durable App Server turn through a structured approval", { timeout: 
       + "if (message.method === 'turn/start') { if (message.params.permissions !== undefined || message.params.approvalPolicy !== 'on-request' || message.params.approvalsReviewer !== 'user') process.exit(21); console.log(JSON.stringify({ id: message.id, result: { turn: { id: 'turn-1' } } }));"
       + ` console.log(JSON.stringify({ method: 'item/permissions/requestApproval', id: 99, params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1', cwd: ${JSON.stringify(worktree)}, startedAtMs: Date.now(), permissions: { network: { enabled: true } } } })); }\n`
       + "if (message.id === 99 && message.result?.permissions?.network?.enabled === true && message.result?.scope === 'turn') {"
-      + " console.log(JSON.stringify({ method: 'item/completed', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'agentMessage', text: 'Opened https://github.com/example/repository/pull/1' } } }));"
+      + " console.log(JSON.stringify({ method: 'item/completed', params: { threadId: 'thread-1', turnId: 'turn-1', item: { id: 'root-message', type: 'agentMessage', text: 'Opened https://github.com/example/repository/pull/1' } } }));"
+      + " console.log(JSON.stringify({ method: 'item/completed', params: { threadId: 'child-thread', item: { id: 'child-message', type: 'agentMessage', text: 'Subagent result must not replace the root result' } } }));"
       + " console.log(JSON.stringify({ method: 'turn/completed', params: { threadId: 'thread-1', turn: { id: 'turn-1', status: 'completed' } } })); } });\n"
       + "setInterval(() => {}, 1000);\n", { mode: 0o700 });
     const job: DevelopmentJob = {
@@ -151,6 +152,8 @@ test("runs a durable App Server turn through a structured approval", { timeout: 
     assert.equal(JSON.parse(await readFile(join(directory, "approval-consumed.json"), "utf8")).approvalId,
       "00000000-0000-4000-8000-000000000003");
     assert.match(await readFile(join(directory, "result.txt"), "utf8"), /pull\/1/);
+    const activity = JSON.parse(await readFile(join(directory, "execution.json"), "utf8"));
+    assert.equal(activity.items.find((item: { threadId: string }) => item.threadId === "child-thread")?.parentId, "agent:child-thread");
     const args = codexAppServerArguments();
     assert.deepEqual(args.slice(0, 2), ["app-server", "--stdio"]);
     assert.ok(!args.includes("--strict-config"));

@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { Express } from "express";
-import { approvalActionCategories, assertAuthorized, claudeModelAliases } from "@ventneuf/domain";
+import { approvalActionCategories, assertAuthorized, claudeModelAliases, isAgentExecutionSnapshot, type AgentExecutionSnapshot } from "@ventneuf/domain";
 import {
   MissionApprovalConflictError,
   MissionApprovalPolicyError,
@@ -31,6 +31,7 @@ const lease = z.object({ owner: z.string().uuid(), token: z.string().regex(/^[a-
 const report = z.object({
   owner: z.string().uuid(), token: z.string().regex(/^[a-f0-9]{64}$/), eventId: z.string().uuid(),
   kind: z.enum(["progress", "completed", "failed"]), content: z.string().trim().min(1).max(16_000),
+  snapshot: z.custom<AgentExecutionSnapshot>(isAgentExecutionSnapshot).optional(),
 }).strict();
 const approvalRequest = z.object({
   owner: z.string().uuid(),
@@ -116,8 +117,8 @@ export function registerRunnerRoutes(app: Express, verifier: TokenVerifier, runt
     }
   });
 
-  for (const operation of ["repositories", "claim", "report", "renew", "inspect"] as const) {
-    const path = operation === "report" || operation === "renew" || operation === "inspect" ? `/api/runner/missions/:missionId/${operation}`
+  for (const operation of ["repositories", "claim", "report", "renew", "inspect", "execution"] as const) {
+    const path = operation === "report" || operation === "renew" || operation === "inspect" || operation === "execution" ? `/api/runner/missions/:missionId/${operation}`
       : operation === "claim" ? "/api/runner/missions/claim" : "/api/runner/repositories";
     app.post(path, async (request, response, next) => {
       try {
@@ -142,6 +143,12 @@ export function registerRunnerRoutes(app: Express, verifier: TokenVerifier, runt
         } else if (operation === "inspect") {
           const missionId = z.string().uuid().parse(("missionId" in request.params ? request.params.missionId : undefined));
           response.json(await runtime.runnerMissions.inspect(scope, missionId) ?? {});
+        } else if (operation === "execution") {
+          const input = lease.extend({ snapshot: z.custom<AgentExecutionSnapshot>(isAgentExecutionSnapshot) }).parse(request.body);
+          const missionId = z.string().uuid().parse(("missionId" in request.params ? request.params.missionId : undefined));
+          response.json(await runtime.runnerMissions.execution(scope, {
+            missionId, owner: input.owner, tokenHash: hashDeviceToken(input.token), snapshot: input.snapshot,
+          }));
         } else if (operation === "renew") {
           const input = lease.parse(request.body);
           const missionId = z.string().uuid().parse(("missionId" in request.params ? request.params.missionId : undefined));

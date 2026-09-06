@@ -200,6 +200,22 @@ test("runner assignment, concurrent claims, fenced retries, cancellation and ten
     const developmentClaim = await runner.claim(scope, owner, "development-lease");
     assert.equal(developmentClaim?.adapter, "codex-development");
     assert.ok(Number.isFinite(Date.parse(developmentClaim?.authorityExpiresAt ?? "")));
+    const executionSnapshot = { version: 1 as const, provider: "codex" as const, revision: 1,
+      rootThreadId: "root", updatedAt: new Date().toISOString(), omittedItems: 0, items: [] };
+    const executionInput = { missionId: development.mission.id, owner, tokenHash: "development-lease", snapshot: executionSnapshot };
+    await assert.rejects(runner.execution({ ...scope, credentialHash: "wrong" }, executionInput), RunnerAccessError);
+    await assert.rejects(runner.execution({ ...scope, deviceId: otherDeviceId, credentialHash: "other-runner-test-hash" }, executionInput), RunnerLeaseError);
+    await assert.rejects(runner.execution(scope, { ...executionInput, owner: randomUUID() }), RunnerLeaseError);
+    await assert.rejects(runner.execution(scope, { ...executionInput, snapshot: { ...executionSnapshot, provider: "claude" } }), RunnerLeaseError);
+    await runner.execution(scope, executionInput);
+    await runner.execution(scope, { ...executionInput, snapshot: { ...executionSnapshot, revision: 2 } });
+    await runner.execution(scope, executionInput);
+    assert.equal((await conversations.listMissionEvents(organizationId, development.mission.id))
+      .filter((event) => event.type === "runner.execution").length, 1);
+    const visibleExecution = await conversations.getPrivateAgentExecution({ organizationId, externalSubject: "runner-subject" });
+    assert.equal((visibleExecution?.snapshot as { revision: number }).revision, 2);
+    assert.equal(await conversations.getPrivateAgentExecution({ organizationId, externalSubject: "other-subject" }), null);
+    assert.equal(await conversations.getPrivateAgentExecution({ organizationId: otherOrganizationId, externalSubject: "runner-subject" }), null);
     await runner.report(scope, {
       missionId: development.mission.id,
       owner,
@@ -207,7 +223,12 @@ test("runner assignment, concurrent claims, fenced retries, cancellation and ten
       eventId: randomUUID(),
       kind: "completed",
       content: "Development result",
+      snapshot: { ...executionSnapshot, revision: 3 },
     });
+    const completedExecution = await conversations.getPrivateAgentExecution({ organizationId, externalSubject: "runner-subject" });
+    assert.equal(completedExecution?.status, "completed");
+    assert.equal((completedExecution?.snapshot as { revision: number }).revision, 3);
+    await assert.rejects(runner.execution(scope, { ...executionInput, snapshot: { ...executionSnapshot, revision: 4 } }), RunnerLeaseError);
     const claudeDevelopment = await conversations.enqueuePrivateMessage({
       organizationId,
       externalSubject: "runner-subject",

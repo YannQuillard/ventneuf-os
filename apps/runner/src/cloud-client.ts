@@ -6,6 +6,7 @@ import {
   type RunnerApprovalResponse,
 } from "./mission-worker.js";
 import type { StoredDevice } from "./credential-store.js";
+import type { AgentExecutionSnapshot } from "@ventneuf/domain";
 import { isClaudeModel, type ClaudeModel, type MissionStatus } from "./repositories.js";
 
 interface EnrollmentResponse {
@@ -84,6 +85,12 @@ export class RunnerCloudClient {
   async reportMission(device: StoredDevice, missionId: string, report: MissionReport) {
     const result = await this.missionRequest(device, `/api/runner/missions/${encodeURIComponent(missionId)}/report`, report) as { status?: string };
     if (report.kind === "progress" && result.status !== "running") throw new LeaseRejectedError("The mission stopped.");
+  }
+
+  async reportExecution(device: StoredDevice, missionId: string, report: {
+    owner: string; token: string; snapshot: AgentExecutionSnapshot;
+  }) {
+    await this.missionRequest(device, `/api/runner/missions/${encodeURIComponent(missionId)}/execution`, report);
   }
 
   async renewMission(device: StoredDevice, missionId: string, lease: { owner: string; token: string }) {

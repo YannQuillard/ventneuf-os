@@ -1,3 +1,4 @@
+import { ExecutionActivity, executionRecorder } from "./execution-activity.js";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { readFile, realpath, rm, writeFile } from "node:fs/promises";
@@ -293,6 +294,7 @@ export function codexAppServerArguments(): string[] {
 }
 
 class AppServerClient {
+  rootThreadId?: string;
   private nextId = 1;
   private readonly requests = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
   private readonly approvalHandlers = new Set<Promise<void>>();
@@ -310,6 +312,7 @@ class AppServerClient {
     private readonly child: ChildProcessWithoutNullStreams,
     private readonly job: DevelopmentJob,
     private readonly directory: string,
+    private readonly activity: ExecutionActivity,
   ) {
     const lines = createInterface({ input: child.stdout });
     lines.on("line", (line) => this.receive(line));
@@ -345,6 +348,7 @@ class AppServerClient {
     let message: RpcMessage;
     try { message = JSON.parse(line) as RpcMessage; }
     catch { return; }
+    this.activity.codex(message);
     if (message.id !== undefined && !message.method && typeof message.id === "number") {
       const pending = this.requests.get(message.id);
       if (!pending) return;
@@ -358,7 +362,8 @@ class AppServerClient {
     }
     if (message.method === "item/completed") {
       const item = message.params?.item as { type?: unknown; text?: unknown } | undefined;
-      if (item?.type === "agentMessage" && typeof item.text === "string") this.finalMessage = item.text;
+      if (message.params?.threadId === this.rootThreadId && item?.type === "agentMessage"
+        && typeof item.text === "string") this.finalMessage = item.text;
     }
     if (message.method === "turn/completed") {
       const turn = message.params?.turn as { id?: unknown; status?: string; error?: unknown } | undefined;
@@ -507,7 +512,9 @@ export async function superviseDevelopment(directory: string) {
     process.stderr.write(text);
   });
   child.stdin.on("error", () => {});
-  const client = new AppServerClient(child, job, directory);
+  const activity = new ExecutionActivity("codex", job.missionId, job.worktree);
+  const recorder = await executionRecorder(directory, activity);
+  const client = new AppServerClient(child, job, directory, activity);
   let heartbeatWriting = Promise.resolve();
   const writeHeartbeat = () => {
     heartbeatWriting = heartbeatWriting.then(() => writeReviewState(join(directory, "supervisor.json"), {
@@ -575,6 +582,8 @@ export async function superviseDevelopment(directory: string) {
       sessionId = started.thread.sessionId;
     }
     await writeReviewState(join(directory, "session.json"), { threadId, sessionId });
+    client.rootThreadId = threadId;
+    activity.setRootThread(threadId);
     await writeReviewState(join(directory, "status.json"), { status: "running", startedAt: new Date().toISOString() });
     console.info(`Codex development mission ${job.missionId.slice(0, 8)} started.`);
     const turn = await client.request("turn/start", {
@@ -597,6 +606,7 @@ export async function superviseDevelopment(directory: string) {
     await writeReviewState(join(directory, "status.json"), { status: "failed", failedAt: new Date().toISOString() });
     throw error;
   } finally {
+    await recorder.close();
     clearInterval(heartbeat);
     await heartbeatWriting.catch(() => undefined);
     clearInterval(watchdog);

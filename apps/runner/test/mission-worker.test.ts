@@ -188,3 +188,27 @@ test("routes a Claude approval through the leased worker and pauses without fail
   assert.equal(reports.some(({ kind }) => kind === "failed"), false);
   assert.equal(reports.at(0)?.kind, "progress");
 });
+
+
+test("final mission report carries the latest activity even when live transmission fails", async () => {
+  const reports: MissionReport[] = [];
+  const snapshot = { version: 1 as const, provider: "codex" as const, revision: 1,
+    rootThreadId: "root", updatedAt: new Date().toISOString(), omittedItems: 0, items: [] };
+  const worker = new RunnerMissionWorker({
+    store: { load: async () => device, save: async () => {} },
+    repositories: async () => [{ id: "sample", name: "Sample", path: "/workspace", codexDevelopment: true }],
+    client: { registerRepositories: async () => {}, claimMission: async () => ({ ...mission, adapter: "codex-development",
+      authorityExpiresAt: new Date(Date.now() + 60_000).toISOString() }),
+      renewMission: async () => new Date(Date.now() + 60_000).toISOString(),
+      reportExecution: async () => { throw new Error("Network unavailable"); },
+      reportMission: async (_device, _missionId, report) => { reports.push(report); },
+    },
+    adapter: { execute: async (_mission, _repository, _signal, execution) => {
+      await execution?.execution?.(snapshot).catch(() => {});
+      return "Mission complete";
+    } },
+  });
+  await worker.tick();
+  assert.equal(reports.at(-1)?.kind, "completed");
+  assert.deepEqual(reports.at(-1)?.snapshot, snapshot);
+});

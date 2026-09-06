@@ -107,6 +107,34 @@ test("browser API delivers a read-only mission through the real runner client an
     await repository.cancelMission(organizationId, review.id, {});
     assert.equal(await cloud.getMissionStatus(device, review.id), "cancelled");
     await assert.rejects(cloud.renewMission(device, review.id, { owner, token: review.leaseToken }));
+    await cloud.registerRepositories(device, [{ id: "sample", name: "Sample", codexDevelopment: true }]);
+    await repository.enqueuePrivateMessage({ organizationId, externalSubject: "integration-subject", content: "Live coding mission",
+      runner: { deviceId, repositoryId: "sample", adapter: "codex-development" } });
+    const coding = await cloud.claimMission(device, owner);
+    assert.ok(coding);
+    const execution = { version: 1 as const, provider: "codex" as const, revision: 1, rootThreadId: "root",
+      updatedAt: new Date().toISOString(), omittedItems: 0, items: [{ id: "tool", threadId: "root",
+        kind: "tool" as const, label: "Tests", status: "running" as const, text: "Testing" }] };
+    const report = { owner, token: coding.leaseToken, snapshot: execution };
+    const path = `/api/runner/missions/${coding.id}/execution`;
+    assert.equal((await post(path, report)).status, 401);
+    assert.equal((await post(path, { ...report, snapshot: { ...execution, revision: -1 } }, credential.token)).status, 400);
+    assert.equal((await post(path, { ...report, owner: randomUUID() }, credential.token)).status, 409);
+    await cloud.reportExecution(device, coding.id, report);
+    // A later Hermes reply must not hide the independently running coding mission.
+    await repository.enqueuePrivateMessage({ organizationId, externalSubject: "integration-subject", content: "Show progress" });
+    const readExecution = async () => {
+      const response = await fetch(new URL("/api/conversations/hermes/messages", baseUrl), { headers: { authorization: "Bearer integration-user" } });
+      assert.equal(response.status, 200);
+      return (await response.json() as { agentExecution: { missionId: string; status: string; snapshot: typeof execution } }).agentExecution;
+    };
+    assert.equal((await readExecution()).missionId, coding.id);
+    assert.equal((await readExecution()).snapshot.items[0]?.text, "Testing");
+    await cloud.reportMission(device, coding.id, { owner, token: coding.leaseToken, eventId: randomUUID(),
+      kind: "completed", content: "Coding complete", snapshot: { ...execution, revision: 2,
+        items: [{ ...execution.items[0]!, status: "completed", text: "Tests passed" }] } });
+    assert.equal((await readExecution()).status, "completed");
+    assert.equal((await readExecution()).snapshot.items[0]?.text, "Tests passed");
   } finally {
     await new Promise<void>((resolve) => { server.close(() => resolve()); server.closeAllConnections(); });
     for (const table of ["mission_events", "missions", "messages", "conversations", "device_credentials", "devices", "members"]) {

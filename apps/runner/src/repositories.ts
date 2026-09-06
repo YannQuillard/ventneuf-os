@@ -1,6 +1,7 @@
 import { lstat, opendir, readFile, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
+import type { AgentExecutionSnapshot } from "@ventneuf/domain";
 
 export const claudeModelAliases = ["opus", "sonnet", "fable"] as const;
 export type ClaudeModel = typeof claudeModelAliases[number];
@@ -104,6 +105,7 @@ export interface AgentApprovalResponse {
 export interface MissionExecution {
   leaseExpiresAt(): number;
   progress(content: string): Promise<void>;
+  execution?(snapshot: AgentExecutionSnapshot): Promise<void>;
   requestApproval(request: AgentApprovalRequest): Promise<AgentApprovalResponse>;
 }
 export type MissionStatus = "queued" | "running" | "waiting_for_approval" | "completed" | "failed" | "cancelled";

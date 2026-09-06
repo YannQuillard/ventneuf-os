@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { AgentExecutionSnapshot } from "@ventneuf/domain";
 import type { CredentialStore, StoredDevice } from "./credential-store.js";
 import {
   MissionPausedError,
@@ -27,6 +28,7 @@ export interface MissionReport {
   eventId: string;
   kind: "progress" | "completed" | "failed";
   content: string;
+  snapshot?: AgentExecutionSnapshot;
 }
 export interface MissionClient {
   registerRepositories(device: StoredDevice, repositories: Array<{
@@ -39,6 +41,9 @@ export interface MissionClient {
   }>): Promise<void>;
   claimMission(device: StoredDevice, owner: string): Promise<ClaimedMission | null>;
   reportMission(device: StoredDevice, missionId: string, report: MissionReport): Promise<void>;
+  reportExecution?(device: StoredDevice, missionId: string, report: {
+    owner: string; token: string; snapshot: AgentExecutionSnapshot;
+  }): Promise<void>;
   renewMission?(device: StoredDevice, missionId: string, lease: { owner: string; token: string }): Promise<string>;
   requestApproval?(device: StoredDevice, missionId: string, request: RunnerApprovalRequest): Promise<RunnerApprovalResponse>;
   getMissionStatus?(device: StoredDevice, missionId: string): Promise<MissionStatus | undefined>;
@@ -73,8 +78,12 @@ export class RunnerMissionWorker {
         ...(claudeDevelopment ? { claudeDevelopment } : {}), ...(claudeModels ? { claudeModels } : {}) })));
       const mission = await this.options.client.claimMission(device, this.owner);
       if (!mission) return;
+      let latestExecution: AgentExecutionSnapshot | undefined;
       const report = async (kind: MissionReport["kind"], content: string) => {
-        const event: MissionReport = { owner: this.owner, token: mission.leaseToken, eventId: randomUUID(), kind, content };
+        content = content.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, "");
+        const event: MissionReport = { owner: this.owner, token: mission.leaseToken, eventId: randomUUID(), kind, content,
+          ...(kind !== "progress" && latestExecution ? { snapshot: latestExecution } : {}),
+        };
         // A retry keeps its event ID so a lost response cannot duplicate the durable result.
         for (let attempt = 0; ; attempt += 1) {
           try { await this.options.client.reportMission(device, mission.id, event); return; }
@@ -137,6 +146,12 @@ export class RunnerMissionWorker {
         result = await this.options.adapter.execute(mission, repository, controller.signal, {
           leaseExpiresAt: () => Math.min(deadline, leaseExpiresAt),
           progress: (content) => report("progress", content),
+          execution: this.options.client.reportExecution ? async (snapshot) => {
+            latestExecution = snapshot;
+            await this.options.client.reportExecution!(device, mission.id, {
+              owner: this.owner, token: mission.leaseToken, snapshot,
+            });
+          } : undefined,
           requestApproval: async (request) => {
             if (!this.options.client.requestApproval) throw new Error("Mission approval requests are unavailable.");
             const response = await this.options.client.requestApproval(device, mission.id, {

@@ -1,5 +1,9 @@
 "use client";
 
+import { BottomSheet } from "@astryxdesign/core/BottomSheet";
+import { useMediaQuery } from "@astryxdesign/core/hooks";
+import { missionStatusPresentation } from "../lib/mission-presentation";
+import executionStyles from "./agent-execution.module.css";
 import { Avatar } from "@astryxdesign/core/Avatar";
 import {
   ChatComposer,
@@ -24,6 +28,8 @@ import { formatDuration, type Message, type MissionEvent, type MissionState, typ
 import { missionActivities } from "../lib/mission-activity";
 import { ConversationMessage } from "./conversation-message";
 import { MessageDetailsPanel } from "./message-details";
+import { AgentExecutionPanel } from "./agent-execution";
+import type { AgentExecution } from "../lib/agent-execution";
 
 const chatColumn: CSSProperties = { flex: 1, minWidth: 0, height: "100%" };
 const chatLayout: CSSProperties = { flex: 1, minHeight: 0 };
@@ -88,6 +94,10 @@ export function HermesConversation() {
   const [revealingId, setRevealingId] = useState<string>();
   const [mission, setMission] = useState<MissionState | null>(null);
   const [missionEvents, setMissionEvents] = useState<MissionEvent[]>([]);
+  const [isAgentOpen, setIsAgentOpen] = useState(false);
+  const isCompact = useMediaQuery("(max-width: 1100px)");
+  const [agentExecution, setAgentExecution] = useState<AgentExecution | null>(null);
+  const executionActive = Boolean(agentExecution && ["queued", "running", "waiting_for_approval"].includes(agentExecution.status));
   const [selectedMessageId, setSelectedMessageId] = useState<string>();
   const [now, setNow] = useState(() => Date.now());
   const [error, setError] = useState<string>();
@@ -106,12 +116,14 @@ export function HermesConversation() {
       messages: Message[];
       mission: MissionState | null;
       events: MissionEvent[];
+      agentExecution?: AgentExecution | null;
     };
     const knownIds = new Set(payload.messages.map(({ id }) => id));
     acceptedMessages.current = acceptedMessages.current.filter(({ id }) => !knownIds.has(id));
     setMessages(acceptedMessages.current.length > 0
       ? [...payload.messages, ...acceptedMessages.current]
       : payload.messages);
+    setAgentExecution(payload.agentExecution ?? null);
     setMission(payload.mission ?? null);
     setMissionEvents(payload.events ?? []);
     setIsLoaded(true);
@@ -142,23 +154,25 @@ export function HermesConversation() {
       } catch (reason) {
         if (!stopped) setError(reason instanceof Error ? reason.message : "Unable to load the conversation.");
       }
-      if (!stopped) timer = window.setTimeout(poll, awaitingReply ? 750 : 5_000);
+      if (!stopped) timer = window.setTimeout(poll, awaitingReply || executionActive ? 1_500 : 5_000);
     };
     void poll();
     return () => {
       stopped = true;
       if (timer) window.clearTimeout(timer);
     };
-  }, [awaitingReply, refresh]);
+  }, [awaitingReply, executionActive, refresh]);
 
   useEffect(() => {
-    if (!awaitingReply) return;
+    if (!awaitingReply && !executionActive) return;
     const source = new EventSource("/api/hermes/events");
     source.addEventListener("snapshot", (raw) => {
       const payload = JSON.parse((raw as MessageEvent<string>).data) as {
         mission: MissionState | null;
         events: MissionEvent[];
+      agentExecution?: AgentExecution | null;
       };
+      setAgentExecution(payload.agentExecution ?? null);
       setMission(payload.mission);
       setMissionEvents(payload.events);
       if (payload.mission && !["queued", "running", "waiting_for_approval"].includes(payload.mission.status)) {
@@ -167,7 +181,7 @@ export function HermesConversation() {
       }
     });
     return () => source.close();
-  }, [awaitingReply, refresh]);
+  }, [awaitingReply, executionActive, refresh]);
 
   useEffect(() => {
     if (!awaitingReply) return;
@@ -225,16 +239,16 @@ export function HermesConversation() {
     setPending((current) => current.filter(({ id }) => id !== pendingId));
   }, []);
 
-  const stopMission = useCallback(async () => {
-    if (!mission) return;
+  const stopMission = useCallback(async (missionId: string) => {
     setIsStopping(true);
     try {
-      const response = await fetch(`/api/hermes/missions/${encodeURIComponent(mission.id)}/cancel`, {
+      const response = await fetch(`/api/hermes/missions/${encodeURIComponent(missionId)}/cancel`, {
         method: "POST",
       });
       if (!response.ok) throw new Error("Hermes could not stop this run.");
-      setAwaitingReply(false);
-      setMission((current) => current ? { ...current, status: "cancelled" } : null);
+      if (mission?.id === missionId) setAwaitingReply(false);
+      setMission((current) => current?.id === missionId ? { ...current, status: "cancelled" } : current);
+      setAgentExecution((current) => current?.missionId === missionId ? { ...current, status: "cancelled" } : current);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Hermes could not stop this run.");
     } finally {
@@ -285,6 +299,10 @@ export function HermesConversation() {
     <VStack height="100%" className="conversation-surface">
       <HStack height="100%">
         <VStack style={chatColumn}>
+          {agentExecution ? <HStack padding={3}>
+            <Button label={`${agentExecution.provider === "claude" ? "Claude Code" : "Codex"} · ${missionStatusPresentation[agentExecution.status].label} · Open mission`}
+              variant="secondary" size="sm" clickAction={() => setIsAgentOpen(true)} />
+          </HStack> : null}
           <ChatLayout
             style={chatLayout}
             composer={(
@@ -377,7 +395,7 @@ export function HermesConversation() {
                           variant="ghost"
                           size="sm"
                           isLoading={isStopping}
-                          clickAction={stopMission}
+                          clickAction={() => { if (mission) void stopMission(mission.id); }}
                         />
                       </div>
                       {missionEvents.filter((event) => event.type === "runner.progress").slice(-1).map((event) => (
@@ -423,8 +441,16 @@ export function HermesConversation() {
             ) : null}
           </ChatLayout>
         </VStack>
+        {agentExecution && isAgentOpen && !isCompact ? <aside className={executionStyles.panel}>
+          <AgentExecutionPanel key={agentExecution.missionId} execution={agentExecution} presentation="panel"
+            onClose={() => setIsAgentOpen(false)} onStop={() => void stopMission(agentExecution.missionId)} isStopping={isStopping} />
+        </aside> : null}
         {selected ? <MessageDetailsPanel message={selected} onClose={closeDetails} /> : null}
       </HStack>
+      {agentExecution && isCompact ? <BottomSheet isOpen={isAgentOpen} onOpenChange={setIsAgentOpen} label="Mission details" height="tall">
+        <AgentExecutionPanel key={agentExecution.missionId} execution={agentExecution} presentation="sheet"
+          onClose={() => setIsAgentOpen(false)} onStop={() => void stopMission(agentExecution.missionId)} isStopping={isStopping} />
+      </BottomSheet> : null}
     </VStack>
   );
 }

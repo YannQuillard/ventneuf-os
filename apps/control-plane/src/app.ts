@@ -171,10 +171,11 @@ export function createApp({ verifier, hermes, conversations, delegations, host =
         organizationId: context.organizationId,
         externalSubject: context.principalId,
       };
-      const [items, mission, approvals] = await Promise.all([
+      const [items, mission, approvals, agentExecution] = await Promise.all([
         conversations.repository.listPrivateMessages(query),
         conversations.repository.getLatestPrivateMission(query),
         conversations.approvals?.listForMember(query) ?? Promise.resolve([]),
+        conversations.repository.getPrivateAgentExecution?.(query) ?? Promise.resolve(null),
       ]);
       const events = mission
         ? await conversations.repository.listMissionEvents(context.organizationId, mission.id)
@@ -182,6 +183,7 @@ export function createApp({ verifier, hermes, conversations, delegations, host =
       const missionContext = mission?.context;
       response.json({
         messages: items,
+        agentExecution,
         mission: mission ? {
           id: mission.id,
           status: mission.status,
@@ -190,7 +192,7 @@ export function createApp({ verifier, hermes, conversations, delegations, host =
             : {},
           failure: typeof missionContext?.failure === "string" ? missionContext.failure : undefined,
         } : null,
-        events,
+        events: events.filter((event) => event.type !== "runner.execution"),
         approvals,
       });
     } catch (error) {
@@ -225,7 +227,11 @@ export function createApp({ verifier, hermes, conversations, delegations, host =
           externalSubject: context.principalId,
         }) ?? [];
         const missionContext = mission?.context;
+        const agentExecution = await conversations.repository.getPrivateAgentExecution?.({
+          organizationId: context.organizationId, externalSubject: context.principalId,
+        }) ?? null;
         const snapshot = JSON.stringify({
+          agentExecution,
           mission: mission ? {
             id: mission.id,
             status: mission.status,
@@ -234,7 +240,7 @@ export function createApp({ verifier, hermes, conversations, delegations, host =
               : {},
             failure: typeof missionContext?.failure === "string" ? missionContext.failure : undefined,
           } : null,
-          events,
+          events: events.filter((event) => event.type !== "runner.execution"),
           approvals,
         });
         if (snapshot !== previous) {
