@@ -42,7 +42,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Invalid or expired authentication request." }, { status: 400 });
   }
 
-  const config = getAuthConfig();
+  const config = await getAuthConfig();
   const tokenResponse = await fetch(new URL("/oauth2/token", config.issuerBaseUrl), {
     body: new URLSearchParams({
       client_id: config.clientId,

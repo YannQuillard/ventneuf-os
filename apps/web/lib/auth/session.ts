@@ -60,7 +60,7 @@ export async function readSession(): Promise<UserSession | null> {
     return null;
   }
 
-  return decodeSession(value, getAuthConfig().sessionSecret);
+  return decodeSession(value, (await getAuthConfig()).sessionSecret);
 }
 
 export function authCookieOptions(maxAge: number) {

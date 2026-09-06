@@ -7,7 +7,7 @@ import {
 } from "../../../lib/auth/session";
 
 export async function GET() {
-  const config = getAuthConfig();
+  const config = await getAuthConfig();
   const logoutUrl = new URL("/logout", config.issuerBaseUrl);
   logoutUrl.searchParams.set("client_id", config.clientId);
   logoutUrl.searchParams.set("logout_uri", config.logoutUri);

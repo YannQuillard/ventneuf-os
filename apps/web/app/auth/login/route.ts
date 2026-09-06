@@ -7,7 +7,7 @@ const OAUTH_STATE_COOKIE = "ventneuf_oauth_state";
 const PKCE_VERIFIER_COOKIE = "ventneuf_pkce_verifier";
 
 export async function GET() {
-  const config = getAuthConfig();
+  const config = await getAuthConfig();
   const state = randomBytes(32).toString("base64url");
   const verifier = randomBytes(64).toString("base64url");
   const challenge = createHash("sha256").update(verifier).digest("base64url");
