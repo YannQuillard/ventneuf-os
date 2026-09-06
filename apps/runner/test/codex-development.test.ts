@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -61,29 +61,28 @@ test("worktree creation outlives the ordinary Orca request timeout", () => {
   assert.equal(developmentOrcaRequestTimeoutMs(["worktree", "create"]), 120_000);
 });
 
-test("recovers a worktree that Orca created before reporting a fetch failure", async () => {
-  const temporary = await mkdtemp(join(tmpdir(), "codex-development-recovery-"));
+test("recovers a worktree that Orca finishes after its client times out", async () => {
+  const temporary = await realpath(await mkdtemp(join(tmpdir(), "codex-development-recovery-")));
   const repository = join(temporary, "repository");
-  const worktreePath = join(temporary, "worktree");
   const stateDirectory = join(temporary, "state");
   const missionId = "00000000-0000-4000-8000-000000000099";
   const missionDirectory = join(stateDirectory, missionId);
   const worktreeName = `ventneuf-mission-${missionId}`;
+  const worktreePath = join(temporary, worktreeName);
   const worktreeId = `orca-repository::${worktreePath}`;
   const calls: string[][] = [];
-  let showAttempts = 0;
+  let delayedCreation: Promise<unknown> | undefined;
   const runGit = (...args: string[]) => execute("/usr/bin/git", args, { timeout: 5_000 });
 
   class RecoveringAdapter extends AgentDevelopmentAdapter {
     protected override async orca(args: string[], _timeout?: number): Promise<Record<string, unknown>> {
       calls.push(args);
       if (args[0] === "repo") return { repo: { id: "orca-repository", path: repository } };
-      if (args[0] === "worktree" && args[1] === "create") throw new Error("Git refresh failed.");
-      if (args[0] === "worktree" && args[1] === "show") {
-        showAttempts += 1;
-        if (showAttempts === 1) throw new Error("Worktree not indexed yet.");
-        return { worktree: { id: worktreeId, repoId: "orca-repository", displayName: worktreeName,
-          path: worktreePath, isMainWorktree: false } };
+      if (args[0] === "worktree" && args[1] === "create") {
+        delayedCreation = new Promise((resolveDelay) => setTimeout(resolveDelay, 100))
+          .then(() => runGit("-C", repository, "worktree", "add", "-b", `test/${worktreeName}`, worktreePath));
+        void delayedCreation.catch(() => undefined);
+        throw new Error("Orca client timed out.");
       }
       if (args[0] === "terminal" && args[1] === "create") {
         await writeReviewState(join(missionDirectory, "status.json"), { status: "completed" });
@@ -103,8 +102,6 @@ test("recovers a worktree that Orca created before reporting a fetch failure", a
     await runGit("-C", repository, "add", "README.md");
     await runGit("-C", repository, "commit", "-m", "Initial commit");
     await runGit("-C", repository, "remote", "add", "origin", "https://github.com/example/sample.git");
-    await runGit("-C", repository, "worktree", "add", "-b", `test/${worktreeName}`, worktreePath);
-
     const adapter = new RecoveringAdapter({
       orcaPath: "/usr/bin/false",
       agentPath: "/usr/bin/false",
@@ -130,9 +127,12 @@ test("recovers a worktree that Orca created before reporting a fetch failure", a
     });
 
     assert.match(result, /https:\/\/github\.com\/example\/sample\/pull\/1/);
-    assert.equal(showAttempts, 2);
+    assert.ok(delayedCreation);
+    await delayedCreation;
+    assert.equal(calls.some(([group, command]) => group === "worktree" && command === "show"), false);
     assert.ok(calls.some(([group, command]) => group === "terminal" && command === "create"));
   } finally {
+    await delayedCreation?.catch(() => undefined);
     await rm(temporary, { recursive: true, force: true });
   }
 });
