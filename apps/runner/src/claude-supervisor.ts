@@ -1,3 +1,4 @@
+import { ExecutionActivity, executionRecorder } from "./execution-activity.js";
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { readFile, realpath, rm, writeFile } from "node:fs/promises";
@@ -551,7 +552,7 @@ export function claudeArguments(job: DevelopmentJob, options: { directory: strin
   const settings = claudeMissionSettings(job, options.directory);
   const args = [
     "--print", "--output-format", "stream-json", "--verbose", "--permission-mode", "auto",
-    "--permission-prompts", "none", "--forward-subagent-text", "--include-hook-events", "--no-chrome",
+    "--permission-prompts", "none", "--include-partial-messages", "--forward-subagent-text", "--include-hook-events", "--no-chrome",
     "--strict-mcp-config", "--mcp-config", JSON.stringify({ mcpServers: {} }),
     "--settings", JSON.stringify(settings), "--append-system-prompt", missionPrompt(job, options.resume),
     "--model", job.model,
@@ -620,6 +621,7 @@ async function runClaude(
   job: DevelopmentJob,
   directory: string,
   options: { resume: boolean; continuation?: boolean },
+  activity: ExecutionActivity,
   registerChild: (child: ChildProcessWithoutNullStreams | undefined) => void,
 ) {
   const claudePath = job.agentPath ?? job.claudePath;
@@ -643,6 +645,7 @@ async function runClaude(
   lines.on("line", (line) => {
     let message: ClaudeResult;
     try { message = JSON.parse(line) as ClaudeResult; } catch { return; }
+    activity.claude(message);
     const rendered = renderClaudeStreamEvent(message);
     if (rendered) process.stdout.write(rendered);
     if (message.type === "result") result = message;
@@ -713,6 +716,8 @@ export async function superviseClaudeDevelopment(directory: string) {
     }, stop);
   }, 500);
 
+  const activity = new ExecutionActivity("claude", job.missionId, job.worktree);
+  const recorder = await executionRecorder(directory, activity);
   let resume = Boolean(await readJsonIfPresent(join(directory, "claude-started.json")));
   let continuation = false;
   try {
@@ -731,7 +736,8 @@ export async function superviseClaudeDevelopment(directory: string) {
       const execution = await runClaude(job, directory, {
         resume,
         continuation,
-      }, (active) => { child = active; });
+      }, activity, (active) => { child = active; });
+      await recorder.flush().catch(() => undefined);
       resume = true;
       continuation = false;
       await writeReviewState(join(directory, "claude-started.json"), { sessionId: job.missionId });
@@ -787,6 +793,7 @@ export async function superviseClaudeDevelopment(directory: string) {
     await writeReviewState(join(directory, "status.json"), { status: "failed", failedAt: new Date().toISOString() });
     throw error;
   } finally {
+    await recorder.close();
     clearInterval(heartbeat);
     clearInterval(watchdog);
     await heartbeatWriting.catch(() => undefined);

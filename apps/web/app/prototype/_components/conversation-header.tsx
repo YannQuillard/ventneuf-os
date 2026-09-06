@@ -1,12 +1,9 @@
 "use client";
 
 import { Button } from "@astryxdesign/core/Button";
-import { Icon } from "@astryxdesign/core/Icon";
-import { IconButton } from "@astryxdesign/core/IconButton";
-import { HStack, LayoutHeader, StackItem, VStack } from "@astryxdesign/core/Layout";
+import { PageHeader } from "../../_components/page-header";
 import { MoreMenu } from "@astryxdesign/core/MoreMenu";
 import { StatusDot } from "@astryxdesign/core/StatusDot";
-import { Heading, Text } from "@astryxdesign/core/Text";
 import { ChatBubbleLeftEllipsisIcon, ChatBubbleLeftRightIcon, ClockIcon, HashtagIcon } from "@heroicons/react/24/outline";
 import { conversationHref, conversationTrail, projectHref } from "../../../lib/prototype/navigation";
 import { missionStatusPresentation } from "../../../lib/prototype/presentation";
@@ -61,27 +58,10 @@ export function ConversationHeader({ conversation, missions, onOpenMission, onSt
   };
 
   return (
-    <LayoutHeader hasDivider padding={3}>
-      <HStack gap={3} vAlign="center">
-        {isMobile ? (
-          <IconButton
-            label="Back to conversations"
-            tooltip="Conversations"
-            variant="ghost"
-            size="sm"
-            icon={<Icon icon="chevronLeft" />}
-            onClick={openNavigation}
-          />
-        ) : null}
-        <Icon icon={headerIcon(conversation)} color="secondary" />
-        <StackItem size="fill">
-          <VStack gap={0}>
-            <Heading level={4} accessibilityLevel={1} maxLines={1}>
-              {conversation.kind === "project-channel" ? `#${conversation.title}` : conversation.title}
-            </Heading>
-            <Text type="supporting" maxLines={1}>{subtitle}</Text>
-          </VStack>
-        </StackItem>
+    <PageHeader
+      title={conversation.kind === "project-channel" ? `#${conversation.title}` : conversation.title}
+      subtitle={subtitle} icon={headerIcon(conversation)} onOpenNavigation={isMobile ? openNavigation : undefined}
+      actions={<>
         {project && !isMobile ? (
           <Button label="Project" size="sm" variant="ghost" href={projectHref(project.id)} />
         ) : null}
@@ -125,7 +105,7 @@ export function ConversationHeader({ conversation, missions, onOpenMission, onSt
             },
           ]}
         />
-      </HStack>
-    </LayoutHeader>
+      </>}
+    />
   );
 }

@@ -1,5 +1,5 @@
 import { and, asc, eq, gt, isNull, lte, or, sql } from "drizzle-orm";
-import { claudeModelAliases, evaluateApprovalPolicy, type ClaudeModel } from "@ventneuf/domain";
+import { claudeModelAliases, evaluateApprovalPolicy, isAgentExecutionSnapshot, type AgentExecutionSnapshot, type ClaudeModel } from "@ventneuf/domain";
 import type { Database, DatabaseTransaction } from "./client.js";
 import { deviceCredentials, devices, messages, missionApprovals, missionEvents, missions } from "./schema.js";
 
@@ -198,6 +198,42 @@ export class RunnerMissionRepository {
     });
   }
 
+  execution(scope: DeviceScope, input: {
+    missionId: string; owner: string; tokenHash: string; snapshot: AgentExecutionSnapshot;
+  }) {
+    if (!isAgentExecutionSnapshot(input.snapshot)) throw new RunnerLeaseError("Invalid execution snapshot.");
+    return this.database.withOrganization(scope.organizationId, async (transaction) => {
+      await this.authenticate(transaction, scope);
+      const [mission] = await transaction.select().from(missions).where(and(
+        eq(missions.organizationId, scope.organizationId), eq(missions.id, input.missionId),
+        eq(missions.assignedDeviceId, scope.deviceId), eq(missions.leaseOwner, input.owner),
+        eq(missions.leaseTokenHash, input.tokenHash),
+      )).for("update").limit(1);
+      if (!mission || mission.context.type !== `runner.${input.snapshot.provider}-development`) {
+        throw new RunnerLeaseError("The execution is outside the runner lease.");
+      }
+      const [existing] = await transaction.select().from(missionEvents).where(and(
+        eq(missionEvents.organizationId, scope.organizationId), eq(missionEvents.missionId, mission.id),
+        eq(missionEvents.id, mission.id), eq(missionEvents.type, "runner.execution"),
+      )).limit(1);
+      const previous = existing?.payload.snapshot as AgentExecutionSnapshot | undefined;
+      if (previous && previous.revision >= input.snapshot.revision) return { revision: previous.revision };
+      const now = new Date();
+      if (mission.status !== "running" || !mission.leaseExpiresAt || mission.leaseExpiresAt <= now) {
+        throw new RunnerLeaseError("The runner lease expired or the mission stopped.");
+      }
+      // A single bounded materialized view survives completion without growing SSE snapshots per delta.
+      if (existing) {
+        await transaction.update(missionEvents).set({ payload: { snapshot: input.snapshot }, occurredAt: now })
+          .where(and(eq(missionEvents.id, mission.id), eq(missionEvents.organizationId, scope.organizationId)));
+      } else {
+        await transaction.insert(missionEvents).values({ id: mission.id, missionId: mission.id,
+          organizationId: scope.organizationId, type: "runner.execution", payload: { snapshot: input.snapshot }, occurredAt: now });
+      }
+      return { revision: input.snapshot.revision };
+    });
+  }
+
   report(scope: DeviceScope, input: {
     missionId: string;
     owner: string;
@@ -205,6 +241,7 @@ export class RunnerMissionRepository {
     eventId: string;
     kind: "progress" | "completed" | "failed";
     content: string;
+    snapshot?: AgentExecutionSnapshot;
   }) {
     return this.database.withOrganization(scope.organizationId, async (transaction) => {
       await this.authenticate(transaction, scope);
@@ -227,6 +264,20 @@ export class RunnerMissionRepository {
       const now = new Date();
       if (mission.status !== "running" || !mission.leaseExpiresAt || mission.leaseExpiresAt <= now) {
         throw new RunnerLeaseError("The runner lease expired or the mission stopped.");
+      }
+      if (input.snapshot) {
+        if (!isAgentExecutionSnapshot(input.snapshot)
+          || mission.context.type !== `runner.${input.snapshot.provider}-development`) {
+          throw new RunnerLeaseError("Invalid execution snapshot.");
+        }
+        await transaction.insert(missionEvents).values({ id: mission.id, missionId: mission.id,
+          organizationId: scope.organizationId, type: "runner.execution", payload: { snapshot: input.snapshot }, occurredAt: now,
+        }).onConflictDoUpdate({ target: missionEvents.id,
+          set: { payload: { snapshot: input.snapshot }, occurredAt: now },
+          setWhere: and(eq(missionEvents.organizationId, scope.organizationId), eq(missionEvents.missionId, mission.id),
+            eq(missionEvents.type, "runner.execution"),
+            sql`coalesce((${missionEvents.payload}->'snapshot'->>'revision')::bigint, 0) < ${input.snapshot.revision}`),
+        });
       }
       const status = input.kind === "progress" ? "running" : input.kind;
       const expiresAt = input.kind === "progress" ? new Date(now.getTime() + leaseDurationMs) : null;

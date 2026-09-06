@@ -4,26 +4,8 @@ import type { Conversation, PrototypeData } from "./types";
 export const RECENT_CONVERSATION_LIMIT = 5;
 const RECENT_VISIT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-export type NavigationEntryKind = "main" | "conversation" | "temporary" | "thread" | "channel" | "devices" | "usage";
-
-export type NavigationStatus = "running" | "attention";
-
-export interface NavigationEntry {
-  id: string;
-  kind: NavigationEntryKind;
-  label: string;
-  href?: string;
-  isSelected: boolean;
-  isDisabled?: boolean;
-  status?: NavigationStatus;
-  children: NavigationEntry[];
-}
-
-export interface NavigationGroup {
-  id: "personal" | "projects" | "workspace";
-  title: string;
-  entries: NavigationEntry[];
-}
+import type { NavigationEntry, NavigationEntryKind, NavigationGroup, NavigationStatus } from "../workspace-navigation";
+export type { NavigationEntry, NavigationEntryKind, NavigationGroup, NavigationStatus } from "../workspace-navigation";
 
 export function conversationHref(conversationId: string): string {
   return `/prototype/c/${conversationId}`;

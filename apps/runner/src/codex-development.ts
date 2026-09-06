@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { publishExecution } from "./execution-activity.js";
 import { mkdir, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -437,6 +438,7 @@ export class AgentDevelopmentAdapter implements MissionAdapter {
     leaseWriter = setInterval(updateLease, 500);
     const abort = () => updateLease();
     signal.addEventListener("abort", abort, { once: true });
+    const executionPublisher = publishExecution(directory, execution.execution);
     try {
       const local = await readJsonIfPresent<DevelopmentStatus>(join(directory, "status.json"));
       const heartbeat = await readJsonIfPresent<SupervisorHeartbeat>(join(directory, "supervisor.json"));
@@ -486,6 +488,8 @@ export class AgentDevelopmentAdapter implements MissionAdapter {
         await writing;
         const status = await readJsonIfPresent<DevelopmentStatus>(join(directory, "status.json"));
         if (status?.status === "completed") {
+          await executionPublisher.flush();
+          await executionPublisher.close();
           const resultPath = join(directory, "result.txt");
           if ((await stat(resultPath)).size > 64_000) throw new Error("Development result too large.");
           const result = (await readFile(resultPath, "utf8")).trim()
@@ -510,10 +514,14 @@ export class AgentDevelopmentAdapter implements MissionAdapter {
           }
           return `${this.options.agent === "codex" ? "Codex" : "Claude"} development mission completed for ${repository.id}.\n\n${result.slice(0, 14_000)}`;
         }
-        if (status?.status === "failed") throw new Error(`${this.options.agent === "codex" ? "Codex" : "Claude"} development supervisor failed.`);
+        if (status?.status === "failed") {
+          await executionPublisher.flush();
+          throw new Error(`${this.options.agent === "codex" ? "Codex" : "Claude"} development supervisor failed.`);
+        }
         const request = await readJsonIfPresent<AgentApprovalRequest>(join(directory, "approval-request.json"));
         const decision = await readJsonIfPresent<{ requestId?: string }>(join(directory, "approval-decision.json"));
         if (request && decision?.requestId !== request.requestId) {
+          await executionPublisher.flush();
           const response = await execution.requestApproval(request);
           if (response.approval.status === "pending") {
             await writeReviewState(join(directory, "lease.json"), {
@@ -533,6 +541,7 @@ export class AgentDevelopmentAdapter implements MissionAdapter {
         await new Promise((resolveDelay) => setTimeout(resolveDelay, 500));
       }
     } finally {
+      await executionPublisher.close();
       if (leaseWriter) clearInterval(leaseWriter);
       signal.removeEventListener("abort", abort);
       await writing.catch(() => undefined);

@@ -1,3 +1,5 @@
+export * from "./execution.js";
+
 export type PrincipalType = "user" | "service" | "device" | "mission";
 
 export type Capability =

@@ -1,12 +1,15 @@
 "use client";
 
-import { Avatar } from "@astryxdesign/core/Avatar";
+import { BottomSheet } from "@astryxdesign/core/BottomSheet";
+import { useMediaQuery } from "@astryxdesign/core/hooks";
+import { missionStatusPresentation } from "../lib/mission-presentation";
+import executionStyles from "./agent-execution.module.css";
+import { PageHeader } from "./_components/page-header";
+import { AssistantMessage } from "./_components/assistant-message";
+import { ConversationSurface } from "./_components/conversation-surface";
+import { useWorkspaceNavigation } from "./workspace";
+import { ChatBubbleLeftRightIcon } from "@heroicons/react/24/outline";
 import {
-  ChatComposer,
-  ChatComposerInput,
-  ChatLayout,
-  ChatMessage,
-  ChatMessageBubble,
   ChatMessageList,
   ChatSystemMessage,
   type ChatComposerInputHandle,
@@ -15,7 +18,7 @@ import { ClickableCard } from "@astryxdesign/core/ClickableCard";
 import { Button } from "@astryxdesign/core/Button";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { Grid } from "@astryxdesign/core/Grid";
-import { HStack, VStack } from "@astryxdesign/core/Layout";
+import { HStack, VStack, Layout, LayoutContent } from "@astryxdesign/core/Layout";
 import { Spinner } from "@astryxdesign/core/Spinner";
 import { Heading, Text } from "@astryxdesign/core/Text";
 import { Timestamp } from "@astryxdesign/core/Timestamp";
@@ -24,9 +27,10 @@ import { formatDuration, type Message, type MissionEvent, type MissionState, typ
 import { missionActivities } from "../lib/mission-activity";
 import { ConversationMessage } from "./conversation-message";
 import { MessageDetailsPanel } from "./message-details";
+import { AgentExecutionPanel } from "./agent-execution";
+import type { AgentExecution } from "../lib/agent-execution";
 
 const chatColumn: CSSProperties = { flex: 1, minWidth: 0, height: "100%" };
-const chatLayout: CSSProperties = { flex: 1, minHeight: 0 };
 
 const suggestions = [
   {
@@ -80,6 +84,7 @@ function lastAssistantRetry(messages: Message[]) {
 }
 
 export function HermesConversation() {
+  const { isMobile, openNavigation } = useWorkspaceNavigation();
   const [messages, setMessages] = useState<Message[]>([]);
   const [pending, setPending] = useState<PendingMessage[]>([]);
   const [content, setContent] = useState("");
@@ -88,6 +93,10 @@ export function HermesConversation() {
   const [revealingId, setRevealingId] = useState<string>();
   const [mission, setMission] = useState<MissionState | null>(null);
   const [missionEvents, setMissionEvents] = useState<MissionEvent[]>([]);
+  const [isAgentOpen, setIsAgentOpen] = useState(false);
+  const isCompact = useMediaQuery("(max-width: 1100px)");
+  const [agentExecution, setAgentExecution] = useState<AgentExecution | null>(null);
+  const executionActive = Boolean(agentExecution && ["queued", "running", "waiting_for_approval"].includes(agentExecution.status));
   const [selectedMessageId, setSelectedMessageId] = useState<string>();
   const [now, setNow] = useState(() => Date.now());
   const [error, setError] = useState<string>();
@@ -106,12 +115,14 @@ export function HermesConversation() {
       messages: Message[];
       mission: MissionState | null;
       events: MissionEvent[];
+      agentExecution?: AgentExecution | null;
     };
     const knownIds = new Set(payload.messages.map(({ id }) => id));
     acceptedMessages.current = acceptedMessages.current.filter(({ id }) => !knownIds.has(id));
     setMessages(acceptedMessages.current.length > 0
       ? [...payload.messages, ...acceptedMessages.current]
       : payload.messages);
+    setAgentExecution(payload.agentExecution ?? null);
     setMission(payload.mission ?? null);
     setMissionEvents(payload.events ?? []);
     setIsLoaded(true);
@@ -142,23 +153,25 @@ export function HermesConversation() {
       } catch (reason) {
         if (!stopped) setError(reason instanceof Error ? reason.message : "Unable to load the conversation.");
       }
-      if (!stopped) timer = window.setTimeout(poll, awaitingReply ? 750 : 5_000);
+      if (!stopped) timer = window.setTimeout(poll, awaitingReply || executionActive ? 1_500 : 5_000);
     };
     void poll();
     return () => {
       stopped = true;
       if (timer) window.clearTimeout(timer);
     };
-  }, [awaitingReply, refresh]);
+  }, [awaitingReply, executionActive, refresh]);
 
   useEffect(() => {
-    if (!awaitingReply) return;
+    if (!awaitingReply && !executionActive) return;
     const source = new EventSource("/api/hermes/events");
     source.addEventListener("snapshot", (raw) => {
       const payload = JSON.parse((raw as MessageEvent<string>).data) as {
         mission: MissionState | null;
         events: MissionEvent[];
+      agentExecution?: AgentExecution | null;
       };
+      setAgentExecution(payload.agentExecution ?? null);
       setMission(payload.mission);
       setMissionEvents(payload.events);
       if (payload.mission && !["queued", "running", "waiting_for_approval"].includes(payload.mission.status)) {
@@ -167,7 +180,7 @@ export function HermesConversation() {
       }
     });
     return () => source.close();
-  }, [awaitingReply, refresh]);
+  }, [awaitingReply, executionActive, refresh]);
 
   useEffect(() => {
     if (!awaitingReply) return;
@@ -225,16 +238,16 @@ export function HermesConversation() {
     setPending((current) => current.filter(({ id }) => id !== pendingId));
   }, []);
 
-  const stopMission = useCallback(async () => {
-    if (!mission) return;
+  const stopMission = useCallback(async (missionId: string) => {
     setIsStopping(true);
     try {
-      const response = await fetch(`/api/hermes/missions/${encodeURIComponent(mission.id)}/cancel`, {
+      const response = await fetch(`/api/hermes/missions/${encodeURIComponent(missionId)}/cancel`, {
         method: "POST",
       });
       if (!response.ok) throw new Error("Hermes could not stop this run.");
-      setAwaitingReply(false);
-      setMission((current) => current ? { ...current, status: "cancelled" } : null);
+      if (mission?.id === missionId) setAwaitingReply(false);
+      setMission((current) => current?.id === missionId ? { ...current, status: "cancelled" } : current);
+      setAgentExecution((current) => current?.missionId === missionId ? { ...current, status: "cancelled" } : current);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Hermes could not stop this run.");
     } finally {
@@ -282,24 +295,18 @@ export function HermesConversation() {
   }, [selected, selectedMessageId]);
 
   return (
-    <VStack height="100%" className="conversation-surface">
+    <>
+      <Layout height="fill" header={
+        <PageHeader title="Hermes" subtitle="Private · personal knowledge" icon={ChatBubbleLeftRightIcon}
+          onOpenNavigation={isMobile ? openNavigation : undefined}
+          actions={agentExecution ? <Button
+            label={isMobile ? "Mission" : `Mission · ${missionStatusPresentation[agentExecution.status].label}`}
+            variant="ghost" size="sm" clickAction={() => setIsAgentOpen(true)} /> : undefined} />
+      } content={<LayoutContent padding={0} isScrollable={false}>
       <HStack height="100%">
         <VStack style={chatColumn}>
-          <ChatLayout
-            style={chatLayout}
-            composer={(
-              <ChatComposer
-                value={content}
-                onChange={setContent}
-                onSubmit={(value) => {
-                  setContent("");
-                  void submit(value);
-                }}
-                placeholder="Message Hermes"
-                status={error ? { type: "error", message: error } : undefined}
-                input={<ChatComposerInput handleRef={composerInput} />}
-              />
-            )}
+          <ConversationSurface value={content} onChange={setContent} inputRef={composerInput} error={error}
+            onSubmit={(value) => { setContent(""); void submit(value); }}
             emptyState={isLoaded ? (
               <VStack gap={6} hAlign="center" width="100%" maxWidth={560} padding={4}>
                 <EmptyState
@@ -360,71 +367,78 @@ export function HermesConversation() {
                   );
                 })}
                 {awaitingReply ? (
-                  <ChatMessage sender="assistant" avatar={<Avatar name="Hermes" size="md" />}>
-                    <ChatMessageBubble variant="ghost">
-                      <div className="mission-progress" role="status">
-                        <Spinner aria-hidden="true" size="sm" />
-                        <span className="thinking-shimmer">
-                          {mission?.status === "queued" ? "Queued" : "Mission is running"}
-                        </span>
-                        <span className="mission-elapsed">
-                          {formatDuration(mission?.timing?.acceptedAt
-                            ? Math.max(0, now - new Date(mission.timing.acceptedAt).getTime())
-                            : undefined)}
-                        </span>
-                        <Button
-                          label="Stop"
-                          variant="ghost"
-                          size="sm"
-                          isLoading={isStopping}
-                          clickAction={stopMission}
-                        />
-                      </div>
-                      {missionEvents.filter((event) => event.type === "runner.progress").slice(-1).map((event) => (
-                        <Text key={event.id} type="supporting" color="secondary">
-                          {typeof event.payload.content === "string" ? event.payload.content : "Runner is working"}
-                        </Text>
-                      ))}
-                      {visibleActivities.length > 0 ? (
-                        <div className="mission-activity" aria-label="Mission activity">
-                          <div className="mission-activity-heading">
-                            <span>Activity</span>
-                            <span>{activities.length} {activities.length === 1 ? "tool" : "tools"}</span>
-                          </div>
-                          {visibleActivities.map((activity) => (
-                            <div className="mission-event" data-status={activity.status} key={activity.id}>
-                              <span className="mission-event-indicator" aria-hidden="true" />
-                              <div className="mission-event-content">
-                                <div className="mission-event-summary">
-                                  <strong>{activity.label}</strong>
-                                  <span>
-                                    {activity.status === "running"
-                                      ? "Running"
-                                      : activity.status === "failed"
-                                        ? "Failed"
-                                        : formatDuration(activity.durationMs) ?? "Done"}
-                                  </span>
-                                </div>
-                                {activity.preview ? (
-                                  <details className="mission-event-details">
-                                    <summary>Show input</summary>
-                                    <code>{activity.preview}</code>
-                                  </details>
-                                ) : null}
-                              </div>
-                            </div>
-                          ))}
+                  <AssistantMessage>
+                    <div className="mission-progress" role="status">
+                      <Spinner aria-hidden="true" size="sm" />
+                      <span className="thinking-shimmer">
+                        {mission?.status === "queued" ? "Queued" : "Mission is running"}
+                      </span>
+                      <span className="mission-elapsed">
+                        {formatDuration(mission?.timing?.acceptedAt
+                          ? Math.max(0, now - new Date(mission.timing.acceptedAt).getTime())
+                          : undefined)}
+                      </span>
+                      <Button
+                        label="Stop"
+                        variant="ghost"
+                        size="sm"
+                        isLoading={isStopping}
+                        clickAction={() => { if (mission) void stopMission(mission.id); }}
+                      />
+                    </div>
+                    {missionEvents.filter((event) => event.type === "runner.progress").slice(-1).map((event) => (
+                      <Text key={event.id} type="supporting" color="secondary">
+                        {typeof event.payload.content === "string" ? event.payload.content : "Runner is working"}
+                      </Text>
+                    ))}
+                    {visibleActivities.length > 0 ? (
+                      <div className="mission-activity" aria-label="Mission activity">
+                        <div className="mission-activity-heading">
+                          <span>Activity</span>
+                          <span>{activities.length} {activities.length === 1 ? "tool" : "tools"}</span>
                         </div>
-                      ) : null}
-                    </ChatMessageBubble>
-                  </ChatMessage>
+                        {visibleActivities.map((activity) => (
+                          <div className="mission-event" data-status={activity.status} key={activity.id}>
+                            <span className="mission-event-indicator" aria-hidden="true" />
+                            <div className="mission-event-content">
+                              <div className="mission-event-summary">
+                                <strong>{activity.label}</strong>
+                                <span>
+                                  {activity.status === "running"
+                                    ? "Running"
+                                    : activity.status === "failed"
+                                      ? "Failed"
+                                      : formatDuration(activity.durationMs) ?? "Done"}
+                                </span>
+                              </div>
+                              {activity.preview ? (
+                                <details className="mission-event-details">
+                                  <summary>Show input</summary>
+                                  <code>{activity.preview}</code>
+                                </details>
+                              ) : null}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </AssistantMessage>
                 ) : null}
               </ChatMessageList>
             ) : null}
-          </ChatLayout>
+          </ConversationSurface>
         </VStack>
+        {agentExecution && isAgentOpen && !isCompact ? <aside className={executionStyles.panel}>
+          <AgentExecutionPanel key={agentExecution.missionId} execution={agentExecution} presentation="panel"
+            onClose={() => setIsAgentOpen(false)} onStop={() => void stopMission(agentExecution.missionId)} isStopping={isStopping} />
+        </aside> : null}
         {selected ? <MessageDetailsPanel message={selected} onClose={closeDetails} /> : null}
       </HStack>
-    </VStack>
+      </LayoutContent>} />
+      {agentExecution && isCompact ? <BottomSheet isOpen={isAgentOpen} onOpenChange={setIsAgentOpen} label="Mission details" height="tall">
+        <AgentExecutionPanel key={agentExecution.missionId} execution={agentExecution} presentation="sheet"
+          onClose={() => setIsAgentOpen(false)} onStop={() => void stopMission(agentExecution.missionId)} isStopping={isStopping} />
+      </BottomSheet> : null}
+    </>
   );
 }

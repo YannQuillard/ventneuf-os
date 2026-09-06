@@ -241,6 +241,28 @@ export class ConversationRuntimeRepository {
     });
   }
 
+  getPrivateAgentExecution(input: { organizationId: string; externalSubject: string }) {
+    return this.database.withOrganization(input.organizationId, async (transaction) => {
+      const [result] = await transaction.select({ id: missions.id, status: missions.status, goal: missions.goal, context: missions.context,
+        snapshot: missionEvents.payload, occurredAt: missionEvents.occurredAt,
+      }).from(missions).innerJoin(members, and(eq(members.organizationId, missions.organizationId),
+        eq(members.id, missions.requestedByMemberId)))
+        .leftJoin(missionEvents, and(eq(missionEvents.organizationId, missions.organizationId),
+          eq(missionEvents.missionId, missions.id), eq(missionEvents.id, missions.id), eq(missionEvents.type, "runner.execution")))
+        .where(and(eq(missions.organizationId, input.organizationId), eq(members.externalSubject, input.externalSubject),
+          sql`${missions.context}->>'type' in ('runner.codex-development', 'runner.claude-development')`))
+        .orderBy(desc(missions.createdAt)).limit(1);
+      return result ? { missionId: result.id, status: result.status, title: result.goal,
+        provider: result.context.type === "runner.claude-development" ? "claude" : "codex",
+        repositoryId: typeof result.context.repositoryId === "string" ? result.context.repositoryId : undefined,
+        model: typeof (result.context.agent as { model?: unknown } | undefined)?.model === "string"
+          ? (result.context.agent as { model: string }).model : undefined,
+        result: typeof result.context.result === "string" ? result.context.result : undefined,
+        receivedAt: result.occurredAt?.toISOString(),
+        snapshot: result.snapshot?.snapshot ?? null } : null;
+    });
+  }
+
   getLatestPrivateMission(input: { organizationId: string; externalSubject: string }) {
     return this.database.withOrganization(input.organizationId, async (transaction) => {
       const [result] = await transaction
