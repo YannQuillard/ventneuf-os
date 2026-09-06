@@ -2,6 +2,18 @@ import { lstat, opendir, readFile, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 
+export const claudeModelAliases = ["opus", "sonnet", "fable"] as const;
+export type ClaudeModel = typeof claudeModelAliases[number];
+
+export function isClaudeModel(value: unknown): value is ClaudeModel {
+  return typeof value === "string" && claudeModelAliases.includes(value as ClaudeModel);
+}
+
+function isClaudeModelList(value: unknown): value is ClaudeModel[] {
+  return Array.isArray(value) && value.length > 0 && value.length <= claudeModelAliases.length
+    && value.every(isClaudeModel) && new Set(value).size === value.length;
+}
+
 export interface RegisteredRepository {
   id: string;
   name: string;
@@ -9,6 +21,7 @@ export interface RegisteredRepository {
   orcaReview?: boolean;
   codexDevelopment?: boolean;
   claudeDevelopment?: boolean;
+  claudeModels?: ClaudeModel[];
 }
 export const defaultRepositoriesFile = () => join(homedir(), ".config", "ventneuf.os", "repositories.json");
 
@@ -29,7 +42,9 @@ export async function loadRepositories(path: string): Promise<RegisteredReposito
       || typeof entry.path !== "string" || !isAbsolute(entry.path)
       || (entry.orcaReview !== undefined && typeof entry.orcaReview !== "boolean")
       || (entry.codexDevelopment !== undefined && typeof entry.codexDevelopment !== "boolean")
-      || (entry.claudeDevelopment !== undefined && typeof entry.claudeDevelopment !== "boolean")) {
+      || (entry.claudeDevelopment !== undefined && typeof entry.claudeDevelopment !== "boolean")
+      || (entry.claudeModels !== undefined && !isClaudeModelList(entry.claudeModels))
+      || (entry.claudeModels !== undefined && entry.claudeDevelopment !== true)) {
       throw new Error("Invalid repository configuration.");
     }
     ids.add(entry.id);
@@ -39,6 +54,7 @@ export async function loadRepositories(path: string): Promise<RegisteredReposito
       ...(entry.orcaReview === true ? { orcaReview: true } : {}),
       ...(entry.codexDevelopment === true ? { codexDevelopment: true } : {}),
       ...(entry.claudeDevelopment === true ? { claudeDevelopment: true } : {}),
+      ...(entry.claudeModels !== undefined ? { claudeModels: [...entry.claudeModels] } : {}),
     });
   }
   return repositories;
@@ -51,6 +67,7 @@ export interface RunnerMission {
   objective: string;
   attempt?: number;
   authorityExpiresAt?: string;
+  model?: ClaudeModel;
   approvalDecision?: MissionApprovalDecision;
 }
 export interface MissionApprovalDecision {

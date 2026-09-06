@@ -73,6 +73,9 @@ if (command === "install") {
         orcaReview: Boolean(review && repository.orcaReview),
         codexDevelopment: Boolean(development && repository.codexDevelopment),
         claudeDevelopment: Boolean(claudeDevelopment && repository.claudeDevelopment),
+        ...(claudeDevelopment && repository.claudeDevelopment && repository.claudeModels
+          ? { claudeModels: repository.claudeModels }
+          : {}),
       })),
   }).start();
   console.info(`ventneuf.os runner listening on http://127.0.0.1:${port}`);

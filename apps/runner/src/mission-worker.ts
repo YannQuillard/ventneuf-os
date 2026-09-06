@@ -8,6 +8,7 @@ import {
   type MissionStatus,
   type RunnerMission,
   type RegisteredRepository,
+  type ClaudeModel,
 } from "./repositories.js";
 
 export interface ClaimedMission extends RunnerMission {
@@ -34,6 +35,7 @@ export interface MissionClient {
     orcaReview?: boolean;
     codexDevelopment?: boolean;
     claudeDevelopment?: boolean;
+    claudeModels?: ClaudeModel[];
   }>): Promise<void>;
   claimMission(device: StoredDevice, owner: string): Promise<ClaimedMission | null>;
   reportMission(device: StoredDevice, missionId: string, report: MissionReport): Promise<void>;
@@ -66,9 +68,9 @@ export class RunnerMissionWorker {
         });
       }
       await this.options.client.registerRepositories(device, repositories.map(({
-        id, name, orcaReview, codexDevelopment, claudeDevelopment,
+        id, name, orcaReview, codexDevelopment, claudeDevelopment, claudeModels,
       }) => ({ id, name, ...(orcaReview ? { orcaReview } : {}), ...(codexDevelopment ? { codexDevelopment } : {}),
-        ...(claudeDevelopment ? { claudeDevelopment } : {}) })));
+        ...(claudeDevelopment ? { claudeDevelopment } : {}), ...(claudeModels ? { claudeModels } : {}) })));
       const mission = await this.options.client.claimMission(device, this.owner);
       if (!mission) return;
       const report = async (kind: MissionReport["kind"], content: string) => {
@@ -86,7 +88,7 @@ export class RunnerMissionWorker {
         : mission.adapter === "codex-development"
           ? "Preparing an autonomous Codex development mission in Orca."
           : mission.adapter === "claude-development"
-            ? "Preparing an autonomous Claude development mission in Orca."
+            ? `Preparing an autonomous Claude development mission with ${mission.model} in Orca.`
           : "Checking the registered repository in read-only mode.");
       let result: string;
       const controller = new AbortController();
@@ -125,6 +127,7 @@ export class RunnerMissionWorker {
             throw new Error("Codex development is not enabled or its authority expired.");
           }
           if (mission.adapter === "claude-development" && (!repository.claudeDevelopment
+            || !mission.model || !repository.claudeModels?.includes(mission.model)
             || !Number.isFinite(deadline) || deadline <= Date.now())) {
             throw new Error("Claude development is not enabled or its authority expired.");
           }

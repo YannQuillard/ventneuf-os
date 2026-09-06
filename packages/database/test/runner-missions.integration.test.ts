@@ -180,7 +180,14 @@ test("runner assignment, concurrent claims, fenced retries, cancellation and ten
     }), RunnerAssignmentError);
     await runner.register(scope, [{
       id: "sample", name: "Sample", orcaReview: true, codexDevelopment: true, claudeDevelopment: true,
+      claudeModels: ["opus"],
     }]);
+    await assert.rejects(conversations.enqueuePrivateMessage({
+      organizationId,
+      externalSubject: "runner-subject",
+      content: "Use an unadvertised Claude model",
+      runner: { deviceId, repositoryId: "sample", adapter: "claude-development", model: "sonnet" },
+    }), RunnerAssignmentError);
     const development = await conversations.enqueuePrivateMessage({
       organizationId,
       externalSubject: "runner-subject",
@@ -205,13 +212,14 @@ test("runner assignment, concurrent claims, fenced retries, cancellation and ten
       organizationId,
       externalSubject: "runner-subject",
       content: "Fix the source with Claude and open a pull request",
-      runner: { deviceId, repositoryId: "sample", adapter: "claude-development" },
+      runner: { deviceId, repositoryId: "sample", adapter: "claude-development", model: "opus" },
     });
-    assert.equal((claudeDevelopment.mission.context.agent as { adapter?: string }).adapter, "claude");
+    assert.deepEqual(claudeDevelopment.mission.context.agent, { adapter: "claude", model: "opus" });
     assert.equal((claudeDevelopment.mission.context.authority as { actions?: Record<string, string> })
       .actions?.["repository.write"], "allow");
     const claudeClaim = await runner.claim(scope, owner, "claude-development-lease");
     assert.equal(claudeClaim?.adapter, "claude-development");
+    assert.equal(claudeClaim?.model, "opus");
     assert.ok(Number.isFinite(Date.parse(claudeClaim?.authorityExpiresAt ?? "")));
     await runner.report(scope, {
       missionId: claudeDevelopment.mission.id,

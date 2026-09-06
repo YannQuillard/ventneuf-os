@@ -22,11 +22,13 @@ test("repository check uses explicit configuration and never reads source conten
     const configuration = join(temporary, "repositories.json");
     await writeFile(configuration, JSON.stringify([{
       id: "sample", name: "Sample", path: root, codexDevelopment: true, claudeDevelopment: true,
+      claudeModels: ["opus"],
     }]));
     const [repository] = await loadRepositories(configuration);
     assert.ok(repository);
     assert.equal(repository.codexDevelopment, true);
     assert.equal(repository.claudeDevelopment, true);
+    assert.deepEqual(repository.claudeModels, ["opus"]);
     const adapter = new RepositoryCheckAdapter();
     const result = await adapter.execute(mission, repository, new AbortController().signal);
     assert.match(result, /3 top-level entries/);
@@ -35,6 +37,10 @@ test("repository check uses explicit configuration and never reads source conten
     assert.equal(await readFile(join(root, "secret.txt"), "utf8"), "sensitive source content");
     await assert.rejects(adapter.execute({ ...mission, repositoryId: "other" }, repository, new AbortController().signal));
     await assert.rejects(adapter.execute(mission, repository, AbortSignal.abort()));
+    await writeFile(configuration, JSON.stringify([{
+      id: "sample", name: "Sample", path: root, claudeDevelopment: true, claudeModels: ["unknown"],
+    }]));
+    await assert.rejects(loadRepositories(configuration));
     await writeFile(configuration, JSON.stringify([{ id: "sample", name: "Sample", path: "relative" }]));
     await assert.rejects(loadRepositories(configuration));
     assert.deepEqual(await loadRepositories(join(temporary, "missing.json")), []);
@@ -144,15 +150,18 @@ test("routes a Claude approval through the leased worker and pauses without fail
     repositories: async () => [{
       id: "sample", name: "Sample", path: "/repository", orcaReview: true, codexDevelopment: true,
       claudeDevelopment: true,
+      claudeModels: ["opus"],
     }],
     client: {
       registerRepositories: async (_device, repositories) => {
         assert.equal(repositories[0]?.codexDevelopment, true);
         assert.equal(repositories[0]?.claudeDevelopment, true);
+        assert.deepEqual(repositories[0]?.claudeModels, ["opus"]);
       },
       claimMission: async () => ({
         ...mission,
         adapter: "claude-development",
+        model: "opus",
         authorityExpiresAt: new Date(Date.now() + 60_000).toISOString(),
       }),
       reportMission: async (_device, _id, report) => { reports.push(report); },

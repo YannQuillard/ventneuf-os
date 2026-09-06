@@ -1,6 +1,7 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { GenerateMacCommand, KMSClient, VerifyMacCommand } from "@aws-sdk/client-kms";
 import { z } from "zod";
+import { claudeModelAliases } from "@ventneuf/domain";
 import { postgresUuidSchema } from "./device-auth.js";
 import { StaticTokenProvider, type TokenProvider } from "./hermes.js";
 
@@ -10,7 +11,16 @@ const targetSchema = z.object({
   deviceId: z.string().uuid(),
   repositoryId: repositoryIdSchema,
   adapters: z.array(adapterSchema).min(1).max(4),
-}).strict();
+  claudeModels: z.array(z.enum(claudeModelAliases)).min(1).max(claudeModelAliases.length).optional(),
+}).strict().superRefine((target, context) => {
+  if (target.adapters.includes("claude-development") !== Boolean(target.claudeModels?.length)) {
+    context.addIssue({
+      code: "custom",
+      path: ["claudeModels"],
+      message: "Claude models must be present exactly when Claude development is delegated.",
+    });
+  }
+});
 
 const baseClaimsSchema = z.object({
   version: z.literal(1),

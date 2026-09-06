@@ -13,6 +13,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
+import type { ClaudeModel } from "@ventneuf/domain";
 
 export const memberRole = pgEnum("member_role", ["owner", "member"]);
 export const channelKind = pgEnum("channel_kind", ["project", "shared", "private"]);
@@ -88,6 +89,7 @@ export const devices = pgTable(
       orcaReview?: boolean;
       codexDevelopment?: boolean;
       claudeDevelopment?: boolean;
+      claudeModels?: ClaudeModel[];
     }>>().default([]).notNull(),
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),

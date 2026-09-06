@@ -37,6 +37,7 @@ async function fixture() {
     missionId,
     repositoryId: "sample",
     objective: "Fix the sample and open a pull request.",
+    model: "opus",
     claudePath: "/usr/bin/false",
     gitPath: "/usr/bin/git",
     gitAuthorName: "Test Author",
@@ -168,11 +169,16 @@ test("builds a fail-closed Claude CLI and sandbox configuration", async () => {
     assert.ok(settings.sandbox.credentials.envVars.every(({ mode }) => mode === "deny"));
     const args = claudeArguments(state.job, { directory: state.directory, resume: false });
     assert.ok(args.includes("--restricted"));
+    assert.equal(args[args.indexOf("--model") + 1], "opus");
     assert.ok(args.includes("manual"));
     assert.ok(args.includes("none"));
     assert.ok(args.includes("--strict-mcp-config"));
     const tools = args[args.indexOf("--tools") + 1] ?? "";
     for (const tool of ["WebSearch", "WebFetch", "Agent", "Skill"]) assert.match(tools, new RegExp(`\\b${tool}\\b`));
+    assert.throws(() => claudeArguments({ ...state.job, model: undefined }, {
+      directory: state.directory,
+      resume: false,
+    }), /no authorized model/);
   } finally {
     await rm(state.directory, { recursive: true, force: true });
   }

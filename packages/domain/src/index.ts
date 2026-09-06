@@ -23,6 +23,9 @@ export const approvalActionCategories = [
   "connector.write",
 ] as const;
 
+export const claudeModelAliases = ["opus", "sonnet", "fable"] as const;
+export type ClaudeModel = typeof claudeModelAliases[number];
+
 export type ApprovalActionCategory = typeof approvalActionCategories[number];
 export type ApprovalPolicyDecision = "allow" | "hermes" | "human" | "deny";
 

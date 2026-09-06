@@ -84,6 +84,7 @@ test("MCP dispatches an objective only through the authenticated member's runner
     deviceId: "00000000-0000-4000-8000-000000000001",
     repositoryId: "ventneuf-os",
     adapter: "claude-development",
+    model: "opus",
   };
   const result = await callTool(services, authorized, "mission.dispatch", args);
   assert.equal(result.isError, undefined);
@@ -100,8 +101,19 @@ test("MCP dispatches an objective only through the authenticated member's runner
       deviceId: args.deviceId,
       repositoryId: args.repositoryId,
       adapter: args.adapter,
+      model: args.model,
     },
   });
+
+  for (const invalid of [
+    { ...args, model: undefined },
+    { ...args, adapter: "codex-development", model: "opus" },
+  ]) {
+    const rejected = await callTool({ conversations: { repository: {
+      enqueuePrivateMessage: async () => assert.fail("Invalid model selection must fail before database access"),
+    } as never } }, authorized, "mission.dispatch", invalid);
+    assert.equal(rejected.isError, true);
+  }
 
   for (const context of [identity, { ...authorized, principalType: "mission" as const }]) {
     const rejected = await callTool({ conversations: { repository: {
@@ -126,6 +138,7 @@ test("MCP dispatches for Hermes only through a matching parent delegation", asyn
     deviceId: "00000000-0000-4000-8000-000000000002",
     repositoryId: "ventneuf-os",
     adapter: "claude-development",
+    model: "opus",
     delegationToken: "signed-parent-delegation",
     requestId: "00000000-0000-4000-8000-000000000003",
   };
@@ -144,6 +157,7 @@ test("MCP dispatches for Hermes only through a matching parent delegation", asyn
       deviceId: args.deviceId,
       repositoryId: args.repositoryId,
       adapters: ["claude-development" as const],
+      claudeModels: ["opus" as const],
     }],
     issuedAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + 60_000).toISOString(),
@@ -183,6 +197,7 @@ test("MCP dispatches for Hermes only through a matching parent delegation", asyn
     deviceId: args.deviceId,
     repositoryId: args.repositoryId,
     adapter: args.adapter,
+    model: args.model,
   });
 
   for (const [context, input, delegated] of [
@@ -190,6 +205,8 @@ test("MCP dispatches for Hermes only through a matching parent delegation", asyn
     [service, { ...args, delegationToken: undefined }, services.delegations],
     [service, { ...args, requestId: undefined }, services.delegations],
     [service, { ...args, repositoryId: "foreign" }, services.delegations],
+    [service, { ...args, model: "sonnet" }, services.delegations],
+    [service, { ...args, model: undefined }, services.delegations],
     [service, args, undefined],
   ] as const) {
     const rejected = await callTool({

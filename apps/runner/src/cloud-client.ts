@@ -6,7 +6,7 @@ import {
   type RunnerApprovalResponse,
 } from "./mission-worker.js";
 import type { StoredDevice } from "./credential-store.js";
-import type { MissionStatus } from "./repositories.js";
+import { isClaudeModel, type ClaudeModel, type MissionStatus } from "./repositories.js";
 
 interface EnrollmentResponse {
   device: {
@@ -37,6 +37,7 @@ export class RunnerCloudClient {
     orcaReview?: boolean;
     codexDevelopment?: boolean;
     claudeDevelopment?: boolean;
+    claudeModels?: ClaudeModel[];
   }>) {
     await this.missionRequest(device, "/api/runner/repositories", { repositories });
   }
@@ -53,6 +54,7 @@ export class RunnerCloudClient {
       || !Number.isFinite(Date.parse(mission.leaseExpiresAt))
       || (["codex-development", "claude-development"].includes(mission.adapter)
         && (!mission.authorityExpiresAt || !Number.isFinite(Date.parse(mission.authorityExpiresAt))))
+      || (mission.adapter === "claude-development" ? !isClaudeModel(mission.model) : mission.model !== undefined)
       || (mission.approvalDecision !== undefined && !this.isApprovalDecision(mission.approvalDecision))) {
       throw new Error("Invalid runner mission response.");
     }

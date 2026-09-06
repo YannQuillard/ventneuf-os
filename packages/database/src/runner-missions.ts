@@ -1,5 +1,5 @@
 import { and, asc, eq, gt, isNull, lte, or, sql } from "drizzle-orm";
-import { evaluateApprovalPolicy } from "@ventneuf/domain";
+import { claudeModelAliases, evaluateApprovalPolicy, type ClaudeModel } from "@ventneuf/domain";
 import type { Database, DatabaseTransaction } from "./client.js";
 import { deviceCredentials, devices, messages, missionApprovals, missionEvents, missions } from "./schema.js";
 
@@ -37,6 +37,7 @@ export class RunnerMissionRepository {
     orcaReview?: boolean;
     codexDevelopment?: boolean;
     claudeDevelopment?: boolean;
+    claudeModels?: ClaudeModel[];
   }>) {
     return this.database.withOrganization(scope.organizationId, async (transaction) => {
       await this.authenticate(transaction, scope);
@@ -72,6 +73,8 @@ export class RunnerMissionRepository {
               ? "claude-development"
             : "repository-check";
         const authority = mission.context.authority as { expiresAt?: unknown } | undefined;
+        const agent = mission.context.agent as { model?: unknown } | undefined;
+        const model = agent?.model;
         const authorityExpiresAt = typeof authority?.expiresAt === "string" ? Date.parse(authority.expiresAt) : Number.NaN;
         if (["codex-development", "claude-development"].includes(adapter)
           && (!Number.isFinite(authorityExpiresAt) || authorityExpiresAt <= now.getTime())) {
@@ -80,6 +83,15 @@ export class RunnerMissionRepository {
           }).where(eq(missions.id, mission.id));
           await transaction.insert(missionEvents).values({ organizationId: scope.organizationId,
             missionId: mission.id, type: "run.failed", payload: { reason: "development_authority_expired" }, occurredAt: now });
+          continue;
+        }
+        if (adapter === "claude-development"
+          && !claudeModelAliases.includes(model as ClaudeModel)) {
+          await transaction.update(missions).set({ status: "failed", leaseExpiresAt: null, updatedAt: now,
+            context: { ...mission.context, failure: "Claude model authorization is unavailable." },
+          }).where(eq(missions.id, mission.id));
+          await transaction.insert(missionEvents).values({ organizationId: scope.organizationId,
+            missionId: mission.id, type: "run.failed", payload: { reason: "claude_model_unavailable" }, occurredAt: now });
           continue;
         }
         // Never automatically launch a second coding agent after an ambiguous execution.
@@ -147,6 +159,7 @@ export class RunnerMissionRepository {
           : undefined;
         return { id: mission.id, repositoryId: mission.context.repositoryId, objective: mission.goal,
           adapter, attempt: mission.attempts + 1, leaseExpiresAt: expiresAt.toISOString(),
+          ...(adapter === "claude-development" ? { model: model as ClaudeModel } : {}),
           ...(["codex-development", "claude-development"].includes(adapter) && typeof authority?.expiresAt === "string"
             ? { authorityExpiresAt: authority.expiresAt }
             : {}),

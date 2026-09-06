@@ -70,6 +70,7 @@ function messageWithDelegation(message: string, grant: MissionDelegationGrant): 
     "<ventneuf_mission_authority>",
     `Parent mission: ${grant.claims.parentMissionId}`,
     "You may dispatch bounded runner work only through the ventneuf MCP mission.dispatch tool.",
+    "For claude-development, choose and pass one model from that target's claudeModels list. Never rely on the runner's local default model.",
     "Pass the delegation token below and a stable UUID requestId with every dispatch. Reuse the requestId when retrying the same dispatch.",
     `Available targets: ${JSON.stringify(grant.claims.targets)}`,
     `Delegation token: ${grant.token}`,

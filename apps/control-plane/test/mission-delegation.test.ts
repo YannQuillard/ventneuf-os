@@ -21,6 +21,7 @@ const input = {
     repositoryId: "ventneuf-os",
     adapters: ["repository-check" as const, "orca-review" as const, "codex-development" as const,
       "claude-development" as const],
+    claudeModels: ["opus" as const],
   }],
 };
 
@@ -67,6 +68,10 @@ test("rejects expired, tampered, foreign-key, and weak mission delegations", asy
   await assert.rejects(
     new MissionDelegation(localMac("short")).issue(input, now),
     /at least 32 bytes/,
+  );
+  await assert.rejects(
+    delegations.issue({ ...input, targets: [{ ...input.targets[0], claudeModels: undefined }] } as never, now),
+    /Claude models must be present/,
   );
 });
 
