@@ -7,7 +7,7 @@ import { createInterface } from "node:readline";
 import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import type { AgentApprovalRequest } from "./repositories.js";
+import type { AgentApprovalRequest, ClaudeModel } from "./repositories.js";
 import { writeReviewState } from "./review-supervisor.js";
 
 export interface DevelopmentJob {
@@ -16,6 +16,7 @@ export interface DevelopmentJob {
   missionId: string;
   repositoryId: string;
   objective: string;
+  model?: ClaudeModel;
   codexPath?: string;
   claudePath?: string;
   gitPath: string;

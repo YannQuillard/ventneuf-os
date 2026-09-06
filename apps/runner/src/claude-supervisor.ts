@@ -7,7 +7,7 @@ import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type { DevelopmentJob } from "./development-supervisor.js";
-import type { AgentApprovalRequest } from "./repositories.js";
+import { isClaudeModel, type AgentApprovalRequest } from "./repositories.js";
 import { writeReviewState } from "./review-supervisor.js";
 
 interface ClaudeHookInput {
@@ -550,12 +550,14 @@ function missionPrompt(job: DevelopmentJob, resumed: boolean) {
 }
 
 export function claudeArguments(job: DevelopmentJob, options: { directory: string; resume: boolean; domains?: string[]; continuation?: boolean }) {
+  if (!isClaudeModel(job.model)) throw new Error("The Claude mission has no authorized model.");
   const settings = claudeMissionSettings(job, options.domains ?? [], options.directory);
   const args = [
     "--print", "--output-format", "stream-json", "--verbose", "--permission-mode", "manual",
     "--permission-prompts", "none", "--restricted", "--no-chrome", "--strict-mcp-config",
     "--mcp-config", JSON.stringify({ mcpServers: {} }), "--tools", allowedTools.join(","),
     "--settings", JSON.stringify(settings), "--append-system-prompt", missionPrompt(job, options.resume),
+    "--model", job.model,
     "--name", `ventneuf-${job.missionId.slice(0, 8)}`,
   ];
   if (options.resume) args.push("--resume", job.missionId);
@@ -622,7 +624,7 @@ async function runClaude(
 export async function superviseClaudeDevelopment(directory: string) {
   const job = JSON.parse(await readFile(join(directory, "job.json"), "utf8")) as DevelopmentJob;
   const configuredClaudePath = job.agentPath ?? job.claudePath;
-  if (job.agent !== "claude" || !configuredClaudePath || !isAbsolute(configuredClaudePath)
+  if (job.agent !== "claude" || !isClaudeModel(job.model) || !configuredClaudePath || !isAbsolute(configuredClaudePath)
     || !/^[a-f0-9-]{36}$/.test(job.missionId) || !job.repositoryId || !isAbsolute(job.gitPath)
     || typeof job.gitAuthorName !== "string" || !job.gitAuthorName.trim()
     || typeof job.gitAuthorEmail !== "string" || !job.gitAuthorEmail.trim()

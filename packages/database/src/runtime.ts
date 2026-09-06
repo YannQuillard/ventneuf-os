@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
-import type { MissionAuthority } from "@ventneuf/domain";
+import type { ClaudeModel, MissionAuthority } from "@ventneuf/domain";
 import type { Database } from "./client.js";
 import { conversations, devices, members, messages, missionApprovals, missionEvents, missions, organizations } from "./schema.js";
 
@@ -31,7 +31,28 @@ export interface HermesDispatchScope {
     deviceId: string;
     repositoryId: string;
     adapters: DelegatedRunnerAdapter[];
+    claudeModels?: ClaudeModel[];
   }>;
+}
+
+function repositorySupports(
+  repository: {
+    id: string;
+    orcaReview?: boolean;
+    codexDevelopment?: boolean;
+    claudeDevelopment?: boolean;
+    claudeModels?: ClaudeModel[];
+  },
+  repositoryId: string,
+  adapter: DelegatedRunnerAdapter,
+  model?: ClaudeModel,
+) {
+  return repository.id === repositoryId
+    && (adapter !== "orca-review" || repository.orcaReview === true)
+    && (adapter !== "codex-development" || repository.codexDevelopment === true)
+    && (adapter !== "claude-development" || (repository.claudeDevelopment === true
+      && model !== undefined && repository.claudeModels?.includes(model) === true))
+    && (adapter === "claude-development" || model === undefined);
 }
 
 export class ConversationRuntimeRepository {
@@ -48,7 +69,7 @@ export class ConversationRuntimeRepository {
     externalSubject: string;
     content: string;
     contextId?: string;
-    runner?: { deviceId: string; repositoryId: string; adapter?: DelegatedRunnerAdapter };
+    runner?: { deviceId: string; repositoryId: string; adapter?: DelegatedRunnerAdapter; model?: ClaudeModel };
   }) {
     const acceptedAt = new Date();
     return this.database.withOrganization(input.organizationId, async (transaction) => {
@@ -102,10 +123,12 @@ export class ConversationRuntimeRepository {
           eq(devices.memberId, member.id),
           isNull(devices.revokedAt),
         )).for("share").limit(1);
-        if (!device?.repositories.some(({ id, orcaReview, codexDevelopment, claudeDevelopment }) => id === input.runner!.repositoryId
-          && (input.runner!.adapter !== "orca-review" || orcaReview === true)
-          && (input.runner!.adapter !== "codex-development" || codexDevelopment === true)
-          && (input.runner!.adapter !== "claude-development" || claudeDevelopment === true))) {
+        if (!device?.repositories.some((repository) => repositorySupports(
+          repository,
+          input.runner!.repositoryId,
+          input.runner!.adapter ?? "repository-check",
+          input.runner!.model,
+        ))) {
           throw new RunnerAssignmentError();
         }
       }
@@ -163,7 +186,7 @@ export class ConversationRuntimeRepository {
               agent: { adapter: "codex" },
               authority: developmentAuthority(new Date(acceptedAt.getTime() + developmentAuthorityMs)),
             } : input.runner?.adapter === "claude-development" ? {
-              agent: { adapter: "claude" },
+              agent: { adapter: "claude", model: input.runner.model },
               authority: developmentAuthority(new Date(acceptedAt.getTime() + developmentAuthorityMs)),
             } : {}),
             timing: { acceptedAt: acceptedAt.toISOString() },
@@ -293,16 +316,20 @@ export class ConversationRuntimeRepository {
           eq(devices.memberId, mission.requestedByMemberId),
           isNull(devices.revokedAt),
         ));
-      const targets = ownedDevices.flatMap((device) => device.repositories.map((repository) => ({
-        deviceId: device.id,
-        repositoryId: repository.id,
-        adapters: [
-          "repository-check" as const,
-          ...(repository.orcaReview ? ["orca-review" as const] : []),
-          ...(repository.codexDevelopment ? ["codex-development" as const] : []),
-          ...(repository.claudeDevelopment ? ["claude-development" as const] : []),
-        ],
-      })));
+      const targets = ownedDevices.flatMap((device) => device.repositories.map((repository) => {
+        const claudeModels = repository.claudeDevelopment ? repository.claudeModels : undefined;
+        return {
+          deviceId: device.id,
+          repositoryId: repository.id,
+          adapters: [
+            "repository-check" as const,
+            ...(repository.orcaReview ? ["orca-review" as const] : []),
+            ...(repository.codexDevelopment ? ["codex-development" as const] : []),
+            ...(claudeModels?.length ? ["claude-development" as const] : []),
+          ],
+          ...(claudeModels?.length ? { claudeModels } : {}),
+        };
+      }));
       if (targets.length > 50) throw new Error("The mission has too many runner targets to delegate.");
       return {
         organizationId,
@@ -327,6 +354,7 @@ export class ConversationRuntimeRepository {
     deviceId: string;
     repositoryId: string;
     adapter: DelegatedRunnerAdapter;
+    model?: ClaudeModel;
   }) {
     const acceptedAt = new Date();
     return this.database.withOrganization(input.organizationId, async (transaction) => {
@@ -355,9 +383,11 @@ export class ConversationRuntimeRepository {
         sql`${missions.context}->'delegation'->>'requestId' = ${input.requestId}`,
       )).limit(1);
       if (existing) {
+        const existingAgent = existing.context?.agent as { model?: unknown } | undefined;
         if (existing.goal !== input.objective || existing.assignedDeviceId !== input.deviceId
           || existing.context?.repositoryId !== input.repositoryId
-          || existing.context?.type !== `runner.${input.adapter}`) throw new DelegatedMissionError();
+          || existing.context?.type !== `runner.${input.adapter}`
+          || existingAgent?.model !== input.model) throw new DelegatedMissionError();
         return { conversationId: input.conversationId, mission: existing };
       }
 
@@ -367,10 +397,12 @@ export class ConversationRuntimeRepository {
         eq(devices.memberId, input.memberId),
         isNull(devices.revokedAt),
       )).for("share").limit(1);
-      if (!device?.repositories.some(({ id, orcaReview, codexDevelopment, claudeDevelopment }) => id === input.repositoryId
-        && (input.adapter !== "orca-review" || orcaReview === true)
-        && (input.adapter !== "codex-development" || codexDevelopment === true)
-        && (input.adapter !== "claude-development" || claudeDevelopment === true))) throw new DelegatedMissionError();
+      if (!device?.repositories.some((repository) => repositorySupports(
+        repository,
+        input.repositoryId,
+        input.adapter,
+        input.model,
+      ))) throw new DelegatedMissionError();
 
       const [mission] = await transaction.insert(missions).values({
         organizationId: input.organizationId,
@@ -393,7 +425,7 @@ export class ConversationRuntimeRepository {
             agent: { adapter: "codex" },
             authority: developmentAuthority(new Date(acceptedAt.getTime() + developmentAuthorityMs)),
           } : input.adapter === "claude-development" ? {
-            agent: { adapter: "claude" },
+            agent: { adapter: "claude", model: input.model },
             authority: developmentAuthority(new Date(acceptedAt.getTime() + developmentAuthorityMs)),
           } : {}),
           timing: { acceptedAt: acceptedAt.toISOString() },

@@ -238,6 +238,7 @@ export class AgentDevelopmentAdapter implements MissionAdapter {
       missionId: mission.id,
       repositoryId: repository.id,
       objective: mission.objective,
+      ...(this.options.agent === "claude" ? { model: mission.model } : {}),
       ...(this.options.agent === "codex" ? { codexPath: this.options.agentPath } : { claudePath: this.options.agentPath }),
       gitPath,
       gitAuthorName,
@@ -319,6 +320,9 @@ export class AgentDevelopmentAdapter implements MissionAdapter {
     const enabled = this.options.agent === "codex" ? repository.codexDevelopment : repository.claudeDevelopment;
     if (mission.adapter !== adapter || mission.repositoryId !== repository.id
       || !enabled || !execution || !/^[a-f0-9-]{36}$/.test(mission.id)
+      || (this.options.agent === "claude"
+        && (!mission.model || !repository.claudeModels?.includes(mission.model)))
+      || (this.options.agent === "codex" && mission.model !== undefined)
       || !mission.authorityExpiresAt) throw new Error("The development mission is outside this repository scope.");
     const authorityExpiresAt = Date.parse(mission.authorityExpiresAt);
     if (!Number.isFinite(authorityExpiresAt) || authorityExpiresAt <= Date.now()) throw new Error("Development authority expired.");
@@ -338,6 +342,7 @@ export class AgentDevelopmentAdapter implements MissionAdapter {
     if (!job || job.missionId !== mission.id || job.repositoryId !== repository.id
       || job.objective !== mission.objective || job.worktree !== state.worktreePath
       || (job.agent ?? "codex") !== this.options.agent
+      || job.model !== mission.model
       || configuredAgentPath !== this.options.agentPath || job.gitPath !== gitPath
       || job.authorityExpiresAt !== authorityExpiresAt
       || await realpath(state.worktreePath) !== state.worktreePath) {

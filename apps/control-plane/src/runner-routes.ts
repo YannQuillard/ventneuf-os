@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { Express } from "express";
-import { approvalActionCategories, assertAuthorized } from "@ventneuf/domain";
+import { approvalActionCategories, assertAuthorized, claudeModelAliases } from "@ventneuf/domain";
 import {
   MissionApprovalConflictError,
   MissionApprovalPolicyError,
@@ -22,7 +22,11 @@ const repository = z.object({
   orcaReview: z.boolean().optional(),
   codexDevelopment: z.boolean().optional(),
   claudeDevelopment: z.boolean().optional(),
-}).strict();
+  claudeModels: z.array(z.enum(claudeModelAliases)).min(1).max(claudeModelAliases.length).optional(),
+}).strict().refine((value) => value.claudeModels === undefined || value.claudeDevelopment === true, {
+  path: ["claudeModels"],
+  message: "Claude models require the Claude development capability.",
+});
 const lease = z.object({ owner: z.string().uuid(), token: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 const report = z.object({
   owner: z.string().uuid(), token: z.string().regex(/^[a-f0-9]{64}$/), eventId: z.string().uuid(),

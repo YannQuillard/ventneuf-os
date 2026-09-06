@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
   assertAuthorized,
+  claudeModelAliases,
   publicIdentity,
   type AuthorizationContext,
 } from "@ventneuf/domain";
@@ -66,12 +67,13 @@ export function createRemoteMcpServer(
     "mission.dispatch",
     {
       title: "Dispatch a runner mission",
-      description: "Queue a repository task within an explicitly advertised runner capability. Codex development missions may edit the isolated worktree and request policy-bound approvals. User calls are ownership-scoped directly; Hermes service calls require the current parent-mission delegation and a stable request ID.",
+      description: "Queue a repository task within an explicitly advertised runner capability. Claude development requires an explicit model allowed by the target's claudeModels list. Development missions may edit the isolated worktree and request policy-bound approvals. User calls are ownership-scoped directly; Hermes service calls require the current parent-mission delegation and a stable request ID.",
       inputSchema: {
         objective: z.string().trim().min(1).max(4_000),
         deviceId: z.string().uuid(),
         repositoryId,
         adapter: z.enum(["repository-check", "orca-review", "codex-development", "claude-development"]).default("orca-review"),
+        model: z.enum(claudeModelAliases).optional().describe("Required for claude-development and forbidden for other adapters."),
         delegationToken: z.string().min(1).max(20_000).optional(),
         requestId: z.string().uuid().optional(),
       },
