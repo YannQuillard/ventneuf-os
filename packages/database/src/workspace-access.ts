@@ -1,8 +1,17 @@
 export {
+  currentPersonalScope,
+  currentScopeForConversation,
+  currentScopeForMission,
+  requireCurrentConversationMemoryFence,
+  requireCurrentMissionMemoryScope,
   requireConversationAccess,
   requireProjectAccess,
   requireWorkspaceMember,
   WorkspaceAccessError,
+  WorkspaceMemoryFenceError,
+  type ConversationMemoryFence,
+  type HermesMemoryScope,
+  type MissionMemoryScopeFence,
   type WorkspaceScope,
 } from "./workspace.js";
 
