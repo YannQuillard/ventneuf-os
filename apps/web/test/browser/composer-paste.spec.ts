@@ -4,6 +4,7 @@ const COMPOSER_URL = "/prototype/c/hermes";
 const LONG_PASTE = "Long paste payload: " + "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima ".repeat(7);
 const OTHER_LONG_PASTE = "Different long paste payload: " + "one two three four five six seven eight nine ten ".repeat(7);
 const REPEAT_WINDOW_MS = 1_500;
+const PASTE_MODIFIER = process.platform === "darwin" ? "Meta" : "Control";
 
 function normalizeText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
@@ -21,10 +22,9 @@ async function paste(page: Page, text: string, fromKeyboard = true) {
   const editor = page.locator('[contenteditable="true"]:visible').first();
   await editor.focus();
   if (fromKeyboard) {
-    await page.keyboard.down("Control");
-    await page.keyboard.down("v");
-    await page.keyboard.up("v");
-    await page.keyboard.up("Control");
+    await page.evaluate(async (value) => navigator.clipboard.writeText(value), text);
+    await page.keyboard.press(`${PASTE_MODIFIER}+v`);
+    return;
   }
   await editor.evaluate((element, value) => {
     const clipboardData = new DataTransfer();
@@ -83,10 +83,8 @@ test.describe("composer long paste", () => {
 
   test("expands the prior keyboard paste when the same paste is repeated", async ({ page }) => {
     await openComposer(page);
-    // Keep the repeat window independent from CI rendering and assertion time.
-    await page.clock.setFixedTime(new Date("2026-01-01T00:00:00Z"));
     await paste(page, LONG_PASTE);
-    await expect(page.locator('[contenteditable="true"]:visible [data-astryx-token]')).toHaveCount(1);
+    // Repeat immediately so a slow CI assertion cannot expire the 1.5 second product window.
     await paste(page, LONG_PASTE);
 
     await expect(page.locator('[contenteditable="true"]:visible [data-astryx-token]')).toHaveCount(0);

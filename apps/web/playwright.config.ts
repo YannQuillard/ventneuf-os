@@ -10,6 +10,7 @@ export default defineConfig({
   reporter: "list",
   use: {
     baseURL: "http://127.0.0.1:3100",
+    permissions: ["clipboard-read", "clipboard-write"],
     trace: "retain-on-failure",
     channel: isCi ? undefined : "chrome",
   },
