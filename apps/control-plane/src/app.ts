@@ -17,6 +17,7 @@ import {
 import { z } from "zod";
 import { registerRunnerRoutes } from "./runner-routes.js";
 import type { MissionDelegationVerifier } from "./mission-delegation.js";
+import type { GitHubConnector } from "./github.js";
 import {
   createDeviceCredential,
   createEnrollmentToken,
@@ -31,13 +32,77 @@ export interface AppServices {
   conversations?: ConversationRuntime;
   delegations?: MissionDelegationVerifier;
   host?: string;
+  github?: GitHubConnector;
 }
 
-export function createApp({ verifier, hermes, conversations, delegations, host = "127.0.0.1" }: AppServices) {
+export function createApp({ verifier, hermes, conversations, delegations, github, host = "127.0.0.1" }: AppServices) {
   const app = createMcpExpressApp({ host });
 
   registerRunnerRoutes(app, verifier, conversations);
   registerWorkspaceRoutes(app, authenticate, conversations, hermes);
+
+  app.get("/api/github", async (request, response, next) => {
+    try {
+      const context = await authenticate(request, response);
+      if (!context) return;
+      if (context.principalType !== "user") return void response.status(403).json({ error: "forbidden" });
+      if (!github) return void response.status(503).json({ error: "github_unavailable" });
+      response.setHeader("cache-control", "no-store");
+      response.json(await github.status({ organizationId: context.organizationId, externalSubject: context.principalId }));
+    } catch (error) { next(error); }
+  });
+
+  app.get("/api/github/connect", async (request, response, next) => {
+    try {
+      const context = await authenticate(request, response);
+      if (!context) return;
+      if (context.principalType !== "user") return void response.status(403).json({ error: "forbidden" });
+      if (!github) return void response.status(503).json({ error: "github_unavailable" });
+      response.setHeader("cache-control", "no-store");
+      response.json({ authorizationUrl: await github.authorizationUrl({
+        organizationId: context.organizationId,
+        externalSubject: context.principalId,
+      }) });
+    } catch (error) { next(error); }
+  });
+
+  app.post("/api/github/callback", async (request, response, next) => {
+    try {
+      const context = await authenticate(request, response);
+      if (!context) return;
+      if (context.principalType !== "user") return void response.status(403).json({ error: "forbidden" });
+      if (!github) return void response.status(503).json({ error: "github_unavailable" });
+      const input = z.object({ code: z.string().min(1).max(512), state: z.string().min(1).max(4_096) }).strict().parse(request.body);
+      await github.complete({ organizationId: context.organizationId, externalSubject: context.principalId }, input.code, input.state);
+      response.setHeader("cache-control", "no-store");
+      response.status(204).end();
+    } catch (error) {
+      if (error instanceof z.ZodError) return void response.status(400).json({ error: "invalid_request" });
+      next(error);
+    }
+  });
+
+  app.get("/api/github/repositories", async (request, response, next) => {
+    try {
+      const context = await authenticate(request, response);
+      if (!context) return;
+      if (context.principalType !== "user") return void response.status(403).json({ error: "forbidden" });
+      if (!github) return void response.status(503).json({ error: "github_unavailable" });
+      response.setHeader("cache-control", "no-store");
+      response.json({ repositories: await github.repositories({ organizationId: context.organizationId, externalSubject: context.principalId }) });
+    } catch (error) { next(error); }
+  });
+
+  app.delete("/api/github", async (request, response, next) => {
+    try {
+      const context = await authenticate(request, response);
+      if (!context) return;
+      if (context.principalType !== "user") return void response.status(403).json({ error: "forbidden" });
+      if (!github) return void response.status(503).json({ error: "github_unavailable" });
+      await github.disconnect({ organizationId: context.organizationId, externalSubject: context.principalId });
+      response.status(204).end();
+    } catch (error) { next(error); }
+  });
 
   app.get("/health", (_request, response) => {
     response.json({ service: "ventneuf-os-control-plane", status: "ok" });

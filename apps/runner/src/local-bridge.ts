@@ -72,12 +72,14 @@ export class LocalRunnerBridge {
       if (request.method === "POST" && request.url === "/repositories") {
         if (!this.device) return this.json(response, 409, { error: "runner_not_enrolled" });
         if (!this.options.repositoriesFile) return this.json(response, 503, { error: "repository_configuration_unavailable" });
-        const body = await this.readJson(request) as { githubUrl?: unknown; searchRoot?: unknown };
-        if (typeof body.githubUrl !== "string" || (body.searchRoot !== undefined && typeof body.searchRoot !== "string")) {
+        const body = await this.readJson(request) as { githubUrl?: unknown; githubRepositoryId?: unknown; searchRoot?: unknown };
+        if (typeof body.githubUrl !== "string" || (body.githubRepositoryId !== undefined && typeof body.githubRepositoryId !== "string")
+          || (body.searchRoot !== undefined && typeof body.searchRoot !== "string")) {
           return this.json(response, 400, { error: "invalid_request" });
         }
         const repository = await addGitHubRepository(this.options.repositoriesFile, {
           url: body.githubUrl,
+          ...(body.githubRepositoryId ? { repositoryId: body.githubRepositoryId } : {}),
           ...(body.searchRoot ? { searchRoot: body.searchRoot } : {}),
         });
         return this.json(response, 201, { repository: { id: repository.id, name: repository.name, github: repository.github } });

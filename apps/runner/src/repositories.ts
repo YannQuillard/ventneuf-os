@@ -30,7 +30,7 @@ export interface RegisteredRepository {
   claudeModels?: ClaudeModel[];
   github?: GitHubRepositoryIdentity;
 }
-export interface GitHubRepositoryIdentity { owner: string; name: string }
+export interface GitHubRepositoryIdentity { id?: string; owner: string; name: string }
 export const defaultRepositoriesFile = () => join(homedir(), ".config", "ventneuf.os", "repositories.json");
 
 function repositoryId(name: string, path: string) {
@@ -41,7 +41,7 @@ function repositoryId(name: string, path: string) {
 }
 
 function githubRepositoryId(identity: GitHubRepositoryIdentity) {
-  return `github-${createHash("sha256").update(`${identity.owner}/${identity.name}`).digest("hex").slice(0, 32)}`;
+  return `github-${createHash("sha256").update(identity.id ?? `${identity.owner}/${identity.name}`).digest("hex").slice(0, 32)}`;
 }
 
 export function parseGitHubRepository(value: string): GitHubRepositoryIdentity {
@@ -68,6 +68,7 @@ export function parseGitHubRepository(value: string): GitHubRepositoryIdentity {
 }
 
 function sameGitHubRepository(left: GitHubRepositoryIdentity, right: GitHubRepositoryIdentity) {
+  if (left.id && right.id) return left.id === right.id;
   return left.owner === right.owner && left.name === right.name;
 }
 
@@ -175,6 +176,7 @@ export async function loadRepositories(path: string): Promise<RegisteredReposito
       || (entry.claudeModels !== undefined && entry.claudeDevelopment !== true)
       || (entry.github !== undefined && (!entry.github || typeof entry.github.owner !== "string"
         || typeof entry.github.name !== "string"
+        || (entry.github.id !== undefined && (typeof entry.github.id !== "string" || !/^[0-9]+$/.test(entry.github.id)))
         || !sameGitHubRepository(parseGitHubRepository(`https://github.com/${entry.github.owner}/${entry.github.name}`), entry.github)))) {
       throw new Error("Invalid repository configuration.");
     }
@@ -186,7 +188,8 @@ export async function loadRepositories(path: string): Promise<RegisteredReposito
       ...(entry.codexDevelopment === true ? { codexDevelopment: true } : {}),
       ...(entry.claudeDevelopment === true ? { claudeDevelopment: true } : {}),
       ...(entry.claudeModels !== undefined ? { claudeModels: [...entry.claudeModels] } : {}),
-      ...(entry.github !== undefined ? { github: { owner: entry.github.owner, name: entry.github.name } } : {}),
+      ...(entry.github !== undefined ? { github: { ...(entry.github.id ? { id: entry.github.id } : {}),
+        owner: entry.github.owner, name: entry.github.name } } : {}),
     });
   }
   return repositories;
@@ -210,11 +213,12 @@ export async function addRegisteredRepository(configurationPath: string, input: 
   return repository;
 }
 
-export async function addGitHubRepository(configurationPath: string, input: { url: string; searchRoot?: string }) {
+export async function addGitHubRepository(configurationPath: string, input: { url: string; repositoryId?: string; searchRoot?: string }) {
   if (input.searchRoot !== undefined && (!isAbsolute(input.searchRoot) || input.searchRoot.length > 4_096)) {
     throw new Error("Enter an absolute folder to search on this Mac.");
   }
-  const identity = parseGitHubRepository(input.url);
+  if (input.repositoryId !== undefined && !/^[0-9]+$/.test(input.repositoryId)) throw new Error("The GitHub repository identity is invalid.");
+  const identity = { ...parseGitHubRepository(input.url), ...(input.repositoryId ? { id: input.repositoryId } : {}) };
   const roots = await loadSearchRoots(configurationPath);
   if (input.searchRoot) {
     const root = await realpath(input.searchRoot);
@@ -236,7 +240,15 @@ export async function addGitHubRepository(configurationPath: string, input: { ur
   const existingIndex = repositories.findIndex((repository) => repository.path === path);
   if (existingIndex >= 0) {
     const existing = repositories[existingIndex]!;
-    if (existing.github && sameGitHubRepository(existing.github, identity)) throw new Error("This GitHub repository is already connected.");
+    if (existing.github && sameGitHubRepository(existing.github, identity)) {
+      if (!existing.github.id && identity.id) {
+        const updated = { ...existing, github: identity };
+        repositories[existingIndex] = updated;
+        await saveRepositories(configurationPath, repositories);
+        return updated;
+      }
+      throw new Error("This GitHub repository is already connected.");
+    }
     const updated = { ...existing, name: `${identity.owner}/${identity.name}`, github: identity };
     repositories[existingIndex] = updated;
     await saveRepositories(configurationPath, repositories);

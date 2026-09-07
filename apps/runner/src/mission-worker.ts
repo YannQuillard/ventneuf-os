@@ -38,7 +38,7 @@ export interface MissionClient {
     codexDevelopment?: boolean;
     claudeDevelopment?: boolean;
     claudeModels?: ClaudeModel[];
-    github?: { owner: string; name: string };
+    github?: { id?: string; owner: string; name: string };
   }>): Promise<void>;
   claimMission(device: StoredDevice, owner: string): Promise<ClaimedMission | null>;
   reportMission(device: StoredDevice, missionId: string, report: MissionReport): Promise<void>;

@@ -92,7 +92,7 @@ export const devices = pgTable(
       codexDevelopment?: boolean;
       claudeDevelopment?: boolean;
       claudeModels?: ClaudeModel[];
-      github?: { owner: string; name: string };
+      github?: { id?: string; owner: string; name: string };
     }>>().default([]).notNull(),
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
@@ -106,6 +106,27 @@ export const devices = pgTable(
       name: "devices_organization_member_fk",
     }),
     index("devices_member_idx").on(table.memberId),
+  ],
+);
+
+export const githubConnections = pgTable(
+  "github_connections",
+  {
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    memberId: uuid("member_id").notNull(),
+    githubUserId: text("github_user_id").notNull(),
+    login: text("login").notNull(),
+    credentialCiphertext: text("credential_ciphertext").notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    primaryKey({ columns: [table.organizationId, table.memberId] }),
+    foreignKey({
+      columns: [table.organizationId, table.memberId],
+      foreignColumns: [members.organizationId, members.id],
+      name: "github_connections_organization_member_fk",
+    }),
+    uniqueIndex("github_connections_organization_user_unique").on(table.organizationId, table.githubUserId),
   ],
 );
 
