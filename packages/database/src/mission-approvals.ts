@@ -1,3 +1,4 @@
+import { hasWorkspaceMissionAuthority } from "./workspace-access.js";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { and, desc, eq, isNull } from "drizzle-orm";
@@ -54,7 +55,7 @@ export interface PublicMissionApproval {
   createdAt: string;
 }
 
-function publicApproval(row: ApprovalRow): PublicMissionApproval {
+export function publicApproval(row: ApprovalRow): PublicMissionApproval {
   return {
     id: row.id,
     missionId: row.missionId,
@@ -457,10 +458,10 @@ export class MissionApprovalRepository {
     const [device] = await transaction.select({ id: devices.id }).from(devices).where(and(
       eq(devices.organizationId, approval.organizationId),
       eq(devices.id, mission.assignedDeviceId),
-      eq(devices.memberId, mission.requestedByMemberId),
+      mission.context.workspaceVersion === 1 ? undefined : eq(devices.memberId, mission.requestedByMemberId),
       isNull(devices.revokedAt),
     )).limit(1);
-    if (!device) {
+    if (!device || !await hasWorkspaceMissionAuthority(transaction, mission)) {
       const [updated] = await transaction.update(missionApprovals).set({ status: "cancelled", updatedAt: now })
         .where(eq(missionApprovals.id, approval.id)).returning();
       await transaction.update(missions).set({ status: "cancelled", updatedAt: now })

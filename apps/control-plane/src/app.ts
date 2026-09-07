@@ -1,3 +1,4 @@
+import { registerWorkspaceRoutes } from "./workspace-routes.js";
 import { submitPrivateMessage } from "./conversations.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
@@ -36,6 +37,7 @@ export function createApp({ verifier, hermes, conversations, delegations, host =
   const app = createMcpExpressApp({ host });
 
   registerRunnerRoutes(app, verifier, conversations);
+  registerWorkspaceRoutes(app, authenticate, conversations);
 
   app.get("/health", (_request, response) => {
     response.json({ service: "ventneuf-os-control-plane", status: "ok" });

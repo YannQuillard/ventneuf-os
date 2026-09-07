@@ -1,3 +1,4 @@
+import { hasWorkspaceMissionAuthority } from "./workspace-access.js";
 import { and, asc, eq, gt, isNull, lte, or, sql } from "drizzle-orm";
 import { claudeModelAliases, evaluateApprovalPolicy, isAgentExecutionSnapshot, type AgentExecutionSnapshot, type ClaudeModel } from "@ventneuf/domain";
 import type { Database, DatabaseTransaction } from "./client.js";
@@ -65,6 +66,14 @@ export class RunnerMissionRepository {
           or(eq(missions.status, "queued"), and(eq(missions.status, "running"), lte(missions.leaseExpiresAt, now))),
         )).orderBy(asc(missions.createdAt), asc(missions.id)).for("update", { skipLocked: true }).limit(1);
         if (!mission) return null;
+        if (!await hasWorkspaceMissionAuthority(transaction, mission)) {
+          await transaction.update(missions).set({ status: "cancelled", leaseExpiresAt: null, updatedAt: now,
+            context: { ...mission.context, cancellationReason: "Project access or repository association was withdrawn." },
+          }).where(eq(missions.id, mission.id));
+          await transaction.insert(missionEvents).values({ organizationId: scope.organizationId,
+            missionId: mission.id, type: "run.cancelled", payload: { reason: "project_access_withdrawn" }, occurredAt: now });
+          continue;
+        }
         const adapter = mission.context.type === "runner.orca-review"
           ? "orca-review"
           : mission.context.type === "runner.codex-development"
@@ -179,6 +188,9 @@ export class RunnerMissionRepository {
       const now = new Date();
       if (!mission || mission.status !== "running" || !mission.leaseExpiresAt || mission.leaseExpiresAt <= now) {
         throw new RunnerLeaseError("The runner lease expired or the mission stopped.");
+      }
+      if (!await hasWorkspaceMissionAuthority(transaction, mission)) {
+        throw new RunnerLeaseError("Project access or repository association was withdrawn.");
       }
       const expiresAt = new Date(now.getTime() + leaseDurationMs);
       await transaction.update(missions).set({ leaseExpiresAt: expiresAt, updatedAt: now }).where(eq(missions.id, mission.id));

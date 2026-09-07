@@ -10,6 +10,8 @@ const repositoryIdSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/)
 const targetSchema = z.object({
   deviceId: z.string().uuid(),
   repositoryId: repositoryIdSchema,
+  projectId: z.string().uuid().optional(),
+  projectName: z.string().max(100).optional(),
   adapters: z.array(adapterSchema).min(1).max(4),
   claudeModels: z.array(z.enum(claudeModelAliases)).min(1).max(claudeModelAliases.length).optional(),
 }).strict().superRefine((target, context) => {

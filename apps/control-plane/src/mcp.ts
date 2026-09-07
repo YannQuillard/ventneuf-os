@@ -72,6 +72,7 @@ export function createRemoteMcpServer(
         objective: z.string().trim().min(1).max(4_000),
         deviceId: z.string().uuid(),
         repositoryId,
+        projectId: z.string().uuid().optional().describe("Pass the projectId advertised by the selected target. New workspace missions belong to this project."),
         adapter: z.enum(["repository-check", "orca-review", "codex-development", "claude-development"]).default("orca-review"),
         model: z.enum(claudeModelAliases).optional().describe("Required for claude-development and forbidden for other adapters."),
         delegationToken: z.string().min(1).max(20_000).optional(),

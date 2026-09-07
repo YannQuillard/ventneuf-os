@@ -363,6 +363,17 @@ export class WorkspaceRepository {
       this.memberView(await ensureWorkspaceMember(transaction, scope)));
   }
 
+  updateCurrentMember(scope: WorkspaceScope, name: string) {
+    return this.database.withOrganization(scope.organizationId, async transaction => {
+      const member = await requireWorkspaceMember(transaction, scope);
+      const [updated] = await transaction.update(members).set({ displayName: name }).where(and(
+        eq(members.organizationId, scope.organizationId), eq(members.id, member.id),
+      )).returning();
+      if (!updated) throw new WorkspaceAccessError();
+      return this.memberView(updated);
+    });
+  }
+
   listDevices(scope: WorkspaceScope) {
     return this.database.withOrganization(scope.organizationId, async (transaction) => {
       const member = await requireWorkspaceMember(transaction, scope);
