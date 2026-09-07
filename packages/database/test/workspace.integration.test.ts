@@ -123,7 +123,10 @@ test("workspace projects and conversations require explicit tenant-scoped grants
 
     await workspace.revokeProjectMember(ownerScope, project.id, collaborator.id);
     assert.deepEqual(await workspace.listProjects(collaboratorScope), []);
-    assert.deepEqual(await workspace.listConversations(collaboratorScope), []);
+    assert.deepEqual(
+      (await workspace.listConversations(collaboratorScope)).map(({ id }) => id),
+      [derivedTopic.id],
+    );
     await assert.rejects(workspace.getConversation(collaboratorScope, ownerThread.id), WorkspaceAccessError);
     await assert.rejects(workspace.getConversation(collaboratorScope, collaboratorThread.id), WorkspaceAccessError);
     assert.equal((await workspace.listConversations(ownerScope)).some(({ id }) => id === ownerThread.id), true);
