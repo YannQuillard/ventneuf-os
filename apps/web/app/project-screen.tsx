@@ -50,7 +50,9 @@ export function ProjectScreen({ projectId }: { projectId: string }) {
     const repository = device?.repositories?.find(({ id }) => id === repositoryId) ?? association.repository;
     const isAvailableHere = devices.some((candidate) => candidate.repositories?.some((local) =>
       repository?.github && local.github
-        ? repository.github.owner === local.github.owner && repository.github.name === local.github.name
+        ? repository.github.id && local.github.id
+          ? repository.github.id === local.github.id
+          : repository.github.owner === local.github.owner && repository.github.name === local.github.name
         : candidate.id === deviceId && local.id === repositoryId));
     return { device: isAvailableHere ? "Available on your runner" : "Connect this GitHub repository on your Mac to run missions",
       repository: repository?.name ?? repositoryId };

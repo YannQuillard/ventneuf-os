@@ -8,6 +8,8 @@ import { StatusDot } from "@astryxdesign/core/StatusDot";
 import { Heading, Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { List, ListItem } from "@astryxdesign/core/List";
+import { Selector } from "@astryxdesign/core/Selector";
+import { Banner } from "@astryxdesign/core/Banner";
 import { DeviceSection } from "./_components/device-section";
 import { useCallback, useEffect, useState } from "react";
 
@@ -32,27 +34,33 @@ interface RunnerUpdateStatus {
   available: boolean;
 }
 
+interface GitHubStatus { connected: boolean; login?: string; installUrl: string }
+interface GitHubRepository { id: string; fullName: string; private: boolean; htmlUrl: string; cloneUrl: string }
+
 function recentlySeen(device: Device) {
   return Boolean(device.lastSeenAt && Date.now() - new Date(device.lastSeenAt).getTime() < 90_000);
 }
 
-function RegisterRepositoryDialog({ isOpen, onOpenChange, onRegistered, hasSearchFolders }: {
+function RegisterRepositoryDialog({ isOpen, onOpenChange, onRegistered, hasSearchFolders, githubRepositories }: {
   isOpen: boolean;
   onOpenChange: (isOpen: boolean) => void;
   onRegistered: (name: string) => void;
   hasSearchFolders: boolean;
+  githubRepositories: GitHubRepository[];
 }) {
   const [githubUrl, setGitHubUrl] = useState("");
+  const [githubRepositoryId, setGitHubRepositoryId] = useState("");
   const [searchRoot, setSearchRoot] = useState("");
   const [isSubmitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string>();
 
   useEffect(() => {
-    if (isOpen) { setGitHubUrl(""); setSearchRoot(""); setError(undefined); }
+    if (isOpen) { setGitHubUrl(""); setGitHubRepositoryId(""); setSearchRoot(""); setError(undefined); }
   }, [isOpen]);
 
   const submit = async () => {
-    if (!githubUrl.trim() || (!hasSearchFolders && !searchRoot.trim())) {
+    const selected = githubRepositories.find(({ id }) => id === githubRepositoryId);
+    if ((!selected && !githubUrl.trim()) || (!hasSearchFolders && !searchRoot.trim())) {
       setError("Enter a GitHub repository and an absolute search folder."); return;
     }
     setSubmitting(true);
@@ -61,7 +69,9 @@ function RegisterRepositoryDialog({ isOpen, onOpenChange, onRegistered, hasSearc
       const response = await fetch(`${localRunnerUrl}/repositories`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ githubUrl: githubUrl.trim(), ...(searchRoot.trim() ? { searchRoot: searchRoot.trim() } : {}) }),
+        body: JSON.stringify({ githubUrl: selected?.cloneUrl ?? githubUrl.trim(),
+          ...(selected ? { githubRepositoryId: selected.id } : {}),
+          ...(searchRoot.trim() ? { searchRoot: searchRoot.trim() } : {}) }),
       });
       if (!response.ok) {
         const failure = await response.json().catch(() => undefined) as { message?: string } | undefined;
@@ -81,9 +91,16 @@ function RegisterRepositoryDialog({ isOpen, onOpenChange, onRegistered, hasSearc
     <Layout height="auto" defaultHasDividers
       header={<DialogHeader title="Connect GitHub repository" subtitle="Match this repository to a checkout on this Mac" onOpenChange={onOpenChange} />}
       content={<LayoutContent padding={4}><FormLayout defaultOptionality="required">
-        <TextInput label="GitHub repository" value={githubUrl} onChange={setGitHubUrl}
-          placeholder="https://github.com/owner/repository" isRequired hasAutoFocus
-          description="Use the same GitHub repository on each member's Mac to connect it to shared projects." />
+        {githubRepositories.length ? <Selector label="GitHub repository" value={githubRepositoryId}
+          onChange={setGitHubRepositoryId} options={githubRepositories.map((repository) => ({
+            value: repository.id,
+            label: repository.fullName,
+            description: repository.private ? "Private repository" : "Public repository",
+          }))} placeholder="Choose a repository" hasSearch isRequired
+          description="Only repositories available to your GitHub identity are listed." />
+          : <TextInput label="GitHub repository" value={githubUrl} onChange={setGitHubUrl}
+            placeholder="https://github.com/owner/repository" isRequired hasAutoFocus
+            description="Connect GitHub to choose from a private list, or enter a repository URL manually." />}
         <TextInput label={hasSearchFolders ? "Add another search folder" : "Search folder"} value={searchRoot} onChange={setSearchRoot}
           placeholder="/Users/you/dev" isRequired={!hasSearchFolders} isOptional={hasSearchFolders}
           description={hasSearchFolders
@@ -130,11 +147,13 @@ export function RunnerSetup() {
   const [repositoryNotice, setRepositoryNotice] = useState<string>();
   const [isRepositoryOpen, setRepositoryOpen] = useState(false);
   const [hasSearchFolders, setHasSearchFolders] = useState(false);
+  const [githubStatus, setGitHubStatus] = useState<GitHubStatus>();
+  const [githubRepositories, setGitHubRepositories] = useState<GitHubRepository[]>([]);
   const [updateStatus, setUpdateStatus] = useState<RunnerUpdateStatus>();
   const [isUpdateOpen, setUpdateOpen] = useState(false);
 
   const refresh = useCallback(async () => {
-    const [localResult, cloudResult] = await Promise.allSettled([
+    const [localResult, cloudResult, githubResult] = await Promise.allSettled([
       fetch(`${localRunnerUrl}/status`, { cache: "no-store" }).then(async (response) => {
         if (!response.ok) throw new Error("Local runner unavailable.");
         return response.json() as Promise<LocalStatus>;
@@ -142,6 +161,10 @@ export function RunnerSetup() {
       fetch("/api/devices", { cache: "no-store" }).then(async (response) => {
         if (!response.ok) throw new Error("Unable to load devices.");
         return response.json() as Promise<{ devices: Device[] }>;
+      }),
+      fetch("/api/github", { cache: "no-store" }).then(async (response) => {
+        if (!response.ok) throw new Error("GitHub App unavailable.");
+        return response.json() as Promise<GitHubStatus>;
       }),
     ]);
     setLocal(localResult.status === "fulfilled" ? localResult.value : undefined);
@@ -161,6 +184,17 @@ export function RunnerSetup() {
       setCloudDevices(cloudResult.value.devices);
       setDeviceError(undefined);
     } else setDeviceError("Unable to load your devices. Try refreshing.");
+    if (githubResult.status === "fulfilled") {
+      setGitHubStatus(githubResult.value);
+      if (githubResult.value.connected) {
+        try {
+          const response = await fetch("/api/github/repositories", { cache: "no-store" });
+          setGitHubRepositories(response.ok
+            ? (await response.json() as { repositories: GitHubRepository[] }).repositories
+            : []);
+        } catch { setGitHubRepositories([]); }
+      } else setGitHubRepositories([]);
+    } else { setGitHubStatus(undefined); setGitHubRepositories([]); }
     setLoaded(true);
   }, []);
 
@@ -197,6 +231,26 @@ export function RunnerSetup() {
         : reason instanceof Error ? reason.message : "Runner setup failed.");
     } finally { setConnecting(false); }
   }, [refresh]);
+
+  const connectGitHub = async () => {
+    setError(undefined);
+    try {
+      const response = await fetch("/api/github/connect", { cache: "no-store" });
+      const payload = await response.json() as { authorizationUrl?: string };
+      if (!response.ok || !payload.authorizationUrl) throw new Error("Unable to start GitHub authorization.");
+      window.location.assign(payload.authorizationUrl);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to connect GitHub."); }
+  };
+
+  const disconnectGitHub = async () => {
+    setError(undefined);
+    try {
+      const response = await fetch("/api/github", { method: "DELETE" });
+      if (!response.ok) throw new Error("Unable to disconnect GitHub.");
+      setGitHubStatus(githubStatus ? { ...githubStatus, connected: false, login: undefined } : undefined);
+      setGitHubRepositories([]);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to disconnect GitHub."); }
+  };
 
   const checkRepository = async (deviceId: string, repositoryId: string, adapter = "repository-check") => {
     setMissionNotice(undefined);
@@ -235,12 +289,21 @@ export function RunnerSetup() {
       <HStack gap={3} vAlign="center" wrap="wrap">
         <StackItem size="fill"><Heading level={3}>Runners</Heading></StackItem>
         <Button label="Refresh" size="sm" variant="ghost" clickAction={() => void refresh()} />
+        {githubStatus && !githubStatus.connected ? <Button label="Connect GitHub" variant="secondary" size="sm"
+          clickAction={connectGitHub} /> : null}
         {local?.status === "online" ? <Button label="Connect repository" variant="secondary" size="sm"
           onClick={() => setRepositoryOpen(true)} /> : null}
         {local?.status === "online" && updateStatus?.available ? <Button label="Update runner" variant="primary" size="sm"
           onClick={() => setUpdateOpen(true)} /> : null}
         {local?.status !== "online" ? <Button label="Connect this Mac" variant="primary" size="sm" isLoading={isConnecting} clickAction={connect} /> : null}
       </HStack>
+      {githubStatus?.connected ? <Banner status="success" title={`GitHub connected as @${githubStatus.login}`}
+        description={githubRepositories.length
+          ? `${githubRepositories.length} repository${githubRepositories.length === 1 ? "" : "ies"} available to connect on this Mac.`
+          : "Install the GitHub App on selected repositories, then refresh this page."}
+        endContent={<HStack gap={2} wrap="wrap"><Button label={githubRepositories.length ? "Manage access" : "Install GitHub App"}
+          href={githubStatus.installUrl} variant="secondary" size="sm" />
+          <Button label="Disconnect" variant="ghost" size="sm" clickAction={disconnectGitHub} /></HStack>} /> : null}
       {isLoaded ? cloudDevices.map((device) => (
         <DeviceSection key={device.id} name={device.name} isOnline={recentlySeen(device)}
           detail={device.platform === "darwin" ? "macOS" : device.platform} lastSeenAt={device.lastSeenAt}>
@@ -264,7 +327,8 @@ export function RunnerSetup() {
       {missionNotice ? <VStack gap={2}><Text type="supporting" role="status">{missionNotice}</Text><Button label="Open Hermes" href="/" variant="secondary" size="sm" /></VStack> : null}
       {repositoryNotice ? <Text type="supporting" role="status">{repositoryNotice}</Text> : null}
       {error || deviceError ? <Text type="supporting" role="alert">{error ?? deviceError}</Text> : null}
-      <RegisterRepositoryDialog isOpen={isRepositoryOpen} onOpenChange={setRepositoryOpen} hasSearchFolders={hasSearchFolders} onRegistered={(name) => {
+      <RegisterRepositoryDialog isOpen={isRepositoryOpen} onOpenChange={setRepositoryOpen} hasSearchFolders={hasSearchFolders}
+        githubRepositories={githubRepositories} onRegistered={(name) => {
         setRepositoryNotice(`${name} was connected locally and will be available for projects after the next runner sync.`);
         setHasSearchFolders(true);
         window.setTimeout(() => void refresh(), 6_000);

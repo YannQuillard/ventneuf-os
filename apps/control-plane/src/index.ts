@@ -4,6 +4,8 @@ import { createTokenVerifier } from "./authentication.js";
 import { createHermesClient } from "./hermes.js";
 import { createConversationRuntime } from "./runtime.js";
 import { createMissionDelegation } from "./mission-delegation.js";
+import { createGitHubConnector } from "./github.js";
+import { GitHubConnectionRepository } from "@ventneuf/database";
 
 const port = Number.parseInt(process.env.PORT ?? "8787", 10);
 const host = process.env.HOST ?? "127.0.0.1";
@@ -16,6 +18,7 @@ const server = createServer(createApp({
   hermes,
   conversations,
   delegations,
+  github: createGitHubConnector(new GitHubConnectionRepository(conversations.database)),
   host,
 }));
 

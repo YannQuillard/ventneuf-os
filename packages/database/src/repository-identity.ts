@@ -4,6 +4,7 @@ export type DeviceRepository = (typeof devices.$inferSelect)["repositories"][num
 
 export function repositoriesMatch(left: DeviceRepository, right: DeviceRepository) {
   if (left.github && right.github) {
+    if (left.github.id && right.github.id) return left.github.id === right.github.id;
     return left.github.owner === right.github.owner && left.github.name === right.github.name;
   }
   return left.id === right.id;

@@ -39,7 +39,7 @@ export class RunnerCloudClient {
     codexDevelopment?: boolean;
     claudeDevelopment?: boolean;
     claudeModels?: ClaudeModel[];
-    github?: { owner: string; name: string };
+    github?: { id?: string; owner: string; name: string };
   }>) {
     await this.missionRequest(device, "/api/runner/repositories", { repositories });
   }

@@ -104,7 +104,8 @@ test("finds a GitHub checkout locally without returning its path", async () => {
     const response = await fetch(`http://127.0.0.1:${port}/repositories`, {
       method: "POST",
       headers: { origin, "content-type": "application/json" },
-      body: JSON.stringify({ githubUrl: "https://github.com/onlinenow/private-repository", searchRoot: temporary }),
+      body: JSON.stringify({ githubUrl: "https://github.com/onlinenow/private-repository",
+        githubRepositoryId: "123456789", searchRoot: temporary }),
     });
     assert.equal(response.status, 201);
     const body = await response.text();
@@ -114,7 +115,7 @@ test("finds a GitHub checkout locally without returning its path", async () => {
     assert.doesNotMatch(body, new RegExp(temporary));
     const configuration = JSON.parse(await readFile(repositoriesFile, "utf8")) as Array<Record<string, unknown>>;
     assert.equal(configuration[0]?.path, await realpath(repositoryPath));
-    assert.deepEqual(configuration[0]?.github, { owner: "onlinenow", name: "private-repository" });
+    assert.deepEqual(configuration[0]?.github, { id: "123456789", owner: "onlinenow", name: "private-repository" });
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     await rm(temporary, { recursive: true, force: true });

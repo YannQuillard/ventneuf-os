@@ -4,7 +4,8 @@ import { getAuthConfig } from "./auth/config";
 import { ACCESS_TOKEN_COOKIE, REFRESH_TOKEN_COOKIE, SESSION_COOKIE, authCookieOptions } from "./auth/session";
 import { accessTokenNeedsRefresh, refreshAccessToken } from "./auth/token";
 
-export async function proxyControlPlane(path: string, method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE", request?: NextRequest) {
+export async function proxyControlPlane(path: string, method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE",
+  request?: NextRequest, body?: string) {
   const cookieStore = await cookies();
   let token = cookieStore.get(ACCESS_TOKEN_COOKIE)?.value;
   const refreshToken = cookieStore.get(REFRESH_TOKEN_COOKIE)?.value;
@@ -19,9 +20,9 @@ export async function proxyControlPlane(path: string, method: "GET" | "POST" | "
   if (!baseUrl) throw new Error("CONTROL_PLANE_URL is required.");
   const upstream = await fetch(new URL(path, baseUrl), {
     method,
-    body: request ? await request.text() : undefined,
+    body: body ?? (request ? await request.text() : undefined),
     cache: "no-store",
-    headers: { authorization: `Bearer ${token}`, ...(request ? { "content-type": "application/json" } : {}) },
+    headers: { authorization: `Bearer ${token}`, ...(request || body ? { "content-type": "application/json" } : {}) },
   });
   const response = new NextResponse(await upstream.text(), {
     status: upstream.status,

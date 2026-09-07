@@ -24,6 +24,7 @@ const repository = z.object({
   claudeDevelopment: z.boolean().optional(),
   claudeModels: z.array(z.enum(claudeModelAliases)).min(1).max(claudeModelAliases.length).optional(),
   github: z.object({
+    id: z.string().regex(/^[0-9]+$/).optional(),
     owner: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,38})$/),
     name: z.string().regex(/^[a-z0-9._-]{1,100}$/),
   }).strict().optional(),

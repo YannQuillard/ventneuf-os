@@ -67,7 +67,7 @@ export class RunnerMissionRepository {
     codexDevelopment?: boolean;
     claudeDevelopment?: boolean;
     claudeModels?: ClaudeModel[];
-    github?: { owner: string; name: string };
+    github?: { id?: string; owner: string; name: string };
   }>) {
     return this.database.withOrganization(scope.organizationId, async (transaction) => {
       await this.authenticate(transaction, scope);
