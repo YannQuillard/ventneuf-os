@@ -64,9 +64,13 @@ test("classifies native Codex approval requests without restricting shell syntax
   assert.equal(sensitive?.action.target, "example.com");
   assert.deepEqual(sensitive?.evidence, {
     method: "item/commandExecution/requestApproval",
-    command: "curl network command",
+    command: "curl --token [redacted] https://user:[redacted]@example.com",
     commandLength: 59,
+    commandTruncated: false,
+    commandRedacted: true,
     cwd: ".",
+    agentReason: "Use [redacted] [redacted]",
+    expectedEffect: "The command may access the network from ..",
     destination: "example.com",
     protocol: "https",
   });
@@ -85,6 +89,36 @@ test("classifies native Codex approval requests without restricting shell syntax
     filesystem: "none",
     network: true,
   });
+});
+
+test("keeps the exact bounded Codex command and binds its complete arguments", () => {
+  const worktree = "/workspace/mission";
+  const base = { threadId: "thread-1", itemId: "item-1", cwd: worktree };
+  const command = "git -C . status --short && git push origin HEAD --follow-tags";
+  const request = classifyCodexApproval("item/commandExecution/requestApproval", {
+    ...base,
+    command,
+    networkApprovalContext: { host: "github.com", protocol: "https" },
+    reason: "Push the checked branch after confirming its status.",
+  }, worktree, sessionId);
+  assert.equal(request?.evidence.command, command);
+  assert.equal(request?.evidence.commandLength, command.length);
+  assert.equal(request?.evidence.commandTruncated, false);
+  assert.equal(request?.evidence.commandRedacted, false);
+  assert.equal(request?.evidence.cwd, ".");
+  assert.equal(request?.evidence.agentReason, "Push the checked branch after confirming its status.");
+  assert.match(request?.action.expectedEffect ?? "", /pushed/);
+
+  const longCommand = `git push origin HEAD --message=${"x".repeat(9_000)}`;
+  const longRequest = classifyCodexApproval("item/commandExecution/requestApproval", {
+    ...base,
+    command: longCommand,
+    networkApprovalContext: { host: "github.com", protocol: "https" },
+  }, worktree, sessionId);
+  assert.equal(longRequest?.evidence.commandLength, longCommand.length);
+  assert.equal(longRequest?.evidence.commandTruncated, true);
+  assert.equal((longRequest?.evidence.command as string).length, 8_000);
+  assert.notEqual(longRequest?.action.argumentsDigest, request?.action.argumentsDigest);
 });
 
 test("runs a durable App Server turn through a structured approval", { timeout: 10_000 }, async () => {

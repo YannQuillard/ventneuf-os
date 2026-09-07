@@ -4,6 +4,7 @@ import { ChatComposer, ChatComposerInput, ChatLayout, type ChatComposerInputHand
 import { Text } from "@astryxdesign/core/Text";
 import type { ReactNode, RefObject } from "react";
 import styles from "./conversation-surface.module.css";
+import { useComposerPaste } from "./use-composer-paste";
 
 export function ConversationSurface({ value, onChange, onSubmit, inputRef, placeholder = "Message Hermes", scope = "Personal knowledge",
   error, emptyState, headerActions, children }: {
@@ -11,9 +12,10 @@ export function ConversationSurface({ value, onChange, onSubmit, inputRef, place
   inputRef: RefObject<ChatComposerInputHandle | null>; placeholder?: string; scope?: string;
   error?: string; emptyState?: ReactNode; headerActions?: ReactNode; children: ReactNode;
 }) {
+  const paste = useComposerPaste(inputRef);
   return <ChatLayout className={styles.surface} emptyState={emptyState} composer={
     <ChatComposer value={value} onChange={onChange} onSubmit={onSubmit} placeholder={placeholder}
       status={error ? { type: "error", message: error } : undefined} headerActions={headerActions}
-      footerActions={<Text type="supporting">{scope}</Text>} input={<ChatComposerInput handleRef={inputRef} />} />
+      footerActions={<Text type="supporting">{scope}</Text>} input={<ChatComposerInput handleRef={inputRef} {...paste} />} />
   }>{children}</ChatLayout>;
 }

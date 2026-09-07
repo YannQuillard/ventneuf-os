@@ -1,4 +1,5 @@
 import { ExecutionActivity, executionRecorder } from "./execution-activity.js";
+import { approvalCommand, approvalCommandSecrets, approvalReason } from "./approval-evidence.js";
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { readFile, realpath, rm, writeFile } from "node:fs/promises";
@@ -367,6 +368,14 @@ function reviewDetails(toolName: string, command: string, request: RoutedOperati
   };
 }
 
+function commandExpectedEffect(request: RoutedOperation, cwd: string) {
+  if (request.category === "pull_request.create") return `The requested GitHub pull request may be created from ${cwd}.`;
+  if (request.category === "pull_request.merge") return `The requested GitHub pull request may be merged from ${cwd}.`;
+  if (request.category === "deployment.apply") return `External deployment state may be changed from ${cwd}.`;
+  if (request.category === "development.command") return `The command may access resources outside the native Claude sandbox from ${cwd}.`;
+  return `The command may access ${request.target} from ${cwd}.`;
+}
+
 export function classifyClaudeTool(
   job: DevelopmentJob,
   hook: ClaudeHookInput,
@@ -388,18 +397,23 @@ export function classifyClaudeTool(
   }
   if (toolName !== "Bash") return { behavior: "passthrough" };
 
-  const command = bounded(input.command, 8_000);
+  const rawCommand = typeof input.command === "string" ? input.command.trim() : "";
+  const privatePaths = [job.worktree, homedir()];
+  const command = approvalCommand(rawCommand, privatePaths);
   const commandCwd = bounded(input.cwd, 1_000) || cwd;
-  if (!command || !isAbsolute(commandCwd) || !within(job.worktree, commandCwd)) {
+  if (!rawCommand || !isAbsolute(commandCwd) || !within(job.worktree, commandCwd)) {
     return { behavior: "deny", message: "Claude commands must start inside the active mission worktree." };
   }
-  const external = routedOperation(command, job) ?? (input.dangerouslyDisableSandbox === true
+  const external = routedOperation(rawCommand, job) ?? (input.dangerouslyDisableSandbox === true
     ? { category: "development.command" as const, target: "host execution outside the Claude sandbox" }
     : undefined);
   if (!external) return { behavior: "passthrough" };
   const material = { toolName, input, cwd: relative(job.worktree, commandCwd) || "." };
   const inputDigest = digest(material);
-  const review = reviewDetails(toolName, command, external);
+  const relativeCwd = relative(job.worktree, commandCwd) || ".";
+  const review = reviewDetails(toolName, rawCommand, external);
+  const agentReason = approvalReason(input.description ?? input.reason, privatePaths, approvalCommandSecrets(rawCommand));
+  const expectedEffect = commandExpectedEffect(external, relativeCwd);
   return {
     behavior: "defer",
     candidate: {
@@ -415,15 +429,21 @@ export function classifyClaudeTool(
           target: external.target,
           argumentsDigest: inputDigest,
           summary: review.summary,
-          expectedEffect: review.expectedEffect.slice(0, 1_000),
+          expectedEffect,
         },
-        reason: "Claude requested an external operation for the development mission.",
+        reason: agentReason
+          ? `Claude requested an external operation for the development mission. Agent reason: ${agentReason.text}`
+          : "Claude requested an external operation for the development mission.",
         evidence: {
           method: "PreToolUse",
           tool: toolName,
-          command: review.command,
-          commandLength: command.length,
-          cwd: relative(job.worktree, commandCwd) || ".",
+          command: command.command,
+          commandLength: command.commandLength,
+          commandTruncated: command.commandTruncated,
+          commandRedacted: command.commandRedacted,
+          cwd: relativeCwd,
+          agentReason: agentReason?.text ?? "Claude requested an external operation for the development mission.",
+          expectedEffect,
           destination: external.target,
         },
         resume: { adapter: "claude", sessionId: job.missionId },

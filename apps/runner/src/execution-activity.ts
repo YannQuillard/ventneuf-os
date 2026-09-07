@@ -9,6 +9,67 @@ const record = (value: unknown): RecordValue => value && typeof value === "objec
   ? value as RecordValue : {};
 const string = (value: unknown) => typeof value === "string" ? value : "";
 
+export interface ScrubbedText {
+  text: string;
+  redacted: boolean;
+}
+
+function escaped(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Keep user-visible agent details useful while removing credentials and private paths.
+ * The returned flag lets approval callers avoid treating redacted text as complete.
+ */
+export function scrubSensitiveText(value: string, privatePaths: readonly string[] = []): ScrubbedText {
+  let text = value;
+  let redacted = false;
+  for (const path of [...privatePaths].sort((left, right) => right.length - left.length)) {
+    if (!path) continue;
+    const next = text.replace(new RegExp(escaped(path), "g"), "[private path]");
+    if (next !== text) redacted = true;
+    text = next;
+  }
+  text = text.replace(/\b(Bearer\s+)[\w.+/=-]+/gi, (_match, prefix: string) => {
+    redacted = true;
+    return `${prefix}[redacted]`;
+  });
+  text = text.replace(/(https?:\/\/[^/\s:@]+:)[^@\s]+@/gi, (_match, prefix: string) => {
+    redacted = true;
+    return `${prefix}[redacted]@`;
+  });
+  text = text.replace(
+    /((?:^|[\s"';&|])(?:--?)(?:api[_-]?key|access[_-]?token|auth(?:orization)?|password|passwd|private[_-]?key|secret|token)(?:=|\s+))(["'])(.*?)\2/gi,
+    (_match, prefix: string, quote: string) => {
+      redacted = true;
+      return `${prefix}${quote}[redacted]${quote}`;
+    },
+  );
+  text = text.replace(
+    /((?:^|[\s"';&|])(?:--?)(?:api[_-]?key|access[_-]?token|auth(?:orization)?|password|passwd|private[_-]?key|secret|token)(?:=|\s+))([^\s"';&|]+)/gi,
+    (_match, prefix: string) => {
+      redacted = true;
+      return `${prefix}[redacted]`;
+    },
+  );
+  text = text.replace(
+    /((?:^|[\s"';&|])(?:api[_-]?key|access[_-]?token|auth(?:orization)?|password|passwd|private[_-]?key|secret|token)\s*[:=]\s*)(["'])(.*?)\2/gi,
+    (_match, prefix: string, quote: string) => {
+      redacted = true;
+      return `${prefix}${quote}[redacted]${quote}`;
+    },
+  );
+  text = text.replace(
+    /((?:^|[\s"';&|])(?:api[_-]?key|access[_-]?token|auth(?:orization)?|password|passwd|private[_-]?key|secret|token)\s*[:=]\s*)([^\s"',};&|]+)/gi,
+    (_match, prefix: string) => {
+      redacted = true;
+      return `${prefix}[redacted]`;
+    },
+  );
+  return { text, redacted };
+}
+
 function content(value: unknown): string {
   if (typeof value === "string") return value;
   if (Array.isArray(value)) return value.map(content).filter(Boolean).join("\n");
@@ -37,11 +98,9 @@ export class ExecutionActivity {
   setRootThread(threadId: string) { this.rootThreadId = threadId.slice(0, 200); }
 
   private display(value: string) {
-    return value.replaceAll(this.worktree, ".").replaceAll(homedir(), "~")
+    return scrubSensitiveText(value, [this.worktree, homedir()]).text
       .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
-      .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, "")
-      .replace(/\b(Bearer\s+)[\w.+/=-]+/gi, "$1[redacted]")
-      .replace(/((?:api[_-]?key|access[_-]?token|password|secret)\s*[=:]\s*["']?)[^\s"',}]+/gi, "$1[redacted]");
+      .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, "");
   }
 
   private put(item: AgentExecutionItem, append = false) {
