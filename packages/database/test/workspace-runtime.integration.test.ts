@@ -22,6 +22,7 @@ test("workspace runtime isolates private threads and dispatches delegated work i
   const ownerId = randomUUID();
   const collaboratorId = randomUUID();
   const deviceId = randomUUID();
+  const collaboratorDeviceId = randomUUID();
   const progressDeviceId = randomUUID();
   const completionDeviceId = randomUUID();
   const approvalDeviceId = randomUUID();
@@ -30,6 +31,7 @@ test("workspace runtime isolates private threads and dispatches delegated work i
   const ownerScope = { organizationId, externalSubject: "workspace-runtime-owner" };
   const collaboratorScope = { organizationId, externalSubject: "workspace-runtime-collaborator" };
   const runnerScope = { organizationId, deviceId, credentialHash: "workspace-runtime-device-credential" };
+  const collaboratorRunnerScope = { organizationId, deviceId: collaboratorDeviceId, credentialHash: "workspace-runtime-collaborator-credential" };
   const progressRunnerScope = { organizationId, deviceId: progressDeviceId, credentialHash: "workspace-runtime-progress-credential" };
   const completionRunnerScope = { organizationId, deviceId: completionDeviceId, credentialHash: "workspace-runtime-completion-credential" };
   const approvalRunnerScope = { organizationId, deviceId: approvalDeviceId, credentialHash: "workspace-runtime-approval-credential" };
@@ -40,7 +42,8 @@ test("workspace runtime isolates private threads and dispatches delegated work i
     content,
     conversationId: sourceConversationId,
   });
-  const delegatedInput = (parentMissionId: string, memberId: string, requestId = randomUUID(), targetDeviceId = deviceId) => ({
+  const delegatedInput = (parentMissionId: string, memberId: string, requestId = randomUUID(),
+    targetDeviceId = memberId === ownerId ? deviceId : collaboratorDeviceId) => ({
     organizationId,
     parentMissionId,
     conversationId: sourceConversationId,
@@ -51,7 +54,7 @@ test("workspace runtime isolates private threads and dispatches delegated work i
     expiresAt: new Date(Date.now() + 60_000),
     objective: "Implement the workspace task",
     deviceId: targetDeviceId,
-    repositoryId: "workspace-repository",
+    repositoryId: memberId === ownerId ? "workspace-repository" : "collaborator-repository",
     projectId,
     adapter: "claude-development" as const,
     model: "opus" as const,
@@ -66,17 +69,20 @@ test("workspace runtime isolates private threads and dispatches delegated work i
     await admin`insert into devices (id, organization_id, member_id, name, platform, repositories) values
       (${deviceId}, ${organizationId}, ${ownerId}, 'Owner device', 'darwin',
         ${JSON.stringify([
-          { id: "workspace-repository", name: "Workspace repository", claudeDevelopment: true, claudeModels: ["opus"] },
+          { id: "workspace-repository", name: "Workspace repository", github: { owner: "ventneuf", name: "workspace" }, claudeDevelopment: true, claudeModels: ["opus"] },
           { id: "unassociated-repository", name: "Unassociated repository", claudeDevelopment: true, claudeModels: ["sonnet"] },
         ])}::jsonb),
-      (${progressDeviceId}, ${organizationId}, ${ownerId}, 'Progress device', 'darwin',
-        ${JSON.stringify([{ id: "workspace-repository", name: "Workspace repository", claudeDevelopment: true, claudeModels: ["opus"] }])}::jsonb),
-      (${completionDeviceId}, ${organizationId}, ${ownerId}, 'Completion device', 'darwin',
-        ${JSON.stringify([{ id: "workspace-repository", name: "Workspace repository", claudeDevelopment: true, claudeModels: ["opus"] }])}::jsonb),
-      (${approvalDeviceId}, ${organizationId}, ${ownerId}, 'Approval device', 'darwin',
-        ${JSON.stringify([{ id: "workspace-repository", name: "Workspace repository", claudeDevelopment: true, claudeModels: ["opus"] }])}::jsonb)`;
+      (${collaboratorDeviceId}, ${organizationId}, ${collaboratorId}, 'Collaborator device', 'darwin',
+        ${JSON.stringify([{ id: "collaborator-repository", name: "Workspace repository", github: { owner: "ventneuf", name: "workspace" }, claudeDevelopment: true, claudeModels: ["opus"] }])}::jsonb),
+      (${progressDeviceId}, ${organizationId}, ${collaboratorId}, 'Progress device', 'darwin',
+        ${JSON.stringify([{ id: "collaborator-repository", name: "Workspace repository", github: { owner: "ventneuf", name: "workspace" }, claudeDevelopment: true, claudeModels: ["opus"] }])}::jsonb),
+      (${completionDeviceId}, ${organizationId}, ${collaboratorId}, 'Completion device', 'darwin',
+        ${JSON.stringify([{ id: "collaborator-repository", name: "Workspace repository", github: { owner: "ventneuf", name: "workspace" }, claudeDevelopment: true, claudeModels: ["opus"] }])}::jsonb),
+      (${approvalDeviceId}, ${organizationId}, ${collaboratorId}, 'Approval device', 'darwin',
+        ${JSON.stringify([{ id: "collaborator-repository", name: "Workspace repository", github: { owner: "ventneuf", name: "workspace" }, claudeDevelopment: true, claudeModels: ["opus"] }])}::jsonb)`;
     await admin`insert into device_credentials (organization_id, device_id, token_hash)
       values (${organizationId}, ${deviceId}, ${runnerScope.credentialHash}),
+      (${organizationId}, ${collaboratorDeviceId}, ${collaboratorRunnerScope.credentialHash}),
       (${organizationId}, ${progressDeviceId}, ${progressRunnerScope.credentialHash}),
       (${organizationId}, ${completionDeviceId}, ${completionRunnerScope.credentialHash}),
       (${organizationId}, ${approvalDeviceId}, ${approvalRunnerScope.credentialHash})`;
@@ -85,10 +91,7 @@ test("workspace runtime isolates private threads and dispatches delegated work i
     await admin`insert into project_members (organization_id, project_id, member_id)
       values (${organizationId}, ${projectId}, ${collaboratorId})`;
     await admin`insert into project_repositories (organization_id, project_id, device_id, repository_id)
-      values (${organizationId}, ${projectId}, ${deviceId}, 'workspace-repository'),
-      (${organizationId}, ${projectId}, ${progressDeviceId}, 'workspace-repository'),
-      (${organizationId}, ${projectId}, ${completionDeviceId}, 'workspace-repository'),
-      (${organizationId}, ${projectId}, ${approvalDeviceId}, 'workspace-repository')`;
+      values (${organizationId}, ${projectId}, ${deviceId}, 'workspace-repository')`;
     await admin`insert into conversations (id, organization_id, owner_member_id, project_id, kind, title)
       values (${sourceConversationId}, ${organizationId}, ${ownerId}, ${projectId}, 'private', 'Private source')`;
 
@@ -107,14 +110,14 @@ test("workspace runtime isolates private threads and dispatches delegated work i
     assert.equal(ownerParent.mission.context.projectId, projectId);
     await runtime.setMissionRunning(organizationId, ownerParent.mission.id, ownerParent.mission.context);
     const ownerDispatchScope = await runtime.getHermesDispatchScope(organizationId, ownerParent.mission.id);
-    assert.deepEqual(ownerDispatchScope?.targets, [deviceId, progressDeviceId, completionDeviceId, approvalDeviceId].map((id) => ({
-      deviceId: id,
+    assert.deepEqual(ownerDispatchScope?.targets, [{
+      deviceId,
       repositoryId: "workspace-repository",
       projectId,
       projectName: "Workspace project",
       adapters: ["repository-check", "claude-development"],
       claudeModels: ["opus"],
-    })));
+    }]);
 
     await admin`insert into conversation_grants (organization_id, conversation_id, member_id)
       values (${organizationId}, ${sourceConversationId}, ${collaboratorId})`;
@@ -184,7 +187,14 @@ test("workspace runtime isolates private threads and dispatches delegated work i
     const collaboratorParent = await enqueue(collaboratorScope, "Prepare my private project mission.");
     await runtime.setMissionRunning(organizationId, collaboratorParent.mission.id, collaboratorParent.mission.context);
     const collaboratorDispatchScope = await runtime.getHermesDispatchScope(organizationId, collaboratorParent.mission.id);
-    assert.deepEqual(collaboratorDispatchScope?.targets, ownerDispatchScope?.targets);
+    assert.deepEqual(collaboratorDispatchScope?.targets, [collaboratorDeviceId, progressDeviceId, completionDeviceId, approvalDeviceId].map((id) => ({
+      deviceId: id,
+      repositoryId: "collaborator-repository",
+      projectId,
+      projectName: "Workspace project",
+      adapters: ["repository-check", "claude-development"],
+      claudeModels: ["opus"],
+    })));
     const collaboratorDelegation = delegatedInput(collaboratorParent.mission.id, collaboratorId, randomUUID());
     const collaboratorDelegated = await runtime.enqueueDelegatedRunnerMission(collaboratorDelegation);
     assert.notEqual(collaboratorDelegated.conversationId, sourceConversationId);
@@ -201,10 +211,10 @@ test("workspace runtime isolates private threads and dispatches delegated work i
       /not found or access denied/,
     );
     assert.ok(await runtime.getConversationSnapshot({ ...collaboratorScope, conversationId: collaboratorDelegated.conversationId }));
-    const collaboratorClaim = await runner.claim(runnerScope, runnerOwner, "c".repeat(64));
+    const collaboratorClaim = await runner.claim(collaboratorRunnerScope, runnerOwner, "c".repeat(64));
     assert.equal(collaboratorClaim?.id, collaboratorDelegated.mission.id);
     const approvals = new MissionApprovalRepository(database);
-    await approvals.requestFromRunner(runnerScope, {
+    await approvals.requestFromRunner(collaboratorRunnerScope, {
       missionId: collaboratorDelegated.mission.id, owner: runnerOwner, tokenHash: "c".repeat(64), requestId: randomUUID(),
       action: { category: "pull_request.merge", target: "project repository", argumentsDigest: "a".repeat(64),
         summary: "Merge the reviewed pull request", expectedEffect: "Update the repository default branch." },
@@ -220,7 +230,7 @@ test("workspace runtime isolates private threads and dispatches delegated work i
     const decision = await approvals.decideByMember({ ...collaboratorScope, approvalId: approval.id,
       decisionRequestId: randomUUID(), decision: "approved", rationale: "Approve this exact request." });
     assert.equal(decision.status, "approved", "A collaborator can approve their mission on the project's authorized device.");
-    const resumed = await runner.claim(runnerScope, runnerOwner, "d".repeat(64));
+    const resumed = await runner.claim(collaboratorRunnerScope, runnerOwner, "d".repeat(64));
     assert.equal(resumed?.id, collaboratorDelegated.mission.id);
     const progressParent = await enqueue(collaboratorScope, "Keep a private progress lease.");
     await runtime.setMissionRunning(organizationId, progressParent.mission.id, progressParent.mission.context);
@@ -245,11 +255,11 @@ test("workspace runtime isolates private threads and dispatches delegated work i
     assert.equal((await runner.claim(approvalRunnerScope, runnerOwner, approvalLease))?.id, approvalDelegated.mission.id);
     await admin`delete from project_members where organization_id = ${organizationId} and project_id = ${projectId} and member_id = ${collaboratorId}`;
     assert.equal(await runtime.canProcessConversationMission(organizationId, collaboratorParent.mission.id), false);
-    await assert.rejects(runner.renew(runnerScope, { missionId: collaboratorDelegated.mission.id,
+    await assert.rejects(runner.renew(collaboratorRunnerScope, { missionId: collaboratorDelegated.mission.id,
       owner: runnerOwner, tokenHash: "d".repeat(64) }), /withdrawn/);
     const executionSnapshot = { version: 1 as const, provider: "claude" as const, revision: 1,
       rootThreadId: "workspace-private-thread", updatedAt: new Date().toISOString(), omittedItems: 0, items: [] };
-    await assert.rejects(runner.execution(runnerScope, {
+    await assert.rejects(runner.execution(collaboratorRunnerScope, {
       missionId: collaboratorDelegated.mission.id, owner: runnerOwner, tokenHash: "d".repeat(64), snapshot: executionSnapshot,
     }), /withdrawn/);
     await assert.rejects(runner.report(progressRunnerScope, {
@@ -267,7 +277,7 @@ test("workspace runtime isolates private threads and dispatches delegated work i
       reason: "This request must not be persisted after revocation.", evidence: { command: "gh pr merge 1 --squash" },
       resume: { adapter: "claude", sessionId: "revoked-approval-session" },
     }), /withdrawn/);
-    assert.equal((await runner.inspect(runnerScope, collaboratorDelegated.mission.id))?.status, "cancelled");
+    assert.equal((await runner.inspect(collaboratorRunnerScope, collaboratorDelegated.mission.id))?.status, "cancelled");
     assert.equal((await runner.inspect(progressRunnerScope, progressDelegated.mission.id))?.status, "cancelled");
     assert.equal((await runner.inspect(completionRunnerScope, completionDelegated.mission.id))?.status, "cancelled");
     assert.equal((await runner.inspect(approvalRunnerScope, approvalDelegated.mission.id))?.status, "cancelled");
@@ -294,7 +304,7 @@ test("workspace runtime isolates private threads and dispatches delegated work i
     `;
     assert.equal(fencedApprovals?.count, "0");
     await admin`update missions set lease_expires_at = now() - interval '1 second' where id = ${collaboratorDelegated.mission.id}`;
-    assert.equal(await runner.claim(runnerScope, runnerOwner, "revoked-lease"), null);
+    assert.equal(await runner.claim(collaboratorRunnerScope, runnerOwner, "revoked-lease"), null);
     assert.equal((await runtime.getMission(organizationId, collaboratorDelegated.mission.id))?.mission.status, "cancelled");
 
   } finally {

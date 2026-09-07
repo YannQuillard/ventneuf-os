@@ -51,7 +51,10 @@ test("workspace projects and conversations require explicit tenant-scoped grants
     await admin`
       insert into devices (id, organization_id, member_id, name, platform, repositories)
       values (${deviceId}, ${organizationId}, ${owner.id}, 'Owner Mac', 'darwin',
-        ${JSON.stringify([{ id: 'repository-a', name: 'Repository A' }])}::jsonb)
+        ${JSON.stringify([
+          { id: "repository-a", name: "Repository A", github: { owner: "shared", name: "repository" } },
+          { id: "personal-repository", name: "Personal repository", github: { owner: "owner", name: "personal" } },
+        ])}::jsonb)
     `;
     const collaboratorDeviceId = randomUUID();
     await admin`
@@ -63,6 +66,8 @@ test("workspace projects and conversations require explicit tenant-scoped grants
     const ownerScope = { organizationId, externalSubject: ownerSubject };
     const collaboratorScope = { organizationId, externalSubject: collaboratorSubject };
     const otherScope = { organizationId: otherOrganizationId, externalSubject: otherSubject };
+    assert.deepEqual((await workspace.listDevices(ownerScope)).map(({ id }) => id), [deviceId]);
+    assert.deepEqual((await workspace.listDevices(collaboratorScope)).map(({ id }) => id), [collaboratorDeviceId]);
     const project = await workspace.createProject(ownerScope, {
       name: "Private project",
       context: { purpose: "Validate privacy" },
@@ -80,7 +85,9 @@ test("workspace projects and conversations require explicit tenant-scoped grants
     );
 
     await workspace.shareProject(ownerScope, project.id, collaborator.id);
-    assert.deepEqual((await workspace.listProjects(collaboratorScope)).map(({ id }) => id), [project.id]);
+    const collaboratorProjects = await workspace.listProjects(collaboratorScope);
+    assert.deepEqual(collaboratorProjects.map(({ id }) => id), [project.id]);
+    assert.equal(JSON.stringify(collaboratorProjects).includes("Personal repository"), false);
     await assert.rejects(workspace.updateProject(ownerScope, project.id, {
       repositoryAssociations: [
         { deviceId, repositoryId: "repository-a" },

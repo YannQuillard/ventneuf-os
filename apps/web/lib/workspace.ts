@@ -7,6 +7,7 @@ export interface RepositoryAssociation {
   id: string;
   deviceId: string;
   repositoryId: string;
+  repository?: { name: string; github?: { owner: string; name: string } };
 }
 
 export interface WorkspaceProject {
@@ -50,7 +51,7 @@ export interface WorkspaceDevice {
   id: string;
   name: string;
   lastSeenAt?: string;
-  repositories?: Array<{ id: string; name: string }>;
+  repositories?: Array<{ id: string; name: string; github?: { owner: string; name: string } }>;
 }
 
 export interface MemoryEntry {
