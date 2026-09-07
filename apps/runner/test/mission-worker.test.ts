@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LeaseRejectedError, RunnerMissionWorker, type MissionClient, type MissionReport } from "../src/mission-worker.js";
-import { loadRepositories, MissionPausedError, RepositoryCheckAdapter } from "../src/repositories.js";
+import { addRegisteredRepository, loadRepositories, MissionPausedError, RepositoryCheckAdapter } from "../src/repositories.js";
 
 const device = { deviceId: "device-1", credential: "private-credential", name: "Test Mac", platform: "darwin" as const };
 const mission = { id: "mission-1", repositoryId: "sample", adapter: "repository-check" as const,
@@ -44,6 +44,23 @@ test("repository check uses explicit configuration and never reads source conten
     await writeFile(configuration, JSON.stringify([{ id: "sample", name: "Sample", path: "relative" }]));
     await assert.rejects(loadRepositories(configuration));
     assert.deepEqual(await loadRepositories(join(temporary, "missing.json")), []);
+  } finally { await rm(temporary, { recursive: true, force: true }); }
+});
+
+test("adds repositories to the local configuration without enabling execution capabilities", async () => {
+  const temporary = await mkdtemp(join(tmpdir(), "runner-registration-"));
+  try {
+    const firstPath = join(temporary, "first");
+    const secondPath = join(temporary, "second");
+    await mkdir(firstPath);
+    await mkdir(secondPath);
+    const configuration = join(temporary, "config", "repositories.json");
+    const first = await addRegisteredRepository(configuration, { name: "First repository", path: firstPath });
+    const second = await addRegisteredRepository(configuration, { name: "Second repository", path: secondPath });
+    assert.match(first.id, /^first-repository-[a-f0-9]{8}$/);
+    assert.match(second.id, /^second-repository-[a-f0-9]{8}$/);
+    assert.deepEqual(await loadRepositories(configuration), [first, second]);
+    await assert.rejects(addRegisteredRepository(configuration, { name: "Duplicate", path: firstPath }), /already registered/);
   } finally { await rm(temporary, { recursive: true, force: true }); }
 });
 

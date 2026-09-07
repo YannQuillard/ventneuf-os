@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { AddressInfo } from "node:net";
 import type { CredentialStore, StoredDevice } from "./credential-store.js";
 import type { RunnerCloudClient } from "./cloud-client.js";
+import { addRegisteredRepository } from "./repositories.js";
 
 const maxRequestBytes = 8_192;
 
@@ -10,6 +11,7 @@ export interface LocalBridgeOptions {
   store: CredentialStore;
   deviceName: string;
   allowedOrigins: Set<string>;
+  repositoriesFile?: string;
   heartbeatIntervalMs?: number;
 }
 
@@ -58,6 +60,16 @@ export class LocalRunnerBridge {
         this.device = device;
         this.startHeartbeats();
         return this.json(response, 201, this.publicStatus());
+      }
+      if (request.method === "POST" && request.url === "/repositories") {
+        if (!this.device) return this.json(response, 409, { error: "runner_not_enrolled" });
+        if (!this.options.repositoriesFile) return this.json(response, 503, { error: "repository_configuration_unavailable" });
+        const body = await this.readJson(request) as { name?: unknown; path?: unknown };
+        if (typeof body.name !== "string" || typeof body.path !== "string") {
+          return this.json(response, 400, { error: "invalid_request" });
+        }
+        const repository = await addRegisteredRepository(this.options.repositoriesFile, { name: body.name, path: body.path });
+        return this.json(response, 201, { repository: { id: repository.id, name: repository.name } });
       }
       return this.json(response, 404, { error: "not_found" });
     } catch (error) {
