@@ -11,6 +11,7 @@ export interface AgentExecution {
   status: MissionState["status"];
   receivedAt?: string;
   snapshot: AgentExecutionSnapshot | null;
+  canManage?: boolean;
 }
 
 export interface ExecutionNode { item: AgentExecutionItem; children: ExecutionNode[] }

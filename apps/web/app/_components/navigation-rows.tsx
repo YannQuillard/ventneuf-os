@@ -22,6 +22,7 @@ interface NavigationRowsProps {
   onNavigate: (href: string) => void;
   onOpenSearch: () => void;
   onNewConversation?: () => void;
+  onNewProject?: () => void;
 }
 
 interface FlatEntry {
@@ -39,11 +40,14 @@ function descriptionFor({ entry, parentLabel }: FlatEntry): string | undefined {
   if (entry.kind === "main") return "Your private conversation";
   if (entry.kind === "temporary") return "Temporary · not written to memory";
   if (entry.kind === "devices") return "Runners, repositories, connectors";
+  if (entry.kind === "memory") return "Your durable knowledge";
+  if (entry.kind === "project") return "Project overview";
+  if (entry.kind === "mission") return "Mission thread";
   if (entry.kind === "usage") return "Tokens, time, and cost by mission";
   return undefined;
 }
 
-export function NavigationRows({ navigation, member, device, onNavigate, onOpenSearch, onNewConversation, accountActions }: NavigationRowsProps) {
+export function NavigationRows({ navigation, member, device, onNavigate, onOpenSearch, onNewConversation, onNewProject, accountActions }: NavigationRowsProps) {
   return (
     <Layout
       height="fill"
@@ -79,7 +83,9 @@ export function NavigationRows({ navigation, member, device, onNavigate, onOpenS
                 hasDividers
                 header={(
                   <HStack padding={4} paddingBlockEnd={1}>
-                    <Heading level={2}>{group.title}</Heading>
+                    <StackItem size="fill"><Heading level={2}>{group.title}</Heading></StackItem>
+                    {group.id === "projects" && onNewProject ? <IconButton label="New project" tooltip="New project" variant="ghost" size="sm"
+                      icon={<Icon icon={PlusIcon} size="sm" />} onClick={onNewProject} /> : null}
                   </HStack>
                 )}
               >

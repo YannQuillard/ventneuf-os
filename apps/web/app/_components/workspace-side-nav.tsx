@@ -20,6 +20,7 @@ interface WorkspaceSideNavProps {
   accountActions?: ReactNode;
   onOpenSearch: () => void;
   onNewConversation?: () => void;
+  onNewProject?: () => void;
 }
 
 function NavigationItem({ entry }: { entry: NavigationEntry }) {
@@ -40,7 +41,7 @@ function NavigationItem({ entry }: { entry: NavigationEntry }) {
   );
 }
 
-export function WorkspaceSideNav({ navigation, member, onOpenSearch, onNewConversation, accountActions }: WorkspaceSideNavProps) {
+export function WorkspaceSideNav({ navigation, member, onOpenSearch, onNewConversation, onNewProject, accountActions }: WorkspaceSideNavProps) {
   const workspace = navigation.find((group) => group.id === "workspace");
 
   return (
@@ -86,6 +87,9 @@ export function WorkspaceSideNav({ navigation, member, onOpenSearch, onNewConver
               icon={<Icon icon={PlusIcon} size="sm" />}
               onClick={onNewConversation}
             />
+          ) : group.id === "projects" && onNewProject ? (
+            <IconButton label="New project" tooltip="New project" variant="ghost" size="sm"
+              icon={<Icon icon={PlusIcon} size="sm" />} onClick={onNewProject} />
           ) : undefined}
         >
           {group.entries.map((entry) => <NavigationItem entry={entry} key={entry.id} />)}
