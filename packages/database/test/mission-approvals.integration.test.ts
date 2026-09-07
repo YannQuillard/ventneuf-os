@@ -128,6 +128,10 @@ test("approval policy, escalation, resumption, expiry, and cancellation are dura
     const hermesMission = await createClaimedMission("network.access", "hermes");
     const hermesRequest = request(hermesMission.queued.mission.id, hermesMission.tokenHash, "network.access");
     const hermes = await approvals.requestFromRunner(scope, hermesRequest);
+    const repeatedPending = await approvals.requestFromRunner(scope, hermesRequest);
+    assert.equal(repeatedPending.created, false);
+    assert.equal(repeatedPending.approval.id, hermes.approval.id);
+    assert.deepEqual(repeatedPending.reviewMission, hermes.reviewMission);
     assert.equal(hermes.approval.status, "pending");
     assert.equal(hermes.approval.route, "hermes");
     assert.ok(hermes.reviewMission);

@@ -1,3 +1,4 @@
+import { ScopedHermesClient, type MemoryEntry } from "./scoped-hermes.js";
 import {
   GetSecretValueCommand,
   SecretsManagerClient,
@@ -6,12 +7,14 @@ import { randomUUID } from "node:crypto";
 
 export interface AskHermesInput {
   message: string;
+  scopeId?: string;
   contextId?: string;
   runId?: string;
   sessionKey?: string;
   onRunStarted?: (runId: string) => Promise<void>;
   idempotencyKey?: string;
   onEvent?: (event: HermesRunEvent) => Promise<void>;
+  shouldStop?: () => Promise<boolean>;
 }
 
 export interface HermesRunEvent {
@@ -27,11 +30,14 @@ export interface HermesReply {
   state?: string;
   text: string;
   usage?: Record<string, unknown>;
+  memoryChanges?: MemoryEntry[];
 }
 
 export interface HermesClient {
   ask(input: AskHermesInput): Promise<HermesReply>;
-  stop?(runId: string): Promise<void>;
+  stop?(runId: string, scopeId?: string): Promise<void>;
+  listMemory?(scopeId: string): Promise<{ entries: MemoryEntry[] }>;
+  readMemory?(scopeId: string, entryId: string): Promise<{ entry: MemoryEntry & { content: string } }>;
 }
 
 export interface TokenProvider {
@@ -160,6 +166,10 @@ export class RunsHermesClient implements HermesClient {
 
     try {
       while (Date.now() < deadline) {
+        if (await input.shouldStop?.()) {
+          await this.stop(runId);
+          throw new HermesRunCancelledError();
+        }
         const response = await this.request(
           `/v1/runs/${encodeURIComponent(runId)}`,
           { signal: AbortSignal.any([lifecycle.signal, AbortSignal.timeout(10_000)]) },
@@ -362,28 +372,13 @@ export class A2AHermesClient implements HermesClient {
 }
 
 export function createHermesClient(env: NodeJS.ProcessEnv = process.env): HermesClient {
-  if (env.HERMES_API_URL && env.HERMES_API_SECRET_ID) {
-    const client = new SecretsManagerClient({ region: env.AWS_REGION ?? "eu-west-1" });
-    return new RunsHermesClient(
-      env.HERMES_API_URL,
-      new SecretsManagerTokenProvider(client, env.HERMES_API_SECRET_ID),
-    );
+  if (!env.HERMES_SCOPE_GATEWAY_URL) {
+    throw new Error("HERMES_SCOPE_GATEWAY_URL is required for isolated conversation memory.");
   }
-  if (env.NODE_ENV !== "production" && env.HERMES_API_URL && env.HERMES_API_TOKEN) {
-    return new RunsHermesClient(env.HERMES_API_URL, new StaticTokenProvider(env.HERMES_API_TOKEN));
-  }
-  const url = env.HERMES_A2A_URL ?? "http://127.0.0.1:9900/";
-  if (env.HERMES_A2A_SECRET_ID) {
-    const client = new SecretsManagerClient({ region: env.AWS_REGION ?? "eu-west-1" });
-    return new A2AHermesClient(
-      url,
-      new SecretsManagerTokenProvider(client, env.HERMES_A2A_SECRET_ID),
-    );
-  }
-  if (env.NODE_ENV !== "production" && env.HERMES_A2A_TOKEN) {
-    return new A2AHermesClient(url, new StaticTokenProvider(env.HERMES_A2A_TOKEN));
-  }
-  throw new Error(
-    "HERMES_A2A_SECRET_ID is required. HERMES_A2A_TOKEN is accepted only outside production.",
-  );
+  const tokens = env.HERMES_SCOPE_GATEWAY_SECRET_ID
+    ? new SecretsManagerTokenProvider(new SecretsManagerClient({ region: env.AWS_REGION ?? "eu-west-1" }), env.HERMES_SCOPE_GATEWAY_SECRET_ID)
+    : env.NODE_ENV !== "production" && env.HERMES_SCOPE_GATEWAY_TOKEN
+      ? new StaticTokenProvider(env.HERMES_SCOPE_GATEWAY_TOKEN) : undefined;
+  if (!tokens) throw new Error("HERMES_SCOPE_GATEWAY_SECRET_ID is required for scoped Hermes execution.");
+  return new ScopedHermesClient(env.HERMES_SCOPE_GATEWAY_URL, tokens);
 }

@@ -22,6 +22,7 @@ function repository(overrides: Record<string, unknown> = {}) {
         },
       },
     }),
+    getHermesMemoryScope: async () => ({ scopeId: "a".repeat(64), kind: "personal" }),
     setMissionRunning: async () => true,
     completeMission: async () => true,
     failMission: async () => undefined,
@@ -76,7 +77,7 @@ test("processes a queued Hermes mission and persists its reply", async () => {
   await worker.process({ organizationId: "organization-1", missionId: "mission-1" });
   assert.equal(persistedRunId, "run-1");
   assert.deepEqual(runEvents, ["tool.started"]);
-  assert.deepEqual(events, ["running", "running", "completed:context-after:Issue found"]);
+  assert.deepEqual(events, ["running", "running", "running", "completed:context-after:Issue found"]);
 });
 
 test("gives Hermes a short parent-scoped dispatch grant without persisting the token", async () => {
@@ -309,7 +310,10 @@ test("cancellation before a new run is recorded stops it and preserves the ID fo
     getMission: async () => cancelled
       ? { mission: { status: "cancelled", context: { hermesRunId: remembered } } }
       : base.getMission("organization-1", "mission-1"),
-    setMissionRunning: async () => ++transitions === 1,
+    setMissionRunning: async (_organizationId: string, _missionId: string, context: { hermesRunId?: string }) => {
+      transitions += 1;
+      return !context.hermesRunId;
+    },
     rememberCancelledHermesRun: async (_org: string, _mission: string, runId: string) => { remembered = runId; },
     failMission: async () => {},
     completeMission: async () => assert.fail("Cancelled work must not complete"),
@@ -328,14 +332,17 @@ test("cancellation before a new run is recorded stops it and preserves the ID fo
   await assert.rejects(worker.process({ organizationId: "organization-1", missionId: "mission-1" }), /Stop temporarily unavailable/);
   await worker.process({ organizationId: "organization-1", missionId: "mission-1" });
   assert.equal(stopAttempts, 2);
-  assert.equal(transitions, 2);
+  assert.equal(transitions, 3);
 });
 
 test("a successful stop after cancellation does not persist a reply or failure", async () => {
   let transitions = 0;
   let stopped = false;
   const worker = new MissionWorker(repository({
-    setMissionRunning: async () => ++transitions === 1,
+    setMissionRunning: async (_organizationId: string, _missionId: string, context: { hermesRunId?: string }) => {
+      transitions += 1;
+      return !context.hermesRunId;
+    },
     rememberCancelledHermesRun: async () => {},
     completeMission: async () => assert.fail("No cancelled reply"),
     failMission: async () => assert.fail("Cancellation is not failure"),
@@ -374,4 +381,47 @@ test("the sequential queue persists results and advances despite open Hermes eve
   await worker.run(abort.signal);
   assert.deepEqual(completed, ["mission-1", "mission-2"]);
   assert.equal(closedStreams, 2);
+});
+
+test("a changed audience fences streamed private output and stops its original scoped run", async () => {
+  const { WorkspaceMemoryFenceError } = await import("@ventneuf/database");
+  const stopped: unknown[] = [];
+  let cancelled = false;
+  const worker = new MissionWorker(repository({
+    appendMissionEvent: async (event: { expectedScopeId?: string }) => {
+      assert.equal(event.expectedScopeId, "a".repeat(64));
+      throw new WorkspaceMemoryFenceError();
+    },
+    cancelMission: async () => { cancelled = true; },
+    completeMission: async () => assert.fail("Private output must not be persisted after sharing."),
+    failMission: async () => assert.fail("A scope cutover must not publish an old-profile failure."),
+  }), unusedQueue, {
+    ask: async input => {
+      await input.onRunStarted?.("private-run");
+      await input.onEvent?.({ event: "tool.completed", content: "Private context" });
+      return assert.fail("The old scope must stop.");
+    },
+    stop: async (...args) => { stopped.push(args); },
+  });
+  await worker.process({ organizationId: "organization-1", missionId: "mission-1" });
+  assert.equal(cancelled, true);
+  assert.deepEqual(stopped, [["private-run", "a".repeat(64)]]);
+});
+
+test("an upstream error after audience cutover is fenced before failure persistence", async () => {
+  const { WorkspaceMemoryFenceError } = await import("@ventneuf/database");
+  let cancelled = false;
+  let stopped = false;
+  const worker = new MissionWorker(repository({
+    cancelMission: async () => { cancelled = true; },
+    failMission: async (_organization: string, _mission: string, _reason: string, context: { hermesScopeId?: string }) => {
+      assert.equal(context.hermesScopeId, "a".repeat(64));
+      throw new WorkspaceMemoryFenceError();
+    },
+  }), unusedQueue, {
+    ask: async input => { await input.onRunStarted?.("old-profile-run"); throw new Error("Private upstream details"); },
+    stop: async () => { stopped = true; },
+  });
+  await worker.process({ organizationId: "organization-1", missionId: "mission-1" });
+  assert.equal(cancelled && stopped, true);
 });

@@ -1,7 +1,9 @@
-import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import type { ClaudeModel, MissionAuthority } from "@ventneuf/domain";
 import type { Database } from "./client.js";
-import { conversations, devices, members, messages, missionApprovals, missionEvents, missions, organizations } from "./schema.js";
+import { requireConversationAccess, requireProjectAccess, currentScopeForMission, requireCurrentMissionMemoryScope, WorkspaceAccessError } from "./workspace-access.js";
+import { publicApproval } from "./mission-approvals.js";
+import { conversations, devices, members, messages, missionApprovals, missionEvents, missions, organizations, projects, projectMembers, projectRepositories } from "./schema.js";
 
 export type DelegatedRunnerAdapter = "repository-check" | "orca-review" | "codex-development" | "claude-development";
 const developmentAuthorityMs = 2 * 60 * 60_000;
@@ -30,6 +32,8 @@ export interface HermesDispatchScope {
   targets: Array<{
     deviceId: string;
     repositoryId: string;
+    projectId?: string;
+    projectName?: string;
     adapters: DelegatedRunnerAdapter[];
     claudeModels?: ClaudeModel[];
   }>;
@@ -69,6 +73,7 @@ export class ConversationRuntimeRepository {
     externalSubject: string;
     content: string;
     contextId?: string;
+    conversationId?: string;
     runner?: { deviceId: string; repositoryId: string; adapter?: DelegatedRunnerAdapter; model?: ClaudeModel };
   }) {
     const acceptedAt = new Date();
@@ -133,17 +138,25 @@ export class ConversationRuntimeRepository {
         }
       }
 
-      let [conversation] = await transaction
+      const authorized = input.conversationId
+        ? await requireConversationAccess(transaction, input, input.conversationId)
+        : undefined;
+      let conversation = authorized?.conversation;
+      if (!conversation) {
+        [conversation] = await transaction
         .select()
         .from(conversations)
         .where(
           and(
             eq(conversations.organizationId, input.organizationId),
             eq(conversations.ownerMemberId, member.id),
+            eq(conversations.isPrimary, true),
           ),
         )
         .orderBy(asc(conversations.createdAt))
         .limit(1);
+
+      }
 
       if (input.contextId !== undefined && conversation?.hermesContextId !== input.contextId) {
         throw new Error("The private conversation context is unavailable.");
@@ -152,7 +165,7 @@ export class ConversationRuntimeRepository {
       if (!conversation) {
         [conversation] = await transaction
           .insert(conversations)
-          .values({ organizationId: input.organizationId, ownerMemberId: member.id, title: "Hermes" })
+          .values({ organizationId: input.organizationId, ownerMemberId: member.id, title: "Hermes", isPrimary: true })
           .returning();
       }
       if (!conversation) throw new Error("Failed to resolve the private conversation.");
@@ -175,11 +188,13 @@ export class ConversationRuntimeRepository {
         .values({
           organizationId: input.organizationId,
           conversationId: conversation.id,
+          projectId: conversation.projectId,
           requestedByMemberId: member.id,
           goal: input.content,
           assignedDeviceId: input.runner?.deviceId,
           context: {
             sourceMessageId: message.id,
+            ...(input.conversationId ? { workspaceVersion: 1, projectId: conversation.projectId } : {}),
             type: input.runner ? `runner.${input.runner.adapter ?? "repository-check"}` : "hermes.conversation",
             ...(input.runner ? { repositoryId: input.runner.repositoryId } : {}),
             ...(input.runner?.adapter === "codex-development" ? {
@@ -222,6 +237,7 @@ export class ConversationRuntimeRepository {
           and(
             eq(conversations.organizationId, input.organizationId),
             eq(conversations.ownerMemberId, member.id),
+            eq(conversations.isPrimary, true),
           ),
         )
         .orderBy(asc(conversations.createdAt))
@@ -241,12 +257,74 @@ export class ConversationRuntimeRepository {
     });
   }
 
+  getOwnedConversationMission(input: { organizationId: string; externalSubject: string; conversationId: string; missionId: string }) {
+    return this.database.withOrganization(input.organizationId, async transaction => {
+      const { member } = await requireConversationAccess(transaction, input, input.conversationId);
+      const [mission] = await transaction.select().from(missions).where(and(
+        eq(missions.organizationId, input.organizationId), eq(missions.id, input.missionId),
+        eq(missions.conversationId, input.conversationId), eq(missions.requestedByMemberId, member.id),
+      )).limit(1);
+      if (!mission) throw new WorkspaceAccessError();
+      return mission;
+    });
+  }
+
+  getConversationSnapshot(input: { organizationId: string; externalSubject: string; conversationId: string }) {
+    return this.database.withOrganization(input.organizationId, async (transaction) => {
+      const { member } = await requireConversationAccess(transaction, input, input.conversationId);
+      const rows = await transaction.select({ message: messages, memberName: members.displayName }).from(messages)
+        .leftJoin(members, and(eq(members.organizationId, messages.organizationId), eq(members.id, messages.memberId)))
+        .where(and(eq(messages.organizationId, input.organizationId), eq(messages.conversationId, input.conversationId)))
+        .orderBy(asc(messages.createdAt), asc(messages.id));
+      const items = rows.map(({ message, memberName }) => ({ ...message, memberName }));
+      const [latest] = await transaction.select().from(missions).where(and(
+        eq(missions.organizationId, input.organizationId), eq(missions.conversationId, input.conversationId),
+        sql`coalesce(${missions.context}->>'type', '') <> 'hermes.approval'`,
+      )).orderBy(desc(missions.createdAt)).limit(1);
+      const [execution] = await transaction.select().from(missions).where(and(
+        eq(missions.organizationId, input.organizationId), eq(missions.conversationId, input.conversationId),
+        sql`${missions.context}->>'type' in ('runner.codex-development', 'runner.claude-development')`,
+      )).orderBy(desc(missions.createdAt)).limit(1);
+      const events = latest ? await transaction.select().from(missionEvents).where(and(
+        eq(missionEvents.organizationId, input.organizationId), eq(missionEvents.missionId, latest.id),
+      )).orderBy(asc(missionEvents.occurredAt), asc(missionEvents.id)) : [];
+      const [activity] = execution ? await transaction.select().from(missionEvents).where(and(
+        eq(missionEvents.organizationId, input.organizationId), eq(missionEvents.missionId, execution.id),
+        eq(missionEvents.id, execution.id), eq(missionEvents.type, "runner.execution"),
+      )).limit(1) : [];
+      const approvals = await transaction.select({ approval: missionApprovals, requestedByMemberId: missions.requestedByMemberId })
+        .from(missionApprovals).innerJoin(missions, and(
+          eq(missions.organizationId, missionApprovals.organizationId), eq(missions.id, missionApprovals.missionId),
+        )).where(and(eq(missionApprovals.organizationId, input.organizationId),
+          eq(missions.conversationId, input.conversationId))).orderBy(desc(missionApprovals.createdAt)).limit(20);
+      return {
+        messages: items,
+        mission: latest ? { id: latest.id, status: latest.status, timing: latest.context.timing ?? {},
+          failure: latest.context.failure, canManage: latest.requestedByMemberId === member.id } : null,
+        events: events.filter(event => event.type !== "runner.execution"),
+        approvals: approvals.map(({ approval, requestedByMemberId }) => ({ ...publicApproval(approval),
+          canDecide: requestedByMemberId === member.id && approval.route === "human" })),
+        agentExecution: execution ? {
+          missionId: execution.id, status: execution.status, title: execution.goal,
+          provider: execution.context.type === "runner.claude-development" ? "claude" : "codex",
+          repositoryId: execution.context.repositoryId,
+          model: (execution.context.agent as { model?: string } | undefined)?.model,
+          result: execution.context.result,
+          receivedAt: activity?.occurredAt.toISOString(), snapshot: activity?.payload.snapshot ?? null,
+          canManage: execution.requestedByMemberId === member.id,
+        } : null,
+      };
+    });
+  }
+
   getPrivateAgentExecution(input: { organizationId: string; externalSubject: string }) {
     return this.database.withOrganization(input.organizationId, async (transaction) => {
       const [result] = await transaction.select({ id: missions.id, status: missions.status, goal: missions.goal, context: missions.context,
         snapshot: missionEvents.payload, occurredAt: missionEvents.occurredAt,
       }).from(missions).innerJoin(members, and(eq(members.organizationId, missions.organizationId),
         eq(members.id, missions.requestedByMemberId)))
+        .innerJoin(conversations, and(eq(conversations.organizationId, missions.organizationId),
+          eq(conversations.id, missions.conversationId), eq(conversations.isPrimary, true)))
         .leftJoin(missionEvents, and(eq(missionEvents.organizationId, missions.organizationId),
           eq(missionEvents.missionId, missions.id), eq(missionEvents.id, missions.id), eq(missionEvents.type, "runner.execution")))
         .where(and(eq(missions.organizationId, input.organizationId), eq(members.externalSubject, input.externalSubject),
@@ -275,6 +353,8 @@ export class ConversationRuntimeRepository {
             eq(members.id, missions.requestedByMemberId),
           ),
         )
+        .innerJoin(conversations, and(eq(conversations.organizationId, missions.organizationId),
+          eq(conversations.id, missions.conversationId), eq(conversations.isPrimary, true)))
         .where(
           and(
             eq(missions.organizationId, input.organizationId),
@@ -311,12 +391,75 @@ export class ConversationRuntimeRepository {
     });
   }
 
+  getHermesMemoryScope(organizationId: string, missionId: string) {
+    return this.database.withOrganization(organizationId, async transaction => {
+      const [actor] = await transaction.select({ externalSubject: members.externalSubject }).from(missions)
+        .innerJoin(members, and(eq(members.organizationId, missions.organizationId), eq(members.id, missions.requestedByMemberId)))
+        .where(and(eq(missions.organizationId, organizationId), eq(missions.id, missionId))).limit(1);
+      if (!actor) throw new WorkspaceAccessError();
+      const result = await currentScopeForMission(transaction, { organizationId, externalSubject: actor.externalSubject }, missionId);
+      return { ...result.hermesMemoryScope, cancelled: result.mission.status === "cancelled" };
+    });
+  }
+
+  async canProcessConversationMission(organizationId: string, missionId: string) {
+    try {
+      return await this.database.withOrganization(organizationId, async transaction => {
+        const [record] = await transaction.select({ mission: missions, actor: members }).from(missions)
+          .innerJoin(members, and(eq(members.organizationId, missions.organizationId), eq(members.id, missions.requestedByMemberId)))
+          .where(and(eq(missions.organizationId, organizationId), eq(missions.id, missionId))).limit(1);
+        if (!record) return false;
+        await requireConversationAccess(transaction, { organizationId, externalSubject: record.actor.externalSubject }, record.mission.conversationId);
+        return true;
+      });
+    } catch (error) {
+      if (error instanceof WorkspaceAccessError) return false;
+      throw error;
+    }
+  }
+
+  getMissionConversationContext(organizationId: string, missionId: string) {
+    return this.database.withOrganization(organizationId, async transaction => {
+      const [record] = await transaction.select({ mission: missions, actor: members }).from(missions)
+        .innerJoin(members, and(eq(members.organizationId, missions.organizationId), eq(members.id, missions.requestedByMemberId)))
+        .where(and(eq(missions.organizationId, organizationId), eq(missions.id, missionId))).limit(1);
+      if (!record) throw new WorkspaceAccessError();
+      const scope = { organizationId, externalSubject: record.actor.externalSubject };
+      const { conversation } = await requireConversationAccess(transaction, scope, record.mission.conversationId);
+      const project = conversation.projectId
+        ? (await requireProjectAccess(transaction, scope, conversation.projectId)).project : undefined;
+      const history = await transaction.select({ role: messages.role, content: messages.content, memberId: messages.memberId }).from(messages)
+        .where(and(eq(messages.organizationId, organizationId), eq(messages.conversationId, conversation.id),
+          sql`${messages.id}::text <> ${String(record.mission.context.sourceMessageId ?? "")}`))
+        .orderBy(desc(messages.createdAt), desc(messages.id)).limit(30);
+      let remaining = 30_000;
+      const boundedHistory = history.flatMap(message => {
+        if (remaining <= 0) return [];
+        const content = message.content.slice(0, Math.min(6_000, remaining));
+        remaining -= content.length;
+        return [{ ...message, content, truncated: content.length < message.content.length }];
+      }).reverse();
+      const [execution] = await transaction.select({ id: missions.id, status: missions.status, goal: missions.goal }).from(missions)
+        .where(and(eq(missions.organizationId, organizationId), eq(missions.conversationId, conversation.id),
+          sql`${missions.context}->>'type' like 'runner.%'`)).orderBy(desc(missions.createdAt)).limit(1);
+      const approvals = await transaction.select({ approval: missionApprovals }).from(missionApprovals)
+        .innerJoin(missions, and(eq(missions.organizationId, missionApprovals.organizationId), eq(missions.id, missionApprovals.missionId)))
+        .where(and(eq(missionApprovals.organizationId, organizationId), eq(missions.conversationId, conversation.id),
+          eq(missionApprovals.status, "pending"))).limit(10);
+      return { conversationId: conversation.id, title: conversation.title,
+        requestingMember: { id: record.actor.id, name: record.actor.displayName },
+        project: project ? { id: project.id, name: project.name, context: project.context } : undefined,
+        history: boundedHistory, execution, pendingApprovals: approvals.map(({ approval }) => publicApproval(approval)) };
+    });
+  }
+
   getHermesDispatchScope(organizationId: string, missionId: string) {
     return this.database.withOrganization(organizationId, async (transaction) => {
       const [result] = await transaction
         .select({
           mission: missions,
           ownerMemberId: conversations.ownerMemberId,
+          projectId: conversations.projectId,
         })
         .from(missions)
         .innerJoin(conversations, and(
@@ -327,8 +470,14 @@ export class ConversationRuntimeRepository {
         .limit(1);
       const mission = result?.mission;
       if (!mission || !["running", "waiting_for_approval"].includes(mission.status)
-        || mission.context?.type !== "hermes.conversation"
-        || result.ownerMemberId !== mission.requestedByMemberId) return undefined;
+        || mission.context?.type !== "hermes.conversation") return undefined;
+      if (mission.context.workspaceVersion === 1) {
+        const [actor] = await transaction.select().from(members).where(and(
+          eq(members.organizationId, organizationId), eq(members.id, mission.requestedByMemberId),
+        )).limit(1);
+        if (!actor) return undefined;
+        await requireConversationAccess(transaction, { organizationId, externalSubject: actor.externalSubject }, mission.conversationId);
+      } else if (result.ownerMemberId !== mission.requestedByMemberId) return undefined;
 
       const ownedDevices = await transaction
         .select({ id: devices.id, repositories: devices.repositories })
@@ -338,7 +487,7 @@ export class ConversationRuntimeRepository {
           eq(devices.memberId, mission.requestedByMemberId),
           isNull(devices.revokedAt),
         ));
-      const targets = ownedDevices.flatMap((device) => device.repositories.map((repository) => {
+      let targets: HermesDispatchScope["targets"] = ownedDevices.flatMap((device) => device.repositories.map((repository) => {
         const claudeModels = repository.claudeDevelopment ? repository.claudeModels : undefined;
         return {
           deviceId: device.id,
@@ -352,6 +501,27 @@ export class ConversationRuntimeRepository {
           ...(claudeModels?.length ? { claudeModels } : {}),
         };
       }));
+      if (mission.context.workspaceVersion === 1) {
+        const associations = await transaction.select({ association: projectRepositories, project: projects, device: devices })
+          .from(projectRepositories)
+          .innerJoin(projects, and(eq(projects.organizationId, projectRepositories.organizationId), eq(projects.id, projectRepositories.projectId)))
+          .innerJoin(devices, and(eq(devices.organizationId, projectRepositories.organizationId), eq(devices.id, projectRepositories.deviceId), isNull(devices.revokedAt)))
+          .leftJoin(projectMembers, and(eq(projectMembers.organizationId, projects.organizationId), eq(projectMembers.projectId, projects.id), eq(projectMembers.memberId, mission.requestedByMemberId)))
+          .where(and(eq(projects.organizationId, organizationId),
+            or(eq(projects.ownerMemberId, mission.requestedByMemberId), eq(projectMembers.memberId, mission.requestedByMemberId)),
+            result.projectId ? eq(projects.id, result.projectId) : undefined));
+        targets = associations.flatMap(({ association, project, device }) => {
+          const repository = device.repositories.find(repository => repository.id === association.repositoryId);
+          if (!repository) return [];
+          const claudeModels = repository.claudeDevelopment ? repository.claudeModels : undefined;
+          return [{ deviceId: device.id, repositoryId: repository.id, projectId: project.id, projectName: project.name,
+            adapters: ["repository-check" as const, ...(repository.orcaReview ? ["orca-review" as const] : []),
+              ...(repository.codexDevelopment ? ["codex-development" as const] : []),
+              ...(claudeModels?.length ? ["claude-development" as const] : [])],
+            ...(claudeModels?.length ? { claudeModels } : {}),
+          }];
+        });
+      }
       if (targets.length > 50) throw new Error("The mission has too many runner targets to delegate.");
       return {
         organizationId,
@@ -375,6 +545,7 @@ export class ConversationRuntimeRepository {
     objective: string;
     deviceId: string;
     repositoryId: string;
+    projectId?: string;
     adapter: DelegatedRunnerAdapter;
     model?: ClaudeModel;
   }) {
@@ -390,16 +561,26 @@ export class ConversationRuntimeRepository {
         || parent.requestedByMemberId !== input.memberId
         || input.expiresAt <= acceptedAt) throw new DelegatedMissionError();
 
-      const [conversation] = await transaction.select({ ownerMemberId: conversations.ownerMemberId })
+      if (typeof parent.context.hermesScopeId === "string") {
+        await requireCurrentMissionMemoryScope(transaction, { organizationId: input.organizationId,
+          missionId: parent.id, expectedScopeId: parent.context.hermesScopeId });
+      }
+      const [conversation] = await transaction.select()
         .from(conversations).where(and(
           eq(conversations.organizationId, input.organizationId),
           eq(conversations.id, input.conversationId),
         )).limit(1);
-      if (conversation?.ownerMemberId !== input.memberId) throw new DelegatedMissionError();
+      if (!conversation) throw new DelegatedMissionError();
+      if (parent.context.workspaceVersion === 1) {
+        const [actor] = await transaction.select().from(members).where(and(
+          eq(members.organizationId, input.organizationId), eq(members.id, input.memberId),
+        )).limit(1);
+        if (!actor) throw new DelegatedMissionError();
+        await requireConversationAccess(transaction, { organizationId: input.organizationId, externalSubject: actor.externalSubject }, conversation.id);
+      } else if (conversation.ownerMemberId !== input.memberId) throw new DelegatedMissionError();
 
       const [existing] = await transaction.select().from(missions).where(and(
         eq(missions.organizationId, input.organizationId),
-        eq(missions.conversationId, input.conversationId),
         sql`${missions.context}->>'parentMissionId' = ${input.parentMissionId}`,
         sql`${missions.context}->'delegation'->>'id' = ${input.delegationId}`,
         sql`${missions.context}->'delegation'->>'requestId' = ${input.requestId}`,
@@ -409,14 +590,31 @@ export class ConversationRuntimeRepository {
         if (existing.goal !== input.objective || existing.assignedDeviceId !== input.deviceId
           || existing.context?.repositoryId !== input.repositoryId
           || existing.context?.type !== `runner.${input.adapter}`
+          || existing.projectId !== (input.projectId ?? null)
           || existingAgent?.model !== input.model) throw new DelegatedMissionError();
-        return { conversationId: input.conversationId, mission: existing };
+        return { conversationId: existing.conversationId, mission: existing };
+      }
+
+      const workspaceMission = parent.context.workspaceVersion === 1;
+      if (workspaceMission && !input.projectId) throw new DelegatedMissionError();
+      if (input.projectId) {
+        const [actor] = await transaction.select().from(members).where(and(
+          eq(members.organizationId, input.organizationId), eq(members.id, input.memberId),
+        )).limit(1);
+        if (!actor) throw new DelegatedMissionError();
+        await requireProjectAccess(transaction, { organizationId: input.organizationId, externalSubject: actor.externalSubject }, input.projectId);
+        if (conversation.projectId && conversation.projectId !== input.projectId) throw new DelegatedMissionError();
+        const [association] = await transaction.select().from(projectRepositories).where(and(
+          eq(projectRepositories.organizationId, input.organizationId), eq(projectRepositories.projectId, input.projectId),
+          eq(projectRepositories.deviceId, input.deviceId), eq(projectRepositories.repositoryId, input.repositoryId),
+        )).for("share").limit(1);
+        if (!association) throw new DelegatedMissionError();
       }
 
       const [device] = await transaction.select().from(devices).where(and(
         eq(devices.organizationId, input.organizationId),
         eq(devices.id, input.deviceId),
-        eq(devices.memberId, input.memberId),
+        input.projectId ? undefined : eq(devices.memberId, input.memberId),
         isNull(devices.revokedAt),
       )).for("share").limit(1);
       if (!device?.repositories.some((repository) => repositorySupports(
@@ -426,15 +624,41 @@ export class ConversationRuntimeRepository {
         input.model,
       ))) throw new DelegatedMissionError();
 
+      let missionConversationId = input.conversationId;
+      if (workspaceMission) {
+        const [previousExecution] = await transaction.select({ id: missions.id }).from(missions).where(and(
+          eq(missions.organizationId, input.organizationId), eq(missions.conversationId, input.conversationId),
+          sql`${missions.context}->>'type' like 'runner.%'`,
+        )).limit(1);
+        const [sharedDraft] = await transaction.select({ id: conversations.id }).from(conversations)
+          .where(and(eq(conversations.id, input.conversationId), sql`exists (
+            select 1 from conversation_grants g where g.organization_id = ${input.organizationId}::uuid
+              and g.conversation_id = ${input.conversationId}::uuid)`)).limit(1);
+        if (conversation.kind !== "mission" || conversation.ownerMemberId !== input.memberId || previousExecution || sharedDraft) {
+          const [thread] = await transaction.insert(conversations).values({
+            organizationId: input.organizationId, ownerMemberId: input.memberId, projectId: input.projectId,
+            parentConversationId: input.conversationId, kind: "mission", title: input.objective.slice(0, 200),
+          }).returning();
+          if (!thread) throw new Error("Failed to create the mission thread.");
+          missionConversationId = thread.id;
+          await transaction.insert(messages).values({ organizationId: input.organizationId, conversationId: thread.id,
+            memberId: input.memberId, role: "user", content: parent.goal,
+            metadata: { sourceConversationId: input.conversationId, sourceMissionId: parent.id },
+          });
+        }
+      }
+
       const [mission] = await transaction.insert(missions).values({
         organizationId: input.organizationId,
-        conversationId: input.conversationId,
+        conversationId: missionConversationId,
+        projectId: input.projectId,
         requestedByMemberId: input.memberId,
         assignedDeviceId: input.deviceId,
         goal: input.objective,
         context: {
           type: `runner.${input.adapter}`,
           repositoryId: input.repositoryId,
+          ...(workspaceMission ? { workspaceVersion: 1, projectId: input.projectId, sourceConversationId: input.conversationId } : {}),
           parentMissionId: input.parentMissionId,
           delegation: {
             id: input.delegationId,
@@ -456,6 +680,11 @@ export class ConversationRuntimeRepository {
         updatedAt: acceptedAt,
       }).returning();
       if (!mission) throw new Error("Failed to create the delegated runner mission.");
+      if (workspaceMission) {
+        await transaction.update(conversations).set({ missionId: mission.id, updatedAt: acceptedAt }).where(and(
+          eq(conversations.organizationId, input.organizationId), eq(conversations.id, missionConversationId),
+        ));
+      }
       await transaction.insert(missionEvents).values([
         {
           organizationId: input.organizationId,
@@ -463,6 +692,8 @@ export class ConversationRuntimeRepository {
           type: "mission.child_dispatched",
           payload: {
             childMissionId: mission.id,
+            conversationId: missionConversationId,
+            ...(input.projectId ? { projectId: input.projectId } : {}),
             serviceId: input.serviceId,
             delegationId: input.delegationId,
             requestId: input.requestId,
@@ -482,7 +713,7 @@ export class ConversationRuntimeRepository {
           occurredAt: acceptedAt,
         },
       ]);
-      return { conversationId: input.conversationId, mission };
+      return { conversationId: missionConversationId, mission };
     });
   }
 
@@ -496,13 +727,16 @@ export class ConversationRuntimeRepository {
   }
 
   async setMissionRunning(organizationId: string, missionId: string, context: Record<string, unknown>) {
-    const rows = await this.database.withOrganization(organizationId, (transaction) =>
-      transaction.update(missions).set({ status: "running", context, updatedAt: new Date() }).where(and(
+    const rows = await this.database.withOrganization(organizationId, async transaction => {
+      if (typeof context.hermesScopeId === "string") {
+        await requireCurrentMissionMemoryScope(transaction, { organizationId, missionId, expectedScopeId: context.hermesScopeId });
+      }
+      return transaction.update(missions).set({ status: "running", context, updatedAt: new Date() }).where(and(
         eq(missions.organizationId, organizationId), eq(missions.id, missionId),
         // Failed deliveries can be retried by SQS; cancellation and completion are final.
         inArray(missions.status, ["queued", "running", "waiting_for_approval", "failed"]),
-      )).returning({ id: missions.id }),
-    );
+      )).returning({ id: missions.id });
+    });
     return rows.length > 0;
   }
 
@@ -526,6 +760,10 @@ export class ConversationRuntimeRepository {
     context: Record<string, unknown>;
   }) {
     return this.database.withOrganization(input.organizationId, async (transaction) => {
+      if (typeof input.context.hermesScopeId === "string") {
+        await requireCurrentMissionMemoryScope(transaction, { organizationId: input.organizationId,
+          missionId: input.missionId, expectedScopeId: input.context.hermesScopeId });
+      }
       const [completed] = await transaction
         .update(missions)
         .set({ status: "completed", context: input.context, updatedAt: new Date() })
@@ -624,10 +862,15 @@ export class ConversationRuntimeRepository {
     type: string;
     payload: Record<string, unknown>;
     occurredAt: Date;
+    expectedScopeId?: string;
   }) {
-    return this.database.withOrganization(input.organizationId, (transaction) =>
-      transaction.insert(missionEvents).values(input).returning(),
-    );
+    return this.database.withOrganization(input.organizationId, async transaction => {
+      const { expectedScopeId, ...event } = input;
+      if (expectedScopeId) await requireCurrentMissionMemoryScope(transaction, {
+        organizationId: input.organizationId, missionId: input.missionId, expectedScopeId,
+      });
+      return transaction.insert(missionEvents).values(event).returning();
+    });
   }
 
   listMissionEvents(organizationId: string, missionId: string) {
@@ -651,13 +894,15 @@ export class ConversationRuntimeRepository {
     reason: string,
     context: Record<string, unknown>,
   ) {
-    return this.database.withOrganization(organizationId, (transaction) =>
-      transaction
-        .update(missions)
+    return this.database.withOrganization(organizationId, async transaction => {
+      if (typeof context.hermesScopeId === "string") {
+        await requireCurrentMissionMemoryScope(transaction, { organizationId, missionId, expectedScopeId: context.hermesScopeId });
+      }
+      return transaction.update(missions)
         .set({ status: "failed", context: { ...context, failure: reason }, updatedAt: new Date() })
         .where(and(eq(missions.organizationId, organizationId), eq(missions.id, missionId),
-          inArray(missions.status, ["queued", "running", "waiting_for_approval", "failed"]))),
-    );
+          inArray(missions.status, ["queued", "running", "waiting_for_approval", "failed"])));
+    });
   }
 }
 

@@ -1,3 +1,4 @@
+import { registerWorkspaceRoutes } from "./workspace-routes.js";
 import { submitPrivateMessage } from "./conversations.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
@@ -36,6 +37,7 @@ export function createApp({ verifier, hermes, conversations, delegations, host =
   const app = createMcpExpressApp({ host });
 
   registerRunnerRoutes(app, verifier, conversations);
+  registerWorkspaceRoutes(app, authenticate, conversations, hermes);
 
   app.get("/health", (_request, response) => {
     response.json({ service: "ventneuf-os-control-plane", status: "ok" });
@@ -339,7 +341,8 @@ export function createApp({ verifier, hermes, conversations, delegations, host =
       }
       // Use the context returned by the transition, not the earlier ownership read.
       const runId = cancelled[0]?.context?.hermesRunId;
-      if (typeof runId === "string") await hermes.stop!(runId);
+      if (typeof runId === "string") await hermes.stop!(runId,
+        typeof cancelled[0]?.context?.hermesScopeId === "string" ? cancelled[0].context.hermesScopeId : undefined);
       response.json({ id: mission.id, status: "cancelled", cancelledAt });
     } catch (error) {
       next(error);

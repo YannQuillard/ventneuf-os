@@ -7,6 +7,7 @@ export type RunnerAdapter = "repository-check" | "orca-review" | "codex-developm
 export interface RunnerDispatch {
   deviceId: string;
   repositoryId: string;
+  projectId?: string;
   adapter: RunnerAdapter;
   model?: ClaudeModel;
   objective: string;
@@ -25,6 +26,7 @@ export async function dispatchRunnerMission(
   }
   if (context.principalType === "user") {
     assertAuthorized(context, "mission:create");
+    if (input.projectId) throw new Error("Start a project mission from its Hermes conversation.");
     const queued = await runtime.repository.enqueuePrivateMessage({
       organizationId: context.organizationId,
       externalSubject: context.principalId,
@@ -53,6 +55,7 @@ export async function dispatchRunnerMission(
     || !("targets" in claims)
     || !claims.targets.some((target) => target.deviceId === input.deviceId
       && target.repositoryId === input.repositoryId
+      && target.projectId === input.projectId
       && target.adapters.includes(input.adapter)
       && (input.adapter !== "claude-development"
         || (input.model !== undefined && target.claudeModels?.includes(input.model) === true)))) {
@@ -70,6 +73,7 @@ export async function dispatchRunnerMission(
     objective: input.objective,
     deviceId: input.deviceId,
     repositoryId: input.repositoryId,
+    ...(input.projectId ? { projectId: input.projectId } : {}),
     adapter: input.adapter,
     model: input.model,
   });

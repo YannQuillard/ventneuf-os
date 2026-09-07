@@ -1,4 +1,5 @@
-import { and, asc, eq, gt, isNull, lte, or, sql } from "drizzle-orm";
+import { hasWorkspaceMissionAuthority } from "./workspace-access.js";
+import { and, asc, eq, gt, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { claudeModelAliases, evaluateApprovalPolicy, isAgentExecutionSnapshot, type AgentExecutionSnapshot, type ClaudeModel } from "@ventneuf/domain";
 import type { Database, DatabaseTransaction } from "./client.js";
 import { deviceCredentials, devices, messages, missionApprovals, missionEvents, missions } from "./schema.js";
@@ -17,6 +18,34 @@ const maxAttempts = 3;
 
 export class RunnerMissionRepository {
   constructor(private readonly database: Database) {}
+
+  private async cancelWithdrawnWorkspaceMission(
+    transaction: DatabaseTransaction,
+    mission: typeof missions.$inferSelect,
+    now: Date,
+  ) {
+    const [cancelled] = await transaction.update(missions).set({
+      status: "cancelled",
+      leaseOwner: null,
+      leaseTokenHash: null,
+      leaseExpiresAt: null,
+      updatedAt: now,
+      context: { ...mission.context, cancellationReason: "Project access or repository association was withdrawn." },
+    }).where(and(
+      eq(missions.organizationId, mission.organizationId),
+      eq(missions.id, mission.id),
+      inArray(missions.status, ["queued", "running", "waiting_for_approval"]),
+    )).returning({ id: missions.id });
+    if (cancelled) {
+      await transaction.insert(missionEvents).values({
+        organizationId: mission.organizationId,
+        missionId: mission.id,
+        type: "run.cancelled",
+        payload: { reason: "project_access_withdrawn" },
+        occurredAt: now,
+      });
+    }
+  }
 
   private async authenticate(transaction: DatabaseTransaction, scope: DeviceScope) {
     const [device] = await transaction.select({ id: devices.id }).from(devices)
@@ -65,6 +94,14 @@ export class RunnerMissionRepository {
           or(eq(missions.status, "queued"), and(eq(missions.status, "running"), lte(missions.leaseExpiresAt, now))),
         )).orderBy(asc(missions.createdAt), asc(missions.id)).for("update", { skipLocked: true }).limit(1);
         if (!mission) return null;
+        if (!await hasWorkspaceMissionAuthority(transaction, mission)) {
+          await transaction.update(missions).set({ status: "cancelled", leaseExpiresAt: null, updatedAt: now,
+            context: { ...mission.context, cancellationReason: "Project access or repository association was withdrawn." },
+          }).where(eq(missions.id, mission.id));
+          await transaction.insert(missionEvents).values({ organizationId: scope.organizationId,
+            missionId: mission.id, type: "run.cancelled", payload: { reason: "project_access_withdrawn" }, occurredAt: now });
+          continue;
+        }
         const adapter = mission.context.type === "runner.orca-review"
           ? "orca-review"
           : mission.context.type === "runner.codex-development"
@@ -180,6 +217,9 @@ export class RunnerMissionRepository {
       if (!mission || mission.status !== "running" || !mission.leaseExpiresAt || mission.leaseExpiresAt <= now) {
         throw new RunnerLeaseError("The runner lease expired or the mission stopped.");
       }
+      if (!await hasWorkspaceMissionAuthority(transaction, mission)) {
+        throw new RunnerLeaseError("Project access or repository association was withdrawn.");
+      }
       const expiresAt = new Date(now.getTime() + leaseDurationMs);
       await transaction.update(missions).set({ leaseExpiresAt: expiresAt, updatedAt: now }).where(eq(missions.id, mission.id));
       return { leaseExpiresAt: expiresAt.toISOString() };
@@ -189,12 +229,16 @@ export class RunnerMissionRepository {
   inspect(scope: DeviceScope, missionId: string) {
     return this.database.withOrganization(scope.organizationId, async (transaction) => {
       await this.authenticate(transaction, scope);
-      const [mission] = await transaction.select({ status: missions.status }).from(missions).where(and(
+      const [mission] = await transaction.select().from(missions).where(and(
         eq(missions.organizationId, scope.organizationId),
         eq(missions.id, missionId),
         eq(missions.assignedDeviceId, scope.deviceId),
-      )).limit(1);
-      return mission;
+      )).for("update").limit(1);
+      if (mission && !await hasWorkspaceMissionAuthority(transaction, mission)) {
+        await this.cancelWithdrawnWorkspaceMission(transaction, mission, new Date());
+        return { status: "cancelled" };
+      }
+      return mission ? { status: mission.status } : undefined;
     });
   }
 
@@ -212,16 +256,20 @@ export class RunnerMissionRepository {
       if (!mission || mission.context.type !== `runner.${input.snapshot.provider}-development`) {
         throw new RunnerLeaseError("The execution is outside the runner lease.");
       }
+      const now = new Date();
+      if (mission.status !== "running" || !mission.leaseExpiresAt || mission.leaseExpiresAt <= now) {
+        throw new RunnerLeaseError("The runner lease expired or the mission stopped.");
+      }
+      if (!await hasWorkspaceMissionAuthority(transaction, mission)) {
+        await this.cancelWithdrawnWorkspaceMission(transaction, mission, now);
+        return undefined;
+      }
       const [existing] = await transaction.select().from(missionEvents).where(and(
         eq(missionEvents.organizationId, scope.organizationId), eq(missionEvents.missionId, mission.id),
         eq(missionEvents.id, mission.id), eq(missionEvents.type, "runner.execution"),
       )).limit(1);
       const previous = existing?.payload.snapshot as AgentExecutionSnapshot | undefined;
       if (previous && previous.revision >= input.snapshot.revision) return { revision: previous.revision };
-      const now = new Date();
-      if (mission.status !== "running" || !mission.leaseExpiresAt || mission.leaseExpiresAt <= now) {
-        throw new RunnerLeaseError("The runner lease expired or the mission stopped.");
-      }
       // A single bounded materialized view survives completion without growing SSE snapshots per delta.
       if (existing) {
         await transaction.update(missionEvents).set({ payload: { snapshot: input.snapshot }, occurredAt: now })
@@ -231,6 +279,9 @@ export class RunnerMissionRepository {
           organizationId: scope.organizationId, type: "runner.execution", payload: { snapshot: input.snapshot }, occurredAt: now });
       }
       return { revision: input.snapshot.revision };
+    }).then((result) => {
+      if (!result) throw new RunnerLeaseError("Project access or repository association was withdrawn.");
+      return result;
     });
   }
 
@@ -251,6 +302,11 @@ export class RunnerMissionRepository {
         eq(missions.leaseTokenHash, input.tokenHash),
       )).for("update").limit(1);
       if (!mission) throw new RunnerLeaseError("The runner lease is unavailable.");
+      const now = new Date();
+      if (!await hasWorkspaceMissionAuthority(transaction, mission)) {
+        await this.cancelWithdrawnWorkspaceMission(transaction, mission, now);
+        return undefined;
+      }
       const [existing] = await transaction.select().from(missionEvents).where(and(
         eq(missionEvents.organizationId, scope.organizationId), eq(missionEvents.missionId, mission.id),
         eq(missionEvents.id, input.eventId),
@@ -261,7 +317,6 @@ export class RunnerMissionRepository {
         }
         return { status: mission.status, leaseExpiresAt: mission.leaseExpiresAt?.toISOString() };
       }
-      const now = new Date();
       if (mission.status !== "running" || !mission.leaseExpiresAt || mission.leaseExpiresAt <= now) {
         throw new RunnerLeaseError("The runner lease expired or the mission stopped.");
       }
@@ -300,6 +355,9 @@ export class RunnerMissionRepository {
         });
       }
       return { status, leaseExpiresAt: expiresAt?.toISOString() };
+    }).then((result) => {
+      if (!result) throw new RunnerLeaseError("Project access or repository association was withdrawn.");
+      return result;
     });
   }
 }
