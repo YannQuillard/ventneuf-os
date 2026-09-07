@@ -115,6 +115,18 @@ test("confines Claude tools and exposes only bounded approval evidence", async (
     assert.equal(sensitive.behavior, "defer");
     if (sensitive.behavior !== "defer") return;
     assert.equal(JSON.stringify(sensitive.candidate.request).includes("private-token"), false);
+    assert.deepEqual(sensitive.candidate.request.evidence, {
+      method: "PreToolUse",
+      tool: "Bash",
+      command: "npm install --token=[redacted]",
+      commandLength: "npm install --token=private-token".length,
+      commandTruncated: false,
+      commandRedacted: true,
+      cwd: ".",
+      agentReason: "Use [redacted]",
+      expectedEffect: "The command may access resources outside the native Claude sandbox from ..",
+      destination: "host execution outside the Claude sandbox",
+    });
 
     const elevated = classifyClaudeTool(state.job, hook(state.job, "Bash", {
       command: "python3 scripts/release.py",
@@ -124,6 +136,38 @@ test("confines Claude tools and exposes only bounded approval evidence", async (
     if (elevated.behavior === "defer") {
       assert.equal(elevated.candidate.request.action.category, "development.command");
     }
+  } finally {
+    await rm(state.directory, { recursive: true, force: true });
+  }
+});
+
+test("shows exact Claude gh arguments and marks truncated command evidence", async () => {
+  const state = await fixture();
+  try {
+    const command = "gh --repo example/repository pr merge 42 --delete-branch && git status --short";
+    const request = classifyClaudeTool(state.job, hook(state.job, "Bash", {
+      command,
+    }));
+    assert.equal(request.behavior, "defer");
+    if (request.behavior !== "defer") return;
+    assert.equal(request.candidate.request.action.category, "pull_request.merge");
+    assert.equal(request.candidate.request.evidence.command, command);
+    assert.equal(request.candidate.request.evidence.commandLength, command.length);
+    assert.equal(request.candidate.request.evidence.commandTruncated, false);
+    assert.equal(request.candidate.request.evidence.commandRedacted, false);
+    assert.equal(request.candidate.request.evidence.cwd, ".");
+    assert.match(request.candidate.request.action.expectedEffect, /merged/);
+
+    const longCommand = `git push origin HEAD --message=${"x".repeat(9_000)}`;
+    const longRequest = classifyClaudeTool(state.job, hook(state.job, "Bash", {
+      command: longCommand,
+      dangerouslyDisableSandbox: true,
+    }, "tool-long"));
+    assert.equal(longRequest.behavior, "defer");
+    if (longRequest.behavior !== "defer") return;
+    assert.equal(longRequest.candidate.request.evidence.commandLength, longCommand.length);
+    assert.equal(longRequest.candidate.request.evidence.commandTruncated, true);
+    assert.equal((longRequest.candidate.request.evidence.command as string).length, 8_000);
   } finally {
     await rm(state.directory, { recursive: true, force: true });
   }
