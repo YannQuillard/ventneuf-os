@@ -18,6 +18,7 @@ export interface LaunchAgentConfiguration {
   claudePath?: string;
   homeDirectory?: string;
   userId?: number;
+  version?: string;
 }
 
 function escapeXml(value: string) {
@@ -110,6 +111,9 @@ export async function installLaunchAgent(configuration: LaunchAgentConfiguration
     recursive: true,
     force: true,
   });
+  if (configuration.version && /^[0-9a-f]{40}$/.test(configuration.version)) {
+    await writeFile(join(paths.supportDirectory, "release.json"), `${JSON.stringify({ version: configuration.version })}\n`, { mode: 0o600 });
+  }
   await writeFile(paths.plist, renderLaunchAgentPlist(configuration), { mode: 0o600 });
   await execute("/bin/launchctl", ["bootstrap", `gui/${userId}`, paths.plist]);
   await execute("/bin/launchctl", ["enable", `gui/${userId}/${label}`]);

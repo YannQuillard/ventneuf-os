@@ -3,6 +3,7 @@ import type { AddressInfo } from "node:net";
 import type { CredentialStore, StoredDevice } from "./credential-store.js";
 import type { RunnerCloudClient } from "./cloud-client.js";
 import { addRegisteredRepository } from "./repositories.js";
+import type { RunnerUpdater } from "./runner-update.js";
 
 const maxRequestBytes = 8_192;
 
@@ -12,6 +13,7 @@ export interface LocalBridgeOptions {
   deviceName: string;
   allowedOrigins: Set<string>;
   repositoriesFile?: string;
+  updater?: Pick<RunnerUpdater, "status" | "install" | "confirmHealthy">;
   heartbeatIntervalMs?: number;
 }
 
@@ -29,6 +31,7 @@ export class LocalRunnerBridge {
       server.once("error", reject);
       server.listen(port, "127.0.0.1", resolve);
     });
+    await this.options.updater?.confirmHealthy();
     return { server, port: (server.address() as AddressInfo).port };
   }
 
@@ -70,6 +73,16 @@ export class LocalRunnerBridge {
         }
         const repository = await addRegisteredRepository(this.options.repositoriesFile, { name: body.name, path: body.path });
         return this.json(response, 201, { repository: { id: repository.id, name: repository.name } });
+      }
+      if (request.method === "GET" && request.url === "/updates") {
+        if (!this.device) return this.json(response, 409, { error: "runner_not_enrolled" });
+        if (!this.options.updater) return this.json(response, 503, { error: "runner_updates_unavailable" });
+        return this.json(response, 200, await this.options.updater.status());
+      }
+      if (request.method === "POST" && request.url === "/updates/install") {
+        if (!this.device) return this.json(response, 409, { error: "runner_not_enrolled" });
+        if (!this.options.updater) return this.json(response, 503, { error: "runner_updates_unavailable" });
+        return this.json(response, 202, { version: await this.options.updater.install(), restarting: true });
       }
       return this.json(response, 404, { error: "not_found" });
     } catch (error) {

@@ -112,3 +112,30 @@ test("registers a repository locally without returning its path", async () => {
     await rm(temporary, { recursive: true, force: true });
   }
 });
+
+test("exposes runner updates only through the enrolled trusted-origin bridge", async () => {
+  const device: StoredDevice = { deviceId: "device-1", name: "Test Mac", platform: "darwin", credential: "secret" };
+  let installed = false;
+  const bridge = new LocalRunnerBridge({
+    client: { enroll: async () => device, heartbeat: async () => undefined },
+    store: { load: async () => device, save: async () => undefined },
+    deviceName: "Test Mac",
+    allowedOrigins: new Set([origin]),
+    updater: {
+      status: async () => ({ currentVersion: "1".repeat(40), latestVersion: "2".repeat(40), available: true }),
+      install: async () => { installed = true; return "2".repeat(40); },
+      confirmHealthy: async () => undefined,
+    },
+  });
+  const { server, port } = await bridge.start(0);
+  try {
+    const status = await fetch(`http://127.0.0.1:${port}/updates`, { headers: { origin } });
+    assert.equal(status.status, 200);
+    assert.equal((await status.json() as { available: boolean }).available, true);
+    const install = await fetch(`http://127.0.0.1:${port}/updates/install`, { method: "POST", headers: { origin } });
+    assert.equal(install.status, 202);
+    assert.equal(installed, true);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});

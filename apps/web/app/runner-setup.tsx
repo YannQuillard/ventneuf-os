@@ -26,6 +26,12 @@ interface LocalStatus {
   device?: Device;
 }
 
+interface RunnerUpdateStatus {
+  currentVersion: string;
+  latestVersion: string;
+  available: boolean;
+}
+
 function recentlySeen(device: Device) {
   return Boolean(device.lastSeenAt && Date.now() - new Date(device.lastSeenAt).getTime() < 90_000);
 }
@@ -83,6 +89,26 @@ function RegisterRepositoryDialog({ isOpen, onOpenChange, onRegistered }: {
   </Dialog>;
 }
 
+function RunnerUpdateDialog({ isOpen, onOpenChange, status, onUpdate }: {
+  isOpen: boolean;
+  onOpenChange: (isOpen: boolean) => void;
+  status?: RunnerUpdateStatus;
+  onUpdate: () => Promise<void>;
+}) {
+  return <Dialog isOpen={isOpen} onOpenChange={onOpenChange} purpose="required" width={480}>
+    <Layout height="auto" defaultHasDividers
+      header={<DialogHeader title="Update runner" subtitle="Install the latest verified runner release" onOpenChange={onOpenChange} />}
+      content={<LayoutContent padding={4}><VStack gap={3}>
+        <Text>The runner will download a checksum-verified release and restart. Device identity, repository configuration, and agent settings stay unchanged.</Text>
+        {status ? <Text type="supporting">Current {status.currentVersion.slice(0, 7)} · Latest {status.latestVersion.slice(0, 7)}</Text> : null}
+      </VStack></LayoutContent>}
+      footer={<LayoutFooter><HStack gap={2} hAlign="end">
+        <Button label="Cancel" variant="secondary" onClick={() => onOpenChange(false)} />
+        <Button label="Update and restart" variant="primary" clickAction={onUpdate} />
+      </HStack></LayoutFooter>} />
+  </Dialog>;
+}
+
 export function RunnerSetup() {
   const [local, setLocal] = useState<LocalStatus>();
   const [cloudDevices, setCloudDevices] = useState<Device[]>([]);
@@ -93,6 +119,8 @@ export function RunnerSetup() {
   const [missionNotice, setMissionNotice] = useState<string>();
   const [repositoryNotice, setRepositoryNotice] = useState<string>();
   const [isRepositoryOpen, setRepositoryOpen] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState<RunnerUpdateStatus>();
+  const [isUpdateOpen, setUpdateOpen] = useState(false);
 
   const refresh = useCallback(async () => {
     const [localResult, cloudResult] = await Promise.allSettled([
@@ -106,6 +134,12 @@ export function RunnerSetup() {
       }),
     ]);
     setLocal(localResult.status === "fulfilled" ? localResult.value : undefined);
+    if (localResult.status === "fulfilled" && localResult.value.status === "online") {
+      try {
+        const response = await fetch(`${localRunnerUrl}/updates`, { cache: "no-store" });
+        setUpdateStatus(response.ok ? await response.json() as RunnerUpdateStatus : undefined);
+      } catch { setUpdateStatus(undefined); }
+    } else setUpdateStatus(undefined);
     if (cloudResult.status === "fulfilled") {
       setCloudDevices(cloudResult.value.devices);
       setDeviceError(undefined);
@@ -162,6 +196,23 @@ export function RunnerSetup() {
     }
   };
 
+  const updateRunner = async () => {
+    setError(undefined);
+    try {
+      const response = await fetch(`${localRunnerUrl}/updates/install`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+      if (!response.ok) {
+        const failure = await response.json().catch(() => undefined) as { message?: string } | undefined;
+        throw new Error(failure?.message ?? "The runner update failed.");
+      }
+      setUpdateOpen(false);
+      setRepositoryNotice("Runner update installed. Waiting for the local service to restart…");
+      window.setTimeout(() => void refresh(), 3_000);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "The runner update failed.");
+      setUpdateOpen(false);
+    }
+  };
+
   return (
     <VStack gap={6} padding={4}>
       <HStack gap={3} vAlign="center" wrap="wrap">
@@ -169,6 +220,8 @@ export function RunnerSetup() {
         <Button label="Refresh" size="sm" variant="ghost" clickAction={() => void refresh()} />
         {local?.status === "online" ? <Button label="Register repository" variant="secondary" size="sm"
           onClick={() => setRepositoryOpen(true)} /> : null}
+        {local?.status === "online" && updateStatus?.available ? <Button label="Update runner" variant="primary" size="sm"
+          onClick={() => setUpdateOpen(true)} /> : null}
         {local?.status !== "online" ? <Button label="Connect this Mac" variant="primary" size="sm" isLoading={isConnecting} clickAction={connect} /> : null}
       </HStack>
       {isLoaded ? cloudDevices.map((device) => (
@@ -198,6 +251,7 @@ export function RunnerSetup() {
         setRepositoryNotice(`${name} was registered locally and will be available for projects after the next runner sync.`);
         window.setTimeout(() => void refresh(), 6_000);
       }} />
+      <RunnerUpdateDialog isOpen={isUpdateOpen} onOpenChange={setUpdateOpen} status={updateStatus} onUpdate={updateRunner} />
     </VStack>
   );
 }
