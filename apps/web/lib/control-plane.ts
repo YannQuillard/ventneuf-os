@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAuthConfig } from "./auth/config";
 import { ACCESS_TOKEN_COOKIE, REFRESH_TOKEN_COOKIE, SESSION_COOKIE, authCookieOptions } from "./auth/session";
 import { accessTokenNeedsRefresh, refreshAccessToken } from "./auth/token";
+import { proxyResponse } from "./proxy-response";
 
 export async function proxyControlPlane(path: string, method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE",
   request?: NextRequest, body?: string) {
@@ -24,10 +25,7 @@ export async function proxyControlPlane(path: string, method: "GET" | "POST" | "
     cache: "no-store",
     headers: { authorization: `Bearer ${token}`, ...(request || body ? { "content-type": "application/json" } : {}) },
   });
-  const response = new NextResponse(await upstream.text(), {
-    status: upstream.status,
-    headers: { "content-type": upstream.headers.get("content-type") ?? "application/json" },
-  });
+  const response = proxyResponse(upstream);
   if (refreshed) response.cookies.set(ACCESS_TOKEN_COOKIE, refreshed.accessToken, authCookieOptions(refreshed.expiresIn));
   return response;
 }

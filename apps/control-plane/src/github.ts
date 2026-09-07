@@ -123,8 +123,10 @@ export class ManagedGitHubConnector implements GitHubConnector {
 
   async status(scope: WorkspaceScope) {
     const [connection, config] = await Promise.all([this.connections.get(scope), this.config()]);
+    const installUrl = new URL(`https://github.com/apps/${config.slug}/installations/new`);
+    installUrl.searchParams.set("state", await this.state(scope));
     return { connected: Boolean(connection), ...(connection ? { login: connection.login } : {}),
-      installUrl: `https://github.com/apps/${config.slug}/installations/new` };
+      installUrl: installUrl.toString() };
   }
 
   async authorizationUrl(scope: WorkspaceScope) {
