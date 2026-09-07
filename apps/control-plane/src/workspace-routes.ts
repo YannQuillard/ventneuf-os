@@ -1,3 +1,4 @@
+import type { HermesClient } from "./hermes.js";
 import type { Express, NextFunction, Request, Response } from "express";
 import { z } from "zod";
 import { assertAuthorized, type AuthorizationContext } from "@ventneuf/domain";
@@ -21,7 +22,7 @@ const conversationInput = z.object({
 
 type Authenticate = (request: Request, response: Response) => Promise<AuthorizationContext | undefined>;
 
-export function registerWorkspaceRoutes(app: Express, authenticate: Authenticate, runtime?: ConversationRuntime) {
+export function registerWorkspaceRoutes(app: Express, authenticate: Authenticate, runtime?: ConversationRuntime, hermes?: HermesClient) {
   const route = (handler: (request: Request, response: Response, context: AuthorizationContext, services: ConversationRuntime) => Promise<unknown>) =>
     async (request: Request, response: Response, next: NextFunction) => {
       try {
@@ -49,6 +50,19 @@ export function registerWorkspaceRoutes(app: Express, authenticate: Authenticate
       services.workspace!.listMembers(query),
     ]);
     response.json({ projects, conversations, members, currentMember });
+  }));
+  app.get("/api/workspace/memory", route(async (request, response, context, services) => {
+    if (!services.memory?.listMemory) return void response.status(503).json({ error: "memory_unavailable" });
+    const conversationId = request.query.conversationId === undefined ? undefined : id.parse(request.query.conversationId);
+    const memoryScope = await services.workspace!.getMemoryScope(scope(context), conversationId);
+    response.json(await services.memory.listMemory(memoryScope.scopeId));
+  }));
+  app.get("/api/workspace/memory/:entryId", route(async (request, response, context, services) => {
+    if (!services.memory?.readMemory) return void response.status(503).json({ error: "memory_unavailable" });
+    const conversationId = request.query.conversationId === undefined ? undefined : id.parse(request.query.conversationId);
+    const entryId = z.string().min(1).max(2048).parse(request.params.entryId);
+    const memoryScope = await services.workspace!.getMemoryScope(scope(context), conversationId);
+    response.json(await services.memory.readMemory(memoryScope.scopeId, entryId));
   }));
   app.patch("/api/workspace/me", route(async (request, response, context, services) => {
     const { name } = z.object({ name: z.string().trim().min(1).max(100) }).strict().parse(request.body);
@@ -110,6 +124,23 @@ export function registerWorkspaceRoutes(app: Express, authenticate: Authenticate
     response.status(202).json(await submitPrivateMessage(context, services, {
       ...input, conversationId: id.parse(request.params.conversationId),
     }));
+  }));
+  app.post("/api/workspace/conversations/:conversationId/missions/:missionId/cancel", route(async (request, response, context, services) => {
+    const mission = await services.repository.getOwnedConversationMission({ ...scope(context),
+      conversationId: id.parse(request.params.conversationId), missionId: id.parse(request.params.missionId) });
+    if (!["queued", "running", "waiting_for_approval", "cancelled"].includes(mission.status)) {
+      return void response.status(409).json({ error: "mission_not_cancellable" });
+    }
+    const cancelledAt = new Date().toISOString();
+    const cancelled = mission.status === "cancelled" ? [{ context: mission.context }]
+      : await services.repository.cancelMission(context.organizationId, mission.id, { cancelledAt });
+    if (!cancelled.length) return void response.status(409).json({ error: "mission_not_cancellable" });
+    const state = cancelled[0]!.context;
+    if (!mission.assignedDeviceId && typeof state.hermesRunId === "string") {
+      if (!hermes?.stop) return void response.status(503).json({ error: "hermes_cancellation_unavailable" });
+      await hermes.stop(state.hermesRunId, typeof state.hermesScopeId === "string" ? state.hermesScopeId : undefined);
+    }
+    response.json({ id: mission.id, status: "cancelled", cancelledAt });
   }));
   app.get("/api/workspace/conversations/:conversationId/events", route(async (request, response, context, services) => {
     const query = { ...scope(context), conversationId: id.parse(request.params.conversationId) };

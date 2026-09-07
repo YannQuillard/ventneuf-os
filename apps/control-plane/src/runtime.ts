@@ -14,6 +14,8 @@ import {
   MissionApprovalRepository,
   RunnerMissionRepository,
   type Database,
+  WorkspaceMemoryFenceError,
+  WorkspaceAccessError,
 } from "@ventneuf/database";
 import {
   HermesRequestTimeoutError,
@@ -114,6 +116,7 @@ const persistedRunEvents = new Set([
 export interface ConversationRuntime {
   database: Database;
   workspace?: WorkspaceRepository;
+  memory?: Pick<HermesClient, "listMemory" | "readMemory">;
   repository: ConversationRuntimeRepository;
   devices: DeviceRuntimeRepository;
   approvals: MissionApprovalRepository;
@@ -173,7 +176,7 @@ export class MissionWorker {
     if (!record || record.mission.status === "completed") return;
     if (record.mission.status === "cancelled") {
       const runId = record.mission.context?.hermesRunId;
-      if (!record.mission.assignedDeviceId && typeof runId === "string") await this.stopRun(runId);
+      if (!record.mission.assignedDeviceId && typeof runId === "string") await this.stopRun(runId, record.mission.context.hermesScopeId);
       return;
     }
 
@@ -197,7 +200,20 @@ export class MissionWorker {
       hermesStartedAt: hermesStartedAt.toISOString(),
     };
     let activeContext: Record<string, unknown> = { ...initialContext, timing: activeTiming };
+    const cancelChangedScope = async () => {
+      await this.repository.cancelMission(envelope.organizationId, envelope.missionId, activeContext);
+      if (typeof activeContext.hermesRunId === "string") await this.stopRun(activeContext.hermesRunId, activeContext.hermesScopeId);
+    };
     try {
+      const memoryScope = await this.repository.getHermesMemoryScope(envelope.organizationId, envelope.missionId);
+      let resumeRunId = typeof initialContext.hermesRunId === "string" ? initialContext.hermesRunId : undefined;
+      if (resumeRunId && initialContext.hermesScopeId !== memoryScope.scopeId) {
+        await this.stopRun(resumeRunId, initialContext.hermesScopeId);
+        resumeRunId = undefined;
+        delete activeContext.hermesRunId;
+      }
+      activeContext = { ...activeContext, hermesScopeId: memoryScope.scopeId };
+      if (!await this.repository.setMissionRunning(envelope.organizationId, envelope.missionId, activeContext)) return;
       if (record.mission.context.workspaceVersion === 1
         && !await this.repository.canProcessConversationMission(envelope.organizationId, envelope.missionId)) {
         throw new Error("Conversation access was withdrawn before this request could run.");
@@ -267,12 +283,21 @@ export class MissionWorker {
       });
       const reply = await this.hermes.ask({
         message: hermesMessage,
+        scopeId: memoryScope.scopeId,
         contextId: record.hermesContextId ?? undefined,
-        runId: typeof initialContext.hermesRunId === "string"
-          ? initialContext.hermesRunId
-          : undefined,
+        runId: resumeRunId,
         sessionKey: `organization:${envelope.organizationId}:conversation:${record.mission.conversationId}`,
         idempotencyKey: envelope.missionId,
+        shouldStop: async () => {
+          try {
+            const current = await this.repository.getHermesMemoryScope(envelope.organizationId, envelope.missionId);
+            if (current.scopeId === memoryScope.scopeId && !current.cancelled) return false;
+          } catch (error) {
+            if (!(error instanceof WorkspaceAccessError)) throw error;
+          }
+          await this.repository.cancelMission(envelope.organizationId, envelope.missionId, activeContext);
+          return true;
+        },
         onRunStarted: async (runId) => {
           activeContext = { ...activeContext, hermesRunId: runId };
           const running = await this.repository.setMissionRunning(
@@ -282,7 +307,7 @@ export class MissionWorker {
           );
           if (!running) {
             await this.repository.rememberCancelledHermesRun(envelope.organizationId, envelope.missionId, runId);
-            await this.stopRun(runId);
+            await this.stopRun(runId, activeContext.hermesScopeId);
             throw new HermesRunCancelledError();
           }
           logMission("hermes.run_started", {
@@ -298,6 +323,7 @@ export class MissionWorker {
             organizationId: envelope.organizationId,
             missionId: envelope.missionId,
             type,
+            expectedScopeId: memoryScope.scopeId,
             payload,
             occurredAt: new Date(
               typeof timestamp === "number" ? timestamp * 1_000 : Date.now(),
@@ -332,6 +358,7 @@ export class MissionWorker {
           hermesState: reply.state,
           hermesTaskId: reply.taskId,
           hermesUsage: reply.usage,
+          ...(reply.memoryChanges?.length ? { memoryChanges: reply.memoryChanges } : {}),
           missionId: envelope.missionId,
           timing: completedTiming,
         },
@@ -346,6 +373,10 @@ export class MissionWorker {
         totalMs: completedTiming.totalMs,
       });
     } catch (error) {
+      if (error instanceof WorkspaceMemoryFenceError) {
+        await cancelChangedScope();
+        return;
+      }
       if (error instanceof HermesRunCancelledError) {
         logMission("mission.cancelled", {
           organizationId: envelope.organizationId,
@@ -359,12 +390,18 @@ export class MissionWorker {
         failedAt: failedAt.toISOString(),
         totalMs: elapsedMs(activeTiming.acceptedAt, failedAt),
       };
-      await this.repository.failMission(
-        envelope.organizationId,
-        envelope.missionId,
-        error instanceof Error ? error.message : "Unknown Hermes failure",
-        { ...activeContext, timing: failedTiming },
-      );
+      try {
+        await this.repository.failMission(
+          envelope.organizationId,
+          envelope.missionId,
+          error instanceof Error ? error.message : "Unknown Hermes failure",
+          { ...activeContext, timing: failedTiming },
+        );
+      } catch (failure) {
+        if (!(failure instanceof WorkspaceMemoryFenceError)) throw failure;
+        await cancelChangedScope();
+        return;
+      }
       if (record.mission.context?.type === "hermes.approval") {
         await this.approvals?.escalateUnresolved(
           envelope.organizationId,
@@ -383,9 +420,9 @@ export class MissionWorker {
     }
   }
 
-  private async stopRun(runId: string): Promise<void> {
+  private async stopRun(runId: string, scopeId?: unknown): Promise<void> {
     if (!this.hermes.stop) throw new Error("Hermes cancellation is unavailable.");
-    await this.hermes.stop(runId);
+    await this.hermes.stop(runId, typeof scopeId === "string" ? scopeId : undefined);
   }
 
   async run(signal: AbortSignal): Promise<void> {
@@ -463,6 +500,7 @@ export async function createConversationRuntime(
   return {
     database,
     workspace: new WorkspaceRepository(database),
+    memory: hermes,
     repository,
     devices,
     approvals,

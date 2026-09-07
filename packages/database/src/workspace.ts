@@ -643,6 +643,12 @@ export class WorkspaceRepository {
       this.memberView(await ensureWorkspaceMember(transaction, scope)));
   }
 
+  getMemoryScope(scope: WorkspaceScope, conversationId?: string) {
+    return this.database.withOrganization(scope.organizationId, async transaction => conversationId
+      ? (await currentScopeForConversation(transaction, scope, conversationId)).hermesMemoryScope
+      : currentPersonalScope(transaction, scope));
+  }
+
   updateCurrentMember(scope: WorkspaceScope, name: string) {
     return this.database.withOrganization(scope.organizationId, async transaction => {
       const member = await requireWorkspaceMember(transaction, scope);

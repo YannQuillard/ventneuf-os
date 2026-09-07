@@ -9,19 +9,20 @@ The product provides one interface where a team can talk to an orchestrator, del
 The repository is under active development. Current foundations include:
 
 - an invite-only Next.js workspace authenticated through OpenID Connect;
-- private, durable Hermes conversations backed by PostgreSQL;
+- private, durable Hermes conversations and topic threads backed by PostgreSQL;
+- manually created projects, repository associations, and explicit per-resource sharing;
 - idempotent asynchronous mission dispatch and background processing;
 - persisted Hermes lifecycle and tool events with authenticated live delivery;
 - one-time, tenant-scoped device enrollment and revocable runner credentials;
 - a macOS runner bridge with loopback-only onboarding, Keychain storage, and outbound heartbeats;
 - device-assigned read-only repository checks with fenced leases, bounded recovery, and durable results;
 - policy-routed durable approval records with Hermes decisions, member escalation, and session resumption data;
-- a separately deployable control plane that communicates with Hermes over A2A;
+- a separately deployable control plane that routes Hermes Runs API calls to isolated native profiles;
 - authenticated remote and local MCP boundaries for agent tools;
 - identity, device, mission, and capability authorization primitives;
 - a messaging-oriented interface with project channels and private agent conversations.
 
-The current interface can send a request to Hermes, persist it before execution, queue the corresponding mission, follow its live tool activity, stop it, and display the durable response. It can also discover a local runner, enroll the Mac without exposing credentials, and show its cloud heartbeat status. Registered repositories expose a Check action that queues a read-only mission for their device and returns progress and results in the private conversation. Coding-agent execution, live terminal sessions, project channels, and production connectors remain under development.
+The current interface can send a request to Hermes, persist it before execution, queue the corresponding mission, follow its live tool activity, stop it, and display the durable response. It can also discover a local runner, enroll the Mac without exposing credentials, and show its cloud heartbeat status. Registered repositories expose a Check action that queues a read-only mission for their device and returns progress and results in the private conversation. Native coding-agent activity is available as a bounded session snapshot. The workspace APIs support independently shared projects and conversation threads; interactive terminals and production connectors remain under development.
 
 The production infrastructure and private operational documentation are intentionally maintained outside this public repository.
 
@@ -40,7 +41,17 @@ packages/mcp-server      Local MCP and runner-bridge foundations
 
 The web application is a browser-facing backend-for-frontend. It owns the login session but does not execute agent work. Authenticated requests are forwarded to the control plane, which enforces capabilities, persists conversations, dispatches durable missions, and communicates with Hermes. Long-running missions execute outside web request handlers.
 
-MCP is the tool boundary for coding agents and future device runners. A2A is currently the service-to-service boundary between the control plane and Hermes. Human, device, runner, and mission identities remain distinct throughout the system.
+MCP is the tool boundary for coding agents and future device runners. The scoped Hermes gateway carries native Runs API requests between the control plane and isolated profile containers. Human, device, runner, and mission identities remain distinct throughout the system.
+
+### Workspace and memory scopes
+
+`/api/workspace` returns the authenticated member's projects, conversations, and available recipients. Projects and conversations are private by default. A project grant does not reveal private topic or mission threads: their owners must share each thread explicitly. Shared project members can dispatch work against the project's authorized repository associations, and each dispatch creates or occupies a creator-private mission thread. Only the mission initiator decides human approvals or cancels its execution.
+
+Apply additive migration `0006_workspace_data.sql` before running this control plane. Configure `HERMES_SCOPE_GATEWAY_URL` and `HERMES_SCOPE_GATEWAY_SECRET_ID`; explicit `HERMES_SCOPE_GATEWAY_TOKEN` is accepted only outside production. The factory rejects missing scoped routing instead of falling back to a shared personal profile. Existing singleton-profile runs must be drained before this configuration changes.
+
+The control plane resolves opaque memory scopes from authenticated identity and effective conversation recipients. Sharing changes rotate the audience epoch and invalidate the previous Hermes context. Every streamed event, final response, failure, and delegated decision is fenced against the current audience. Native polling stops a run after its scope or requester access is withdrawn.
+
+The configured gateway must provision a native Hermes profile with an isolated home and Markdown vault for each scope. It implements authenticated `POST /scopes/:scopeId`, proxies native `/scopes/:scopeId/v1/runs` lifecycle requests, and exposes read-only `/scopes/:scopeId/notes` and `/notes/:entryId`. No profile key or absolute vault path is selected by the browser. Memory browsing uses `/api/workspace/memory`, optionally bound to an authorized `conversationId`. Verified note changes can be returned with the assistant response; connector integrations are separate work.
 
 ### Remote Hermes MCP contract
 

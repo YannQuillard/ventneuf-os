@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import type { ClaudeModel, MissionAuthority } from "@ventneuf/domain";
 import type { Database } from "./client.js";
-import { requireConversationAccess, requireProjectAccess, WorkspaceAccessError } from "./workspace-access.js";
+import { requireConversationAccess, requireProjectAccess, currentScopeForMission, requireCurrentMissionMemoryScope, WorkspaceAccessError } from "./workspace-access.js";
 import { publicApproval } from "./mission-approvals.js";
 import { conversations, devices, members, messages, missionApprovals, missionEvents, missions, organizations, projects, projectMembers, projectRepositories } from "./schema.js";
 
@@ -257,12 +257,26 @@ export class ConversationRuntimeRepository {
     });
   }
 
+  getOwnedConversationMission(input: { organizationId: string; externalSubject: string; conversationId: string; missionId: string }) {
+    return this.database.withOrganization(input.organizationId, async transaction => {
+      const { member } = await requireConversationAccess(transaction, input, input.conversationId);
+      const [mission] = await transaction.select().from(missions).where(and(
+        eq(missions.organizationId, input.organizationId), eq(missions.id, input.missionId),
+        eq(missions.conversationId, input.conversationId), eq(missions.requestedByMemberId, member.id),
+      )).limit(1);
+      if (!mission) throw new WorkspaceAccessError();
+      return mission;
+    });
+  }
+
   getConversationSnapshot(input: { organizationId: string; externalSubject: string; conversationId: string }) {
     return this.database.withOrganization(input.organizationId, async (transaction) => {
       const { member } = await requireConversationAccess(transaction, input, input.conversationId);
-      const items = await transaction.select().from(messages).where(and(
-        eq(messages.organizationId, input.organizationId), eq(messages.conversationId, input.conversationId),
-      )).orderBy(asc(messages.createdAt), asc(messages.id));
+      const rows = await transaction.select({ message: messages, memberName: members.displayName }).from(messages)
+        .leftJoin(members, and(eq(members.organizationId, messages.organizationId), eq(members.id, messages.memberId)))
+        .where(and(eq(messages.organizationId, input.organizationId), eq(messages.conversationId, input.conversationId)))
+        .orderBy(asc(messages.createdAt), asc(messages.id));
+      const items = rows.map(({ message, memberName }) => ({ ...message, memberName }));
       const [latest] = await transaction.select().from(missions).where(and(
         eq(missions.organizationId, input.organizationId), eq(missions.conversationId, input.conversationId),
         sql`coalesce(${missions.context}->>'type', '') <> 'hermes.approval'`,
@@ -377,6 +391,17 @@ export class ConversationRuntimeRepository {
     });
   }
 
+  getHermesMemoryScope(organizationId: string, missionId: string) {
+    return this.database.withOrganization(organizationId, async transaction => {
+      const [actor] = await transaction.select({ externalSubject: members.externalSubject }).from(missions)
+        .innerJoin(members, and(eq(members.organizationId, missions.organizationId), eq(members.id, missions.requestedByMemberId)))
+        .where(and(eq(missions.organizationId, organizationId), eq(missions.id, missionId))).limit(1);
+      if (!actor) throw new WorkspaceAccessError();
+      const result = await currentScopeForMission(transaction, { organizationId, externalSubject: actor.externalSubject }, missionId);
+      return { ...result.hermesMemoryScope, cancelled: result.mission.status === "cancelled" };
+    });
+  }
+
   async canProcessConversationMission(organizationId: string, missionId: string) {
     try {
       return await this.database.withOrganization(organizationId, async transaction => {
@@ -422,6 +447,7 @@ export class ConversationRuntimeRepository {
         .where(and(eq(missionApprovals.organizationId, organizationId), eq(missions.conversationId, conversation.id),
           eq(missionApprovals.status, "pending"))).limit(10);
       return { conversationId: conversation.id, title: conversation.title,
+        requestingMember: { id: record.actor.id, name: record.actor.displayName },
         project: project ? { id: project.id, name: project.name, context: project.context } : undefined,
         history: boundedHistory, execution, pendingApprovals: approvals.map(({ approval }) => publicApproval(approval)) };
     });
@@ -535,6 +561,10 @@ export class ConversationRuntimeRepository {
         || parent.requestedByMemberId !== input.memberId
         || input.expiresAt <= acceptedAt) throw new DelegatedMissionError();
 
+      if (typeof parent.context.hermesScopeId === "string") {
+        await requireCurrentMissionMemoryScope(transaction, { organizationId: input.organizationId,
+          missionId: parent.id, expectedScopeId: parent.context.hermesScopeId });
+      }
       const [conversation] = await transaction.select()
         .from(conversations).where(and(
           eq(conversations.organizationId, input.organizationId),
@@ -600,7 +630,11 @@ export class ConversationRuntimeRepository {
           eq(missions.organizationId, input.organizationId), eq(missions.conversationId, input.conversationId),
           sql`${missions.context}->>'type' like 'runner.%'`,
         )).limit(1);
-        if (conversation.kind !== "mission" || conversation.ownerMemberId !== input.memberId || previousExecution) {
+        const [sharedDraft] = await transaction.select({ id: conversations.id }).from(conversations)
+          .where(and(eq(conversations.id, input.conversationId), sql`exists (
+            select 1 from conversation_grants g where g.organization_id = ${input.organizationId}::uuid
+              and g.conversation_id = ${input.conversationId}::uuid)`)).limit(1);
+        if (conversation.kind !== "mission" || conversation.ownerMemberId !== input.memberId || previousExecution || sharedDraft) {
           const [thread] = await transaction.insert(conversations).values({
             organizationId: input.organizationId, ownerMemberId: input.memberId, projectId: input.projectId,
             parentConversationId: input.conversationId, kind: "mission", title: input.objective.slice(0, 200),
@@ -693,13 +727,16 @@ export class ConversationRuntimeRepository {
   }
 
   async setMissionRunning(organizationId: string, missionId: string, context: Record<string, unknown>) {
-    const rows = await this.database.withOrganization(organizationId, (transaction) =>
-      transaction.update(missions).set({ status: "running", context, updatedAt: new Date() }).where(and(
+    const rows = await this.database.withOrganization(organizationId, async transaction => {
+      if (typeof context.hermesScopeId === "string") {
+        await requireCurrentMissionMemoryScope(transaction, { organizationId, missionId, expectedScopeId: context.hermesScopeId });
+      }
+      return transaction.update(missions).set({ status: "running", context, updatedAt: new Date() }).where(and(
         eq(missions.organizationId, organizationId), eq(missions.id, missionId),
         // Failed deliveries can be retried by SQS; cancellation and completion are final.
         inArray(missions.status, ["queued", "running", "waiting_for_approval", "failed"]),
-      )).returning({ id: missions.id }),
-    );
+      )).returning({ id: missions.id });
+    });
     return rows.length > 0;
   }
 
@@ -723,6 +760,10 @@ export class ConversationRuntimeRepository {
     context: Record<string, unknown>;
   }) {
     return this.database.withOrganization(input.organizationId, async (transaction) => {
+      if (typeof input.context.hermesScopeId === "string") {
+        await requireCurrentMissionMemoryScope(transaction, { organizationId: input.organizationId,
+          missionId: input.missionId, expectedScopeId: input.context.hermesScopeId });
+      }
       const [completed] = await transaction
         .update(missions)
         .set({ status: "completed", context: input.context, updatedAt: new Date() })
@@ -821,10 +862,15 @@ export class ConversationRuntimeRepository {
     type: string;
     payload: Record<string, unknown>;
     occurredAt: Date;
+    expectedScopeId?: string;
   }) {
-    return this.database.withOrganization(input.organizationId, (transaction) =>
-      transaction.insert(missionEvents).values(input).returning(),
-    );
+    return this.database.withOrganization(input.organizationId, async transaction => {
+      const { expectedScopeId, ...event } = input;
+      if (expectedScopeId) await requireCurrentMissionMemoryScope(transaction, {
+        organizationId: input.organizationId, missionId: input.missionId, expectedScopeId,
+      });
+      return transaction.insert(missionEvents).values(event).returning();
+    });
   }
 
   listMissionEvents(organizationId: string, missionId: string) {
@@ -848,13 +894,15 @@ export class ConversationRuntimeRepository {
     reason: string,
     context: Record<string, unknown>,
   ) {
-    return this.database.withOrganization(organizationId, (transaction) =>
-      transaction
-        .update(missions)
+    return this.database.withOrganization(organizationId, async transaction => {
+      if (typeof context.hermesScopeId === "string") {
+        await requireCurrentMissionMemoryScope(transaction, { organizationId, missionId, expectedScopeId: context.hermesScopeId });
+      }
+      return transaction.update(missions)
         .set({ status: "failed", context: { ...context, failure: reason }, updatedAt: new Date() })
         .where(and(eq(missions.organizationId, organizationId), eq(missions.id, missionId),
-          inArray(missions.status, ["queued", "running", "waiting_for_approval", "failed"]))),
-    );
+          inArray(missions.status, ["queued", "running", "waiting_for_approval", "failed"])));
+    });
   }
 }
 

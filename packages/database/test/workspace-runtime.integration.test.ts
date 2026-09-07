@@ -22,11 +22,17 @@ test("workspace runtime isolates private threads and dispatches delegated work i
   const ownerId = randomUUID();
   const collaboratorId = randomUUID();
   const deviceId = randomUUID();
+  const progressDeviceId = randomUUID();
+  const completionDeviceId = randomUUID();
+  const approvalDeviceId = randomUUID();
   const projectId = randomUUID();
   const sourceConversationId = randomUUID();
   const ownerScope = { organizationId, externalSubject: "workspace-runtime-owner" };
   const collaboratorScope = { organizationId, externalSubject: "workspace-runtime-collaborator" };
   const runnerScope = { organizationId, deviceId, credentialHash: "workspace-runtime-device-credential" };
+  const progressRunnerScope = { organizationId, deviceId: progressDeviceId, credentialHash: "workspace-runtime-progress-credential" };
+  const completionRunnerScope = { organizationId, deviceId: completionDeviceId, credentialHash: "workspace-runtime-completion-credential" };
+  const approvalRunnerScope = { organizationId, deviceId: approvalDeviceId, credentialHash: "workspace-runtime-approval-credential" };
   const runnerOwner = randomUUID();
 
   const enqueue = (scope: typeof ownerScope, content: string) => runtime.enqueuePrivateMessage({
@@ -34,7 +40,7 @@ test("workspace runtime isolates private threads and dispatches delegated work i
     content,
     conversationId: sourceConversationId,
   });
-  const delegatedInput = (parentMissionId: string, memberId: string, requestId = randomUUID()) => ({
+  const delegatedInput = (parentMissionId: string, memberId: string, requestId = randomUUID(), targetDeviceId = deviceId) => ({
     organizationId,
     parentMissionId,
     conversationId: sourceConversationId,
@@ -44,7 +50,7 @@ test("workspace runtime isolates private threads and dispatches delegated work i
     requestId,
     expiresAt: new Date(Date.now() + 60_000),
     objective: "Implement the workspace task",
-    deviceId,
+    deviceId: targetDeviceId,
     repositoryId: "workspace-repository",
     projectId,
     adapter: "claude-development" as const,
@@ -62,15 +68,27 @@ test("workspace runtime isolates private threads and dispatches delegated work i
         ${JSON.stringify([
           { id: "workspace-repository", name: "Workspace repository", claudeDevelopment: true, claudeModels: ["opus"] },
           { id: "unassociated-repository", name: "Unassociated repository", claudeDevelopment: true, claudeModels: ["sonnet"] },
-        ])}::jsonb)`;
+        ])}::jsonb),
+      (${progressDeviceId}, ${organizationId}, ${ownerId}, 'Progress device', 'darwin',
+        ${JSON.stringify([{ id: "workspace-repository", name: "Workspace repository", claudeDevelopment: true, claudeModels: ["opus"] }])}::jsonb),
+      (${completionDeviceId}, ${organizationId}, ${ownerId}, 'Completion device', 'darwin',
+        ${JSON.stringify([{ id: "workspace-repository", name: "Workspace repository", claudeDevelopment: true, claudeModels: ["opus"] }])}::jsonb),
+      (${approvalDeviceId}, ${organizationId}, ${ownerId}, 'Approval device', 'darwin',
+        ${JSON.stringify([{ id: "workspace-repository", name: "Workspace repository", claudeDevelopment: true, claudeModels: ["opus"] }])}::jsonb)`;
     await admin`insert into device_credentials (organization_id, device_id, token_hash)
-      values (${organizationId}, ${deviceId}, ${runnerScope.credentialHash})`;
+      values (${organizationId}, ${deviceId}, ${runnerScope.credentialHash}),
+      (${organizationId}, ${progressDeviceId}, ${progressRunnerScope.credentialHash}),
+      (${organizationId}, ${completionDeviceId}, ${completionRunnerScope.credentialHash}),
+      (${organizationId}, ${approvalDeviceId}, ${approvalRunnerScope.credentialHash})`;
     await admin`insert into projects (id, organization_id, owner_member_id, name, context)
       values (${projectId}, ${organizationId}, ${ownerId}, 'Workspace project', '{}'::jsonb)`;
     await admin`insert into project_members (organization_id, project_id, member_id)
       values (${organizationId}, ${projectId}, ${collaboratorId})`;
     await admin`insert into project_repositories (organization_id, project_id, device_id, repository_id)
-      values (${organizationId}, ${projectId}, ${deviceId}, 'workspace-repository')`;
+      values (${organizationId}, ${projectId}, ${deviceId}, 'workspace-repository'),
+      (${organizationId}, ${projectId}, ${progressDeviceId}, 'workspace-repository'),
+      (${organizationId}, ${projectId}, ${completionDeviceId}, 'workspace-repository'),
+      (${organizationId}, ${projectId}, ${approvalDeviceId}, 'workspace-repository')`;
     await admin`insert into conversations (id, organization_id, owner_member_id, project_id, kind, title)
       values (${sourceConversationId}, ${organizationId}, ${ownerId}, ${projectId}, 'private', 'Private source')`;
 
@@ -89,14 +107,14 @@ test("workspace runtime isolates private threads and dispatches delegated work i
     assert.equal(ownerParent.mission.context.projectId, projectId);
     await runtime.setMissionRunning(organizationId, ownerParent.mission.id, ownerParent.mission.context);
     const ownerDispatchScope = await runtime.getHermesDispatchScope(organizationId, ownerParent.mission.id);
-    assert.deepEqual(ownerDispatchScope?.targets, [{
-      deviceId,
+    assert.deepEqual(ownerDispatchScope?.targets, [deviceId, progressDeviceId, completionDeviceId, approvalDeviceId].map((id) => ({
+      deviceId: id,
       repositoryId: "workspace-repository",
       projectId,
       projectName: "Workspace project",
       adapters: ["repository-check", "claude-development"],
       claudeModels: ["opus"],
-    }]);
+    })));
 
     await admin`insert into conversation_grants (organization_id, conversation_id, member_id)
       values (${organizationId}, ${sourceConversationId}, ${collaboratorId})`;
@@ -204,10 +222,77 @@ test("workspace runtime isolates private threads and dispatches delegated work i
     assert.equal(decision.status, "approved", "A collaborator can approve their mission on the project's authorized device.");
     const resumed = await runner.claim(runnerScope, runnerOwner, "d".repeat(64));
     assert.equal(resumed?.id, collaboratorDelegated.mission.id);
+    const progressParent = await enqueue(collaboratorScope, "Keep a private progress lease.");
+    await runtime.setMissionRunning(organizationId, progressParent.mission.id, progressParent.mission.context);
+    const progressDelegated = await runtime.enqueueDelegatedRunnerMission(
+      delegatedInput(progressParent.mission.id, collaboratorId, randomUUID(), progressDeviceId),
+    );
+    const progressLease = "p".repeat(64);
+    assert.equal((await runner.claim(progressRunnerScope, runnerOwner, progressLease))?.id, progressDelegated.mission.id);
+    const completionParent = await enqueue(collaboratorScope, "Keep a private completion lease.");
+    await runtime.setMissionRunning(organizationId, completionParent.mission.id, completionParent.mission.context);
+    const completionDelegated = await runtime.enqueueDelegatedRunnerMission(
+      delegatedInput(completionParent.mission.id, collaboratorId, randomUUID(), completionDeviceId),
+    );
+    const completionLease = "f".repeat(64);
+    assert.equal((await runner.claim(completionRunnerScope, runnerOwner, completionLease))?.id, completionDelegated.mission.id);
+    const approvalParent = await enqueue(collaboratorScope, "Keep a private approval lease.");
+    await runtime.setMissionRunning(organizationId, approvalParent.mission.id, approvalParent.mission.context);
+    const approvalDelegated = await runtime.enqueueDelegatedRunnerMission(
+      delegatedInput(approvalParent.mission.id, collaboratorId, randomUUID(), approvalDeviceId),
+    );
+    const approvalLease = "a".repeat(64);
+    assert.equal((await runner.claim(approvalRunnerScope, runnerOwner, approvalLease))?.id, approvalDelegated.mission.id);
     await admin`delete from project_members where organization_id = ${organizationId} and project_id = ${projectId} and member_id = ${collaboratorId}`;
     assert.equal(await runtime.canProcessConversationMission(organizationId, collaboratorParent.mission.id), false);
     await assert.rejects(runner.renew(runnerScope, { missionId: collaboratorDelegated.mission.id,
       owner: runnerOwner, tokenHash: "d".repeat(64) }), /withdrawn/);
+    const executionSnapshot = { version: 1 as const, provider: "claude" as const, revision: 1,
+      rootThreadId: "workspace-private-thread", updatedAt: new Date().toISOString(), omittedItems: 0, items: [] };
+    await assert.rejects(runner.execution(runnerScope, {
+      missionId: collaboratorDelegated.mission.id, owner: runnerOwner, tokenHash: "d".repeat(64), snapshot: executionSnapshot,
+    }), /withdrawn/);
+    await assert.rejects(runner.report(progressRunnerScope, {
+      missionId: progressDelegated.mission.id, owner: runnerOwner, tokenHash: progressLease,
+      eventId: randomUUID(), kind: "progress", content: "This progress must be fenced.", snapshot: executionSnapshot,
+    }), /withdrawn/);
+    await assert.rejects(runner.report(completionRunnerScope, {
+      missionId: completionDelegated.mission.id, owner: runnerOwner, tokenHash: completionLease,
+      eventId: randomUUID(), kind: "completed", content: "This result must be fenced.",
+    }), /withdrawn/);
+    await assert.rejects(approvals.requestFromRunner(approvalRunnerScope, {
+      missionId: approvalDelegated.mission.id, owner: runnerOwner, tokenHash: approvalLease, requestId: randomUUID(),
+      action: { category: "pull_request.merge", target: "project repository", argumentsDigest: "b".repeat(64),
+        summary: "Merge after access revocation", expectedEffect: "Update the repository default branch." },
+      reason: "This request must not be persisted after revocation.", evidence: { command: "gh pr merge 1 --squash" },
+      resume: { adapter: "claude", sessionId: "revoked-approval-session" },
+    }), /withdrawn/);
+    assert.equal((await runner.inspect(runnerScope, collaboratorDelegated.mission.id))?.status, "cancelled");
+    assert.equal((await runner.inspect(progressRunnerScope, progressDelegated.mission.id))?.status, "cancelled");
+    assert.equal((await runner.inspect(completionRunnerScope, completionDelegated.mission.id))?.status, "cancelled");
+    assert.equal((await runner.inspect(approvalRunnerScope, approvalDelegated.mission.id))?.status, "cancelled");
+    const [cancelledLeases] = await admin<{ count: string }[]>`
+      select count(*) from missions where organization_id = ${organizationId}
+        and id in (${collaboratorDelegated.mission.id}, ${progressDelegated.mission.id}, ${completionDelegated.mission.id}, ${approvalDelegated.mission.id})
+        and status = 'cancelled' and lease_owner is null and lease_token_hash is null and lease_expires_at is null
+    `;
+    assert.equal(cancelledLeases?.count, "4");
+    const [fencedEvents] = await admin<{ count: string }[]>`
+      select count(*) from mission_events where organization_id = ${organizationId}
+        and mission_id in (${collaboratorDelegated.mission.id}, ${progressDelegated.mission.id}, ${completionDelegated.mission.id})
+        and type in ('runner.execution', 'runner.progress', 'run.completed')
+    `;
+    assert.equal(fencedEvents?.count, "0");
+    const [fencedMessages] = await admin<{ count: string }[]>`
+      select count(*) from messages where organization_id = ${organizationId}
+        and content in ('This progress must be fenced.', 'This result must be fenced.')
+    `;
+    assert.equal(fencedMessages?.count, "0");
+    const [fencedApprovals] = await admin<{ count: string }[]>`
+      select count(*) from mission_approvals where organization_id = ${organizationId}
+        and mission_id = ${approvalDelegated.mission.id}
+    `;
+    assert.equal(fencedApprovals?.count, "0");
     await admin`update missions set lease_expires_at = now() - interval '1 second' where id = ${collaboratorDelegated.mission.id}`;
     assert.equal(await runner.claim(runnerScope, runnerOwner, "revoked-lease"), null);
     assert.equal((await runtime.getMission(organizationId, collaboratorDelegated.mission.id))?.mission.status, "cancelled");

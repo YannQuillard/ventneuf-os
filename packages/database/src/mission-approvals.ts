@@ -1,4 +1,4 @@
-import { hasWorkspaceMissionAuthority } from "./workspace-access.js";
+import { hasWorkspaceMissionAuthority, requireCurrentMissionMemoryScope } from "./workspace-access.js";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { and, desc, eq, isNull } from "drizzle-orm";
@@ -128,6 +128,34 @@ export class MissionApprovalPolicyError extends MissionApprovalError {}
 export class MissionApprovalRepository {
   constructor(private readonly database: Database) {}
 
+  private async cancelWithdrawnWorkspaceMission(
+    transaction: DatabaseTransaction,
+    mission: MissionRow,
+    now: Date,
+  ) {
+    const [cancelled] = await transaction.update(missions).set({
+      status: "cancelled",
+      leaseOwner: null,
+      leaseTokenHash: null,
+      leaseExpiresAt: null,
+      context: { ...mission.context, cancellationReason: "Project access or repository association was withdrawn." },
+      updatedAt: now,
+    }).where(and(
+      eq(missions.organizationId, mission.organizationId),
+      eq(missions.id, mission.id),
+      eq(missions.status, "running"),
+    )).returning({ id: missions.id });
+    if (cancelled) {
+      await transaction.insert(missionEvents).values({
+        organizationId: mission.organizationId,
+        missionId: mission.id,
+        type: "run.cancelled",
+        payload: { reason: "project_access_withdrawn" },
+        occurredAt: now,
+      });
+    }
+  }
+
   private async authenticateDevice(transaction: DatabaseTransaction, input: {
     organizationId: string;
     deviceId: string;
@@ -147,11 +175,11 @@ export class MissionApprovalRepository {
     if (!device) throw new RunnerAccessError("The device credential is unavailable.");
   }
 
-  requestFromRunner(
+  async requestFromRunner(
     scope: { organizationId: string; deviceId: string; credentialHash: string },
     input: RunnerApprovalRequest,
   ) {
-    return this.database.withOrganization(scope.organizationId, async (transaction) => {
+    const result = await this.database.withOrganization(scope.organizationId, async (transaction) => {
       await this.authenticateDevice(transaction, scope);
       const [mission] = await transaction.select().from(missions).where(and(
         eq(missions.organizationId, scope.organizationId),
@@ -160,6 +188,11 @@ export class MissionApprovalRepository {
       )).for("update").limit(1);
       if (!mission) throw new MissionApprovalUnavailableError("The mission is unavailable.");
 
+      const now = new Date();
+      if (!await hasWorkspaceMissionAuthority(transaction, mission)) {
+        await this.cancelWithdrawnWorkspaceMission(transaction, mission, now);
+        return undefined;
+      }
       const [existing] = await transaction.select().from(missionApprovals).where(and(
         eq(missionApprovals.organizationId, scope.organizationId),
         eq(missionApprovals.missionId, mission.id),
@@ -177,8 +210,6 @@ export class MissionApprovalRepository {
             : {}),
         };
       }
-
-      const now = new Date();
       if (mission.status !== "running" || mission.leaseOwner !== input.owner
         || mission.leaseTokenHash !== input.tokenHash
         || !mission.leaseExpiresAt || mission.leaseExpiresAt <= now) {
@@ -202,10 +233,12 @@ export class MissionApprovalRepository {
           id: reviewMissionId,
           organizationId: scope.organizationId,
           conversationId: mission.conversationId,
+          projectId: mission.projectId,
           requestedByMemberId: mission.requestedByMemberId,
           goal: approvalReviewGoal(approvalId, input.action, input.reason, input.evidence),
           context: {
             type: "hermes.approval",
+            ...(mission.context.workspaceVersion === 1 ? { workspaceVersion: 1, projectId: mission.projectId } : {}),
             approvalId,
             childMissionId: mission.id,
             timing: { acceptedAt: now.toISOString(), queuedAt: now.toISOString() },
@@ -277,6 +310,8 @@ export class MissionApprovalRepository {
           : {}),
       };
     });
+    if (!result) throw new MissionApprovalUnavailableError("Project access or repository association was withdrawn.");
+    return result;
   }
 
   getHermesDecisionScope(organizationId: string, reviewMissionId: string) {
@@ -335,6 +370,15 @@ export class MissionApprovalRepository {
       )).limit(1);
       if (!candidate || candidate.reviewMissionId !== input.reviewMissionId) {
         throw new MissionApprovalUnavailableError("The approval review scope is unavailable.");
+      }
+      const [review] = await transaction.select().from(missions).where(and(
+        eq(missions.organizationId, input.organizationId), eq(missions.id, input.reviewMissionId),
+      )).limit(1);
+      if (typeof review?.context.hermesScopeId === "string") {
+        await requireCurrentMissionMemoryScope(transaction, { organizationId: input.organizationId,
+          missionId: input.reviewMissionId, expectedScopeId: review.context.hermesScopeId });
+      } else if (review?.context.workspaceVersion === 1) {
+        throw new MissionApprovalUnavailableError("The approval review memory scope is unavailable.");
       }
       const [mission] = await transaction.select().from(missions).where(and(
         eq(missions.organizationId, input.organizationId),
