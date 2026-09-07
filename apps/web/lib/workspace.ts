@@ -59,6 +59,7 @@ export interface MemoryEntry {
   summary?: string;
   path?: string;
   updatedAt: string;
+  content?: string;
 }
 
 export async function workspaceRequest<T>(path: string, init?: RequestInit): Promise<T> {

@@ -279,7 +279,9 @@ export function HermesConversation({ conversationId, title = "Hermes", subtitle 
   const stopMission = useCallback(async (missionId: string) => {
     setIsStopping(true);
     try {
-      const response = await fetch(`/api/hermes/missions/${encodeURIComponent(missionId)}/cancel`, {
+      const response = await fetch(conversationId
+        ? `/api/workspace/conversations/${encodeURIComponent(conversationId)}/missions/${encodeURIComponent(missionId)}/cancel`
+        : `/api/hermes/missions/${encodeURIComponent(missionId)}/cancel`, {
         method: "POST",
       });
       if (!response.ok) throw new Error("Hermes could not stop this run.");
@@ -291,7 +293,7 @@ export function HermesConversation({ conversationId, title = "Hermes", subtitle 
     } finally {
       setIsStopping(false);
     }
-  }, [mission]);
+  }, [conversationId, mission]);
 
   const quote = useCallback((value: string) => {
     setContent(quoted(value));
@@ -409,6 +411,7 @@ export function HermesConversation({ conversationId, title = "Hermes", subtitle 
                           : () => resend(retryPrompt, entry?.id)}
                         onDismiss={entry?.hasFailed ? () => dismiss(entry.id) : undefined}
                         onInspect={() => inspect(message.id)}
+                        memoryHref={conversationId ? `/memory?conversationId=${encodeURIComponent(conversationId)}` : "/memory"}
                       />
                     </Fragment>
                   );

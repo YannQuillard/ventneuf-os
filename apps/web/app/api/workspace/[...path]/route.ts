@@ -9,6 +9,7 @@ const allowedRoutes: Array<{ method: Method; pattern: RegExp }> = [
   { method: "GET", pattern: /^members$/ },
   { method: "PATCH", pattern: /^me$/ },
   { method: "GET", pattern: /^memory$/ },
+  { method: "GET", pattern: /^memory\/[^/]+$/ },
   { method: "GET", pattern: /^projects\/[^/]+$/ },
   { method: "POST", pattern: /^projects$/ },
   { method: "PATCH", pattern: /^projects\/[^/]+$/ },
@@ -22,6 +23,7 @@ const allowedRoutes: Array<{ method: Method; pattern: RegExp }> = [
   { method: "GET", pattern: /^conversations\/[^/]+\/messages$/ },
   { method: "POST", pattern: /^conversations\/[^/]+\/messages$/ },
   { method: "GET", pattern: /^conversations\/[^/]+\/events$/ },
+  { method: "POST", pattern: /^conversations\/[^/]+\/missions\/[^/]+\/cancel$/ },
 ];
 
 function requestedPath(segments: string[] | undefined): string | null {
@@ -39,7 +41,10 @@ async function forward(request: NextRequest, context: { params: Promise<{ path?:
   if (method !== "GET" && !isSameOriginMutation(request)) {
     return NextResponse.json({ error: "invalid_origin" }, { status: 403 });
   }
-  const upstreamPath = `/api/workspace${path ? `/${path}` : ""}`;
+  const scopeConversationId = method === "GET" && /^memory(?:\/|$)/.test(path)
+    ? request.nextUrl.searchParams.get("conversationId")
+    : null;
+  const upstreamPath = `/api/workspace${path ? `/${path}` : ""}${scopeConversationId ? `?conversationId=${encodeURIComponent(scopeConversationId)}` : ""}`;
   if (method === "GET" && /\/events$/.test(path)) return streamControlPlane(upstreamPath);
   return proxyControlPlane(upstreamPath, method, method === "GET" ? undefined : request);
 }

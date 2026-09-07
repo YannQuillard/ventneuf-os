@@ -11,7 +11,9 @@ import {
 import { useStreamingText } from "@astryxdesign/core/hooks";
 import { Icon } from "@astryxdesign/core/Icon";
 import { IconButton } from "@astryxdesign/core/IconButton";
+import { Link } from "@astryxdesign/core/Link";
 import { Markdown } from "@astryxdesign/core/Markdown";
+import { Text } from "@astryxdesign/core/Text";
 import { Timestamp } from "@astryxdesign/core/Timestamp";
 import { ArrowPathIcon, ArrowUturnLeftIcon, PencilSquareIcon } from "@heroicons/react/24/outline";
 import { useEffect } from "react";
@@ -27,6 +29,7 @@ interface ConversationMessageProps {
   onRetry?: () => void;
   onDismiss?: () => void;
   onInspect?: () => void;
+  memoryHref?: string;
 }
 
 function timing(message: Message): MissionTiming | undefined {
@@ -125,6 +128,7 @@ export function ConversationMessage({
   onRetry,
   onDismiss,
   onInspect,
+  memoryHref = "/memory",
 }: ConversationMessageProps) {
   if (message.role === "system" || message.role === "tool") {
     return (
@@ -162,6 +166,9 @@ export function ConversationMessage({
   }
 
   const duration = formatDuration(timing(message)?.totalMs);
+  const memoryChanges = Array.isArray(message.metadata?.memoryChanges)
+    ? message.metadata.memoryChanges.filter((entry): entry is { title: string } => Boolean(entry && typeof entry === "object" && typeof (entry as { title?: unknown }).title === "string"))
+    : [];
 
   return (
     <AssistantMessage metadata={(
@@ -208,6 +215,9 @@ export function ConversationMessage({
         ) : (
           <Markdown contentWidth={760} headingLevelStart={3}>{message.content}</Markdown>
         )}
+        {memoryChanges.length ? <Text type="supporting"><Link href={memoryHref} isStandalone>
+          {`Memory updated: ${memoryChanges.map(({ title }) => title).join(", ")}`}
+        </Link></Text> : null}
     </AssistantMessage>
   );
 }
