@@ -6,3 +6,5 @@ export * from "./mission-approvals.js";
 export * from "./runtime.js";
 export * from "./schema.js";
 export * from "./runner-missions.js";
+export * from "./workspace.js";
+export * from "./workspace-access.js";

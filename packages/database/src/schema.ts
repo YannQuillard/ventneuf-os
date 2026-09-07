@@ -1,4 +1,5 @@
 import {
+  boolean,
   check,
   foreignKey,
   index,
@@ -17,6 +18,7 @@ import type { ClaudeModel } from "@ventneuf/domain";
 
 export const memberRole = pgEnum("member_role", ["owner", "member"]);
 export const channelKind = pgEnum("channel_kind", ["project", "shared", "private"]);
+export const workspaceConversationKind = pgEnum("workspace_conversation_kind", ["private", "topic", "mission"]);
 export const messageRole = pgEnum("message_role", ["user", "assistant", "system", "tool"]);
 export const missionStatus = pgEnum("mission_status", [
   "queued",
@@ -146,6 +148,78 @@ export const deviceCredentials = pgTable(
   ],
 );
 
+export const projects = pgTable(
+  "projects",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    ownerMemberId: uuid("owner_member_id").notNull(),
+    name: text("name").notNull(),
+    context: jsonb("context").$type<Record<string, unknown>>().default({}).notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("projects_organization_id_unique").on(table.organizationId, table.id),
+    foreignKey({
+      columns: [table.organizationId, table.ownerMemberId],
+      foreignColumns: [members.organizationId, members.id],
+      name: "projects_organization_owner_fk",
+    }),
+    index("projects_owner_created_idx").on(table.organizationId, table.ownerMemberId, table.createdAt),
+  ],
+);
+
+export const projectMembers = pgTable(
+  "project_members",
+  {
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    projectId: uuid("project_id").notNull(),
+    memberId: uuid("member_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.projectId, table.memberId] }),
+    foreignKey({
+      columns: [table.organizationId, table.projectId],
+      foreignColumns: [projects.organizationId, projects.id],
+      name: "project_members_organization_project_fk",
+    }),
+    foreignKey({
+      columns: [table.organizationId, table.memberId],
+      foreignColumns: [members.organizationId, members.id],
+      name: "project_members_organization_member_fk",
+    }),
+    index("project_members_member_idx").on(table.organizationId, table.memberId, table.projectId),
+  ],
+);
+
+export const projectRepositories = pgTable(
+  "project_repositories",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    projectId: uuid("project_id").notNull(),
+    deviceId: uuid("device_id").notNull(),
+    repositoryId: text("repository_id").notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("project_repositories_project_device_repository_unique")
+      .on(table.projectId, table.deviceId, table.repositoryId),
+    foreignKey({
+      columns: [table.organizationId, table.projectId],
+      foreignColumns: [projects.organizationId, projects.id],
+      name: "project_repositories_organization_project_fk",
+    }),
+    foreignKey({
+      columns: [table.organizationId, table.deviceId],
+      foreignColumns: [devices.organizationId, devices.id],
+      name: "project_repositories_organization_device_fk",
+    }),
+    index("project_repositories_project_idx").on(table.organizationId, table.projectId),
+  ],
+);
+
 export const channels = pgTable(
   "channels",
   {
@@ -192,6 +266,11 @@ export const conversations = pgTable(
     organizationId: uuid("organization_id").notNull().references(() => organizations.id),
     channelId: uuid("channel_id"),
     ownerMemberId: uuid("owner_member_id"),
+    projectId: uuid("project_id"),
+    parentConversationId: uuid("parent_conversation_id"),
+    missionId: uuid("mission_id"),
+    kind: workspaceConversationKind("kind").default("private").notNull(),
+    isPrimary: boolean("is_primary").default(false).notNull(),
     hermesContextId: text("hermes_context_id"),
     title: text("title"),
     ...timestamps,
@@ -212,8 +291,49 @@ export const conversations = pgTable(
       foreignColumns: [members.organizationId, members.id],
       name: "conversations_organization_owner_fk",
     }),
+    foreignKey({
+      columns: [table.organizationId, table.projectId],
+      foreignColumns: [projects.organizationId, projects.id],
+      name: "conversations_organization_project_fk",
+    }),
+    foreignKey({
+      columns: [table.organizationId, table.parentConversationId],
+      foreignColumns: [table.organizationId, table.id],
+      name: "conversations_organization_parent_fk",
+    }),
     index("conversations_channel_idx").on(table.channelId),
     index("conversations_owner_idx").on(table.ownerMemberId),
+    index("conversations_project_idx").on(table.organizationId, table.projectId, table.createdAt),
+    uniqueIndex("conversations_primary_owner_unique")
+      .on(table.organizationId, table.ownerMemberId)
+      .where(sql`${table.isPrimary} and ${table.ownerMemberId} is not null`),
+    uniqueIndex("conversations_mission_unique")
+      .on(table.organizationId, table.missionId)
+      .where(sql`${table.missionId} is not null`),
+  ],
+);
+
+export const conversationGrants = pgTable(
+  "conversation_grants",
+  {
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    conversationId: uuid("conversation_id").notNull(),
+    memberId: uuid("member_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.conversationId, table.memberId] }),
+    foreignKey({
+      columns: [table.organizationId, table.conversationId],
+      foreignColumns: [conversations.organizationId, conversations.id],
+      name: "conversation_grants_organization_conversation_fk",
+    }),
+    foreignKey({
+      columns: [table.organizationId, table.memberId],
+      foreignColumns: [members.organizationId, members.id],
+      name: "conversation_grants_organization_member_fk",
+    }),
+    index("conversation_grants_member_idx").on(table.organizationId, table.memberId, table.conversationId),
   ],
 );
 
@@ -250,6 +370,7 @@ export const missions = pgTable(
     id: uuid("id").defaultRandom().primaryKey(),
     organizationId: uuid("organization_id").notNull().references(() => organizations.id),
     conversationId: uuid("conversation_id").notNull(),
+    projectId: uuid("project_id"),
     requestedByMemberId: uuid("requested_by_member_id").notNull(),
     assignedDeviceId: uuid("assigned_device_id"),
     leaseOwner: uuid("lease_owner"),
@@ -269,6 +390,11 @@ export const missions = pgTable(
       name: "missions_organization_conversation_fk",
     }),
     foreignKey({
+      columns: [table.organizationId, table.projectId],
+      foreignColumns: [projects.organizationId, projects.id],
+      name: "missions_organization_project_fk",
+    }),
+    foreignKey({
       columns: [table.organizationId, table.requestedByMemberId],
       foreignColumns: [members.organizationId, members.id],
       name: "missions_organization_requester_fk",
@@ -279,6 +405,7 @@ export const missions = pgTable(
       name: "missions_organization_device_fk",
     }),
     index("missions_status_idx").on(table.organizationId, table.status),
+    index("missions_project_created_idx").on(table.organizationId, table.projectId, table.createdAt),
     index("missions_device_claim_idx").on(table.organizationId, table.assignedDeviceId, table.status, table.createdAt),
     check("missions_attempts_check", sql`${table.attempts} >= 0`),
   ],
