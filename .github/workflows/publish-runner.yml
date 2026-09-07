@@ -1,0 +1,53 @@
+name: Publish runner
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - apps/runner/**
+      - packages/domain/**
+      - package.json
+      - package-lock.json
+      - .github/workflows/publish-runner.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-runner
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+      - run: npm run typecheck --workspace @ventneuf/runner
+      - run: npm run test --workspace @ventneuf/runner
+      - run: npm run build --workspace @ventneuf/runner
+
+      - name: Package runner
+        run: |
+          printf '{"version":"%s"}\n' "$GITHUB_SHA" > apps/runner/dist/release.json
+          tar -czf ventneuf-runner-darwin.tar.gz -C apps/runner/dist .
+          sha256sum ventneuf-runner-darwin.tar.gz > ventneuf-runner-darwin.tar.gz.sha256
+
+      - name: Publish immutable runner release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "runner-${GITHUB_SHA}" \
+            ventneuf-runner-darwin.tar.gz \
+            ventneuf-runner-darwin.tar.gz.sha256 \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Runner ${GITHUB_SHA}" \
+            --notes "Automated macOS runner release for commit ${GITHUB_SHA}."

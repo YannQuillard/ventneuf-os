@@ -11,6 +11,19 @@ import { CodexDevelopmentAdapter } from "./codex-development.js";
 import { ClaudeDevelopmentAdapter } from "./claude-development.js";
 import { OrcaReviewAdapter, RunnerAdapters } from "./orca-review.js";
 import { LocalRunnerBridge } from "./local-bridge.js";
+import { RunnerUpdater } from "./runner-update.js";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execute = promisify(execFile);
+
+async function sourceVersion() {
+  try {
+    if ((await execute("/usr/bin/git", ["status", "--porcelain"], { cwd: process.cwd() })).stdout.trim()) return undefined;
+    const version = (await execute("/usr/bin/git", ["rev-parse", "HEAD"], { cwd: process.cwd() })).stdout.trim();
+    return /^[0-9a-f]{40}$/.test(version) ? version : undefined;
+  } catch { return undefined; }
+}
 
 if (process.platform !== "darwin") throw new Error("The first runner release supports macOS only.");
 
@@ -33,6 +46,7 @@ if (command === "install") {
     orcaPath: process.env.VENTNEUF_ORCA_PATH,
     codexPath: process.env.VENTNEUF_CODEX_PATH,
     claudePath: process.env.VENTNEUF_CLAUDE_PATH,
+    version: await sourceVersion(),
   });
   console.info(`Installed ventneuf.os runner at ${paths.supportDirectory}`);
 } else if (command === "uninstall") {
@@ -60,6 +74,7 @@ if (command === "install") {
     deviceName: hostname(),
     allowedOrigins,
     repositoriesFile,
+    updater: new RunnerUpdater(dirname(fileURLToPath(import.meta.url))),
   });
   await bridge.start(port);
   const review = process.env.VENTNEUF_ORCA_PATH && process.env.VENTNEUF_CODEX_PATH

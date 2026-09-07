@@ -114,6 +114,8 @@ VENTNEUF_CONTROL_PLANE_URL=https://control-plane.example.com npm run install-ser
 
 The installer copies the compiled runner into the current user's Application Support directory and registers a `launchd` agent that starts at login and restarts after failure. The runner binds only to `127.0.0.1`, accepts configured web origins, stores its device credential in the macOS Keychain, and makes outbound-only requests to the control plane. Configure `VENTNEUF_WEB_ORIGINS` as a comma-separated allowlist when the web application is not running on `http://localhost:3000`.
 
+Runner changes merged to `main` publish an immutable GitHub release after runner typechecking and tests pass. Enrolled runners check that public release channel from the **Devices** page. When an update is available, **Update runner** downloads the macOS bundle, verifies its SHA-256 checksum, swaps the installation atomically, and lets `launchd` restart it. The previous bundle remains available until the replacement opens its local bridge successfully. Device credentials, repository configuration, and agent executable settings stay outside the replaced bundle. Each Mac needs the manual service installation once; subsequent runner releases can be installed from the web interface.
+
 ### Read-only runner missions
 
 Apply migration `0004_runner_missions.sql` before deploying the updated control plane, then rebuild and reinstall the runner service. Store local repository registrations outside the installation directory in `~/.config/ventneuf.os/repositories.json`, or set `VENTNEUF_REPOSITORIES_FILE` to an absolute configuration-file path when starting or installing the runner:
