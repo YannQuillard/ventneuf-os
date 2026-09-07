@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - apps/control-plane/**
+      - packages/database/**
       - packages/domain/**
       - package.json
       - package-lock.json
