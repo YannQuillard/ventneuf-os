@@ -23,12 +23,13 @@ import { Spinner } from "@astryxdesign/core/Spinner";
 import { Heading, Text } from "@astryxdesign/core/Text";
 import { Timestamp } from "@astryxdesign/core/Timestamp";
 import { Fragment, useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
-import { formatDuration, type Message, type MissionEvent, type MissionState, type MissionTiming } from "../lib/conversations";
+import { formatDuration, type Message, type MissionApproval, type MissionEvent, type MissionState, type MissionTiming } from "../lib/conversations";
 import { missionActivities } from "../lib/mission-activity";
 import { ConversationMessage } from "./conversation-message";
 import { MessageDetailsPanel } from "./message-details";
 import { AgentExecutionPanel } from "./agent-execution";
 import type { AgentExecution } from "../lib/agent-execution";
+import { MissionApprovalRequest } from "./_components/mission-approval";
 
 const chatColumn: CSSProperties = { flex: 1, minWidth: 0, height: "100%" };
 
@@ -83,7 +84,14 @@ function lastAssistantRetry(messages: Message[]) {
   return undefined;
 }
 
-export function HermesConversation() {
+export function HermesConversation({ conversationId, title = "Hermes", subtitle = "Private · personal knowledge", headerActions, onAccessRevoked, showSuggestions = true }: {
+  conversationId?: string;
+  title?: string;
+  subtitle?: string;
+  headerActions?: React.ReactNode;
+  onAccessRevoked?: () => void;
+  showSuggestions?: boolean;
+}) {
   const { isMobile, openNavigation } = useWorkspaceNavigation();
   const [messages, setMessages] = useState<Message[]>([]);
   const [pending, setPending] = useState<PendingMessage[]>([]);
@@ -93,6 +101,7 @@ export function HermesConversation() {
   const [revealingId, setRevealingId] = useState<string>();
   const [mission, setMission] = useState<MissionState | null>(null);
   const [missionEvents, setMissionEvents] = useState<MissionEvent[]>([]);
+  const [approvals, setApprovals] = useState<MissionApproval[]>([]);
   const [isAgentOpen, setIsAgentOpen] = useState(false);
   const isCompact = useMediaQuery("(max-width: 1100px)");
   const [agentExecution, setAgentExecution] = useState<AgentExecution | null>(null);
@@ -108,14 +117,39 @@ export function HermesConversation() {
   const activities = missionActivities(missionEvents);
   const visibleActivities = activities.slice(-6);
 
+  const messageEndpoint = conversationId
+    ? `/api/workspace/conversations/${encodeURIComponent(conversationId)}/messages`
+    : "/api/hermes/messages";
+  const eventEndpoint = conversationId
+    ? `/api/workspace/conversations/${encodeURIComponent(conversationId)}/events`
+    : "/api/hermes/events";
+
+  const revokeAccess = useCallback(() => {
+    acceptedMessages.current = [];
+    setMessages([]);
+    setPending([]);
+    setMission(null);
+    setMissionEvents([]);
+    setApprovals([]);
+    setAgentExecution(null);
+    setAwaitingReply(false);
+    setError("Your access to this conversation has changed.");
+    onAccessRevoked?.();
+  }, [onAccessRevoked]);
+
   const refresh = useCallback(async () => {
-    const response = await fetch("/api/hermes/messages", { cache: "no-store" });
+    const response = await fetch(messageEndpoint, { cache: "no-store" });
+    if (conversationId && (response.status === 403 || response.status === 404)) {
+      revokeAccess();
+      return;
+    }
     if (!response.ok) throw new Error("Unable to load the conversation.");
     const payload = await response.json() as {
       messages: Message[];
       mission: MissionState | null;
       events: MissionEvent[];
       agentExecution?: AgentExecution | null;
+      approvals?: MissionApproval[];
     };
     const knownIds = new Set(payload.messages.map(({ id }) => id));
     acceptedMessages.current = acceptedMessages.current.filter(({ id }) => !knownIds.has(id));
@@ -125,6 +159,7 @@ export function HermesConversation() {
     setAgentExecution(payload.agentExecution ?? null);
     setMission(payload.mission ?? null);
     setMissionEvents(payload.events ?? []);
+    setApprovals(payload.approvals ?? []);
     setIsLoaded(true);
     if (payload.mission) {
       setAwaitingReply(payload.mission.status === "queued" || payload.mission.status === "running");
@@ -142,7 +177,7 @@ export function HermesConversation() {
       setRevealingId(lastMessage.id);
       latestUserMessageAt.current = undefined;
     }
-  }, []);
+  }, [conversationId, messageEndpoint, revokeAccess]);
 
   useEffect(() => {
     let stopped = false;
@@ -164,23 +199,26 @@ export function HermesConversation() {
 
   useEffect(() => {
     if (!awaitingReply && !executionActive) return;
-    const source = new EventSource("/api/hermes/events");
+    const source = new EventSource(eventEndpoint);
     source.addEventListener("snapshot", (raw) => {
       const payload = JSON.parse((raw as MessageEvent<string>).data) as {
         mission: MissionState | null;
         events: MissionEvent[];
       agentExecution?: AgentExecution | null;
+      approvals?: MissionApproval[];
       };
       setAgentExecution(payload.agentExecution ?? null);
       setMission(payload.mission);
       setMissionEvents(payload.events);
+      setApprovals(payload.approvals ?? []);
       if (payload.mission && !["queued", "running", "waiting_for_approval"].includes(payload.mission.status)) {
         setAwaitingReply(false);
         void refresh();
       }
     });
+    source.addEventListener("access_revoked", revokeAccess);
     return () => source.close();
-  }, [awaitingReply, executionActive, refresh]);
+  }, [awaitingReply, eventEndpoint, executionActive, refresh, revokeAccess]);
 
   useEffect(() => {
     if (!awaitingReply) return;
@@ -199,7 +237,7 @@ export function HermesConversation() {
     ]);
     setError(undefined);
     try {
-      const response = await fetch("/api/hermes/messages", {
+      const response = await fetch(messageEndpoint, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ content: message }),
@@ -227,7 +265,7 @@ export function HermesConversation() {
         ? { ...entry, hasFailed: true }
         : entry));
     }
-  }, []);
+  }, [messageEndpoint]);
 
   const resend = useCallback((prompt: string, pendingId?: string) => {
     if (pendingId) setPending((current) => current.filter(({ id }) => id !== pendingId));
@@ -297,11 +335,11 @@ export function HermesConversation() {
   return (
     <>
       <Layout height="fill" header={
-        <PageHeader title="Hermes" subtitle="Private · personal knowledge" icon={ChatBubbleLeftRightIcon}
+        <PageHeader title={title} subtitle={subtitle} icon={ChatBubbleLeftRightIcon}
           onOpenNavigation={isMobile ? openNavigation : undefined}
-          actions={agentExecution ? <Button
+          actions={<HStack gap={2}>{headerActions}{agentExecution ? <Button
             label={isMobile ? "Mission" : `Mission · ${missionStatusPresentation[agentExecution.status].label}`}
-            variant="ghost" size="sm" clickAction={() => setIsAgentOpen(true)} /> : undefined} />
+            variant="ghost" size="sm" clickAction={() => setIsAgentOpen(true)} /> : null}</HStack>} />
       } content={<LayoutContent padding={0} isScrollable={false}>
       <HStack height="100%">
         <VStack style={chatColumn}>
@@ -311,9 +349,11 @@ export function HermesConversation() {
               <VStack gap={6} hAlign="center" width="100%" maxWidth={560} padding={4}>
                 <EmptyState
                   title="Ask Hermes anything"
-                  description="This conversation is private to you. Send a message to get started."
+                  description={conversationId
+                    ? "Send a message to get started. Access follows this conversation's sharing settings."
+                    : "This conversation is private to you. Send a message to get started."}
                 />
-                <Grid columns={{ minWidth: 200, max: 2 }} gap={3} width="100%">
+                {showSuggestions ? <Grid columns={{ minWidth: 200, max: 2 }} gap={3} width="100%">
                   {suggestions.map((suggestion) => (
                     <ClickableCard
                       label={suggestion.heading}
@@ -328,13 +368,20 @@ export function HermesConversation() {
                       </VStack>
                     </ClickableCard>
                   ))}
-                </Grid>
+                </Grid> : null}
               </VStack>
             ) : (
               <Spinner aria-label="Loading the conversation" />
             )}
           >
             {timeline.length > 0 || awaitingReply ? (
+              <>
+              {approvals.filter((approval) => approval.missionId === (agentExecution?.missionId ?? mission?.id)).map((approval) => (
+                <VStack key={approval.id} padding={4} paddingBlockEnd={0}>
+                  <MissionApprovalRequest approval={approval} onDecided={refresh}
+                    onAskHermes={() => void submit(`Please explain approval request ${approval.id}, including why it is needed, its exact target, effect, and safer alternatives.`)} />
+                </VStack>
+              ))}
               <ChatMessageList isStreaming={awaitingReply || revealingId !== undefined}>
                 {timeline.map((message, index) => {
                   const entry = pendingById.get(message.id);
@@ -378,13 +425,13 @@ export function HermesConversation() {
                           ? Math.max(0, now - new Date(mission.timing.acceptedAt).getTime())
                           : undefined)}
                       </span>
-                      <Button
+                      {mission?.canManage !== false ? <Button
                         label="Stop"
                         variant="ghost"
                         size="sm"
                         isLoading={isStopping}
                         clickAction={() => { if (mission) void stopMission(mission.id); }}
-                      />
+                      /> : null}
                     </div>
                     {missionEvents.filter((event) => event.type === "runner.progress").slice(-1).map((event) => (
                       <Text key={event.id} type="supporting" color="secondary">
@@ -425,6 +472,7 @@ export function HermesConversation() {
                   </AssistantMessage>
                 ) : null}
               </ChatMessageList>
+              </>
             ) : null}
           </ConversationSurface>
         </VStack>

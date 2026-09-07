@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { readSession } from "../lib/auth/session";
-import { HermesConversation } from "./conversation";
 import { Workspace } from "./workspace";
+import { WorkspaceHome } from "./workspace-home";
 
 export default async function Home() {
   const session = await readSession();
@@ -10,7 +10,7 @@ export default async function Home() {
 
   return (
     <Workspace email={session.email}>
-      <HermesConversation />
+      <WorkspaceHome />
     </Workspace>
   );
 }

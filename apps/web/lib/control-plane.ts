@@ -4,7 +4,7 @@ import { getAuthConfig } from "./auth/config";
 import { ACCESS_TOKEN_COOKIE, REFRESH_TOKEN_COOKIE, SESSION_COOKIE, authCookieOptions } from "./auth/session";
 import { accessTokenNeedsRefresh, refreshAccessToken } from "./auth/token";
 
-export async function proxyControlPlane(path: string, method: "GET" | "POST", request?: NextRequest) {
+export async function proxyControlPlane(path: string, method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE", request?: NextRequest) {
   const cookieStore = await cookies();
   let token = cookieStore.get(ACCESS_TOKEN_COOKIE)?.value;
   const refreshToken = cookieStore.get(REFRESH_TOKEN_COOKIE)?.value;

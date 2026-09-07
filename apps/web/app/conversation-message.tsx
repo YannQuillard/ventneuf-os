@@ -136,7 +136,7 @@ export function ConversationMessage({
 
   if (message.role === "user") {
     return (
-      <ChatMessage sender="user">
+      <ChatMessage sender="user" name={message.memberName}>
         <ChatMessageBubble
           metadata={(
             <ChatMessageMetadata
