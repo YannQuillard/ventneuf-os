@@ -7,6 +7,7 @@ import { migrate } from "../src/migrate.js";
 import {
   currentPersonalScope,
   currentScopeForConversation,
+  currentScopeForMission,
   requireCurrentMissionMemoryScope,
   WorkspaceAccessError,
   WorkspaceMemoryFenceError,
@@ -204,6 +205,20 @@ test("workspace projects and conversations require explicit tenant-scoped grants
       projectId: project.id,
       parentConversationId: ownerThread.id,
     });
+    const collaboratorPrivateProjectThread = await workspace.createConversation(collaboratorScope, {
+      title: "Collaborator private project mission",
+      kind: "mission",
+      projectId: project.id,
+    });
+    const [collaboratorPrivateProjectMission] = await admin<{ id: string }[]>`
+      insert into missions (organization_id, conversation_id, project_id, requested_by_member_id, goal)
+      values (${organizationId}, ${collaboratorPrivateProjectThread.id}, ${project.id}, ${collaborator.id}, 'Private project work')
+      returning id
+    `;
+    assert.ok(collaboratorPrivateProjectMission);
+    const collaboratorPrivateMissionScope = await database.withOrganization(organizationId, (transaction) =>
+      currentScopeForMission(transaction, collaboratorScope, collaboratorPrivateProjectMission.id));
+    assert.equal(collaboratorPrivateMissionScope.hermesMemoryScope.kind, "personal");
     assert.equal((await workspace.listConversations(ownerScope)).some(({ id }) => id === collaboratorThread.id), false);
     await workspace.shareConversation(collaboratorScope, collaboratorThread.id, owner.id);
     const ownerConversationIds = (await workspace.listConversations(ownerScope)).map(({ id }) => id);
@@ -219,6 +234,14 @@ test("workspace projects and conversations require explicit tenant-scoped grants
     );
     await assert.rejects(workspace.getConversation(collaboratorScope, ownerThread.id), WorkspaceAccessError);
     await assert.rejects(workspace.getConversation(collaboratorScope, collaboratorThread.id), WorkspaceAccessError);
+    await assert.rejects(
+      database.withOrganization(organizationId, (transaction) => requireCurrentMissionMemoryScope(transaction, {
+        organizationId,
+        missionId: collaboratorPrivateProjectMission.id,
+        expectedScopeId: collaboratorPrivateMissionScope.hermesMemoryScope.scopeId,
+      })),
+      WorkspaceMemoryFenceError,
+    );
     assert.equal((await workspace.listConversations(ownerScope)).some(({ id }) => id === ownerThread.id), true);
     const ownerAfterProjectRevoke = await database.withOrganization(organizationId, (transaction) =>
       currentScopeForConversation(transaction, ownerScope, ownerThread.id));

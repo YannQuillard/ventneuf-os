@@ -366,18 +366,28 @@ export async function requireCurrentMissionMemoryScope(
     .limit(1)
     .for("update");
   if (!mission) throw new WorkspaceMemoryFenceError();
-  const conversation = await selectOneForLock(
-    transaction
-      .select()
-      .from(conversations)
-      .where(and(
-        eq(conversations.organizationId, fence.organizationId),
-        eq(conversations.id, mission.conversationId),
-      ))
-      .limit(1),
-    "update",
-  );
-  if (!conversation) throw new WorkspaceMemoryFenceError();
+  const [requester] = await transaction
+    .select({ externalSubject: members.externalSubject })
+    .from(members)
+    .where(and(
+      eq(members.organizationId, fence.organizationId),
+      eq(members.id, mission.requestedByMemberId),
+    ))
+    .limit(1);
+  if (!requester) throw new WorkspaceMemoryFenceError();
+  let access: Awaited<ReturnType<typeof requireConversationAccess>>;
+  try {
+    access = await requireConversationAccess(
+      transaction,
+      { organizationId: fence.organizationId, externalSubject: requester.externalSubject },
+      mission.conversationId,
+      { lock: "update" },
+    );
+  } catch (error) {
+    if (error instanceof WorkspaceAccessError) throw new WorkspaceMemoryFenceError();
+    throw error;
+  }
+  const { conversation } = access;
   const hermesMemoryScope = await currentScopeForAccessibleConversation(transaction, conversation, "update");
   if (hermesMemoryScope.scopeId !== fence.expectedScopeId) throw new WorkspaceMemoryFenceError();
   return {
