@@ -83,6 +83,8 @@ test.describe("composer long paste", () => {
 
   test("expands the prior keyboard paste when the same paste is repeated", async ({ page }) => {
     await openComposer(page);
+    // Keep the repeat window independent from CI rendering and assertion time.
+    await page.clock.setFixedTime(new Date("2026-01-01T00:00:00Z"));
     await paste(page, LONG_PASTE);
     await expect(page.locator('[contenteditable="true"]:visible [data-astryx-token]')).toHaveCount(1);
     await paste(page, LONG_PASTE);
