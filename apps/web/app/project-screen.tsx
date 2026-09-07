@@ -44,10 +44,16 @@ export function ProjectScreen({ projectId }: { projectId: string }) {
   const conversations = (snapshot?.conversations ?? []).filter((conversation) => conversation.projectId === project.id);
   const missions = conversations.filter((conversation) => conversation.kind === "mission");
   const threads = conversations.filter((conversation) => conversation.kind !== "mission");
-  const repositoryName = (deviceId: string, repositoryId: string) => {
+  const repositoryName = (association: WorkspaceProject["repositoryAssociations"][number]) => {
+    const { deviceId, repositoryId } = association;
     const device = devices.find(({ id }) => id === deviceId);
-    const repository = device?.repositories?.find(({ id }) => id === repositoryId);
-    return { device: device?.name ?? deviceId, repository: repository?.name ?? repositoryId };
+    const repository = device?.repositories?.find(({ id }) => id === repositoryId) ?? association.repository;
+    const isAvailableHere = devices.some((candidate) => candidate.repositories?.some((local) =>
+      repository?.github && local.github
+        ? repository.github.owner === local.github.owner && repository.github.name === local.github.name
+        : candidate.id === deviceId && local.id === repositoryId));
+    return { device: isAvailableHere ? "Available on your runner" : "Connect this GitHub repository on your Mac to run missions",
+      repository: repository?.name ?? repositoryId };
   };
   const owner = snapshot?.members.find(({ id }) => id === project.ownerMemberId);
   const visibility = project.recipients.length ? `Shared with ${project.recipients.length}` : "Private project";
@@ -100,7 +106,7 @@ export function ProjectScreen({ projectId }: { projectId: string }) {
           </MetadataList>
           <VStack gap={2}><Heading level={2}>Repositories</Heading>
             {project.repositoryAssociations.length ? <List hasDividers density="compact">{project.repositoryAssociations.map((association) => {
-              const names = repositoryName(association.deviceId, association.repositoryId);
+              const names = repositoryName(association);
               return <ListItem key={association.id} label={names.repository} description={names.device}
                 startContent={<Icon icon={CodeBracketIcon} color="secondary" />} />;
             })}</List> : <Text type="supporting">No repositories are associated with this project.</Text>}

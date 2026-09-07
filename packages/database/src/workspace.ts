@@ -473,14 +473,29 @@ export class WorkspaceRepository {
   }
 
   private async projectAssociations(transaction: DatabaseTransaction, organizationId: string, projectId: string) {
-    return transaction
-      .select({ id: projectRepositories.id, deviceId: projectRepositories.deviceId, repositoryId: projectRepositories.repositoryId })
+    const associations = await transaction
+      .select({ id: projectRepositories.id, deviceId: projectRepositories.deviceId,
+        repositoryId: projectRepositories.repositoryId, repositories: devices.repositories })
       .from(projectRepositories)
+      .innerJoin(devices, and(
+        eq(devices.organizationId, projectRepositories.organizationId),
+        eq(devices.id, projectRepositories.deviceId),
+      ))
       .where(and(
         eq(projectRepositories.organizationId, organizationId),
         eq(projectRepositories.projectId, projectId),
       ))
       .orderBy(asc(projectRepositories.createdAt), asc(projectRepositories.id));
+    return associations.map(({ repositories, ...association }) => {
+      const repository = repositories.find(({ id }) => id === association.repositoryId);
+      return {
+        ...association,
+        repository: repository ? {
+          name: repository.name,
+          ...(repository.github ? { github: repository.github } : {}),
+        } : undefined,
+      };
+    });
   }
 
   private async projectView(

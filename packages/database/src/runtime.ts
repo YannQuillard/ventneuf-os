@@ -3,6 +3,7 @@ import type { ClaudeModel, MissionAuthority } from "@ventneuf/domain";
 import type { Database } from "./client.js";
 import { requireConversationAccess, requireProjectAccess, currentScopeForMission, requireCurrentMissionMemoryScope, WorkspaceAccessError } from "./workspace-access.js";
 import { publicApproval } from "./mission-approvals.js";
+import { repositoriesMatch } from "./repository-identity.js";
 import { conversations, devices, members, messages, missionApprovals, missionEvents, missions, organizations, projects, projectMembers, projectRepositories } from "./schema.js";
 
 export type DelegatedRunnerAdapter = "repository-check" | "orca-review" | "codex-development" | "claude-development";
@@ -510,16 +511,23 @@ export class ConversationRuntimeRepository {
           .where(and(eq(projects.organizationId, organizationId),
             or(eq(projects.ownerMemberId, mission.requestedByMemberId), eq(projectMembers.memberId, mission.requestedByMemberId)),
             result.projectId ? eq(projects.id, result.projectId) : undefined));
+        const seen = new Set<string>();
         targets = associations.flatMap(({ association, project, device }) => {
-          const repository = device.repositories.find(repository => repository.id === association.repositoryId);
-          if (!repository) return [];
-          const claudeModels = repository.claudeDevelopment ? repository.claudeModels : undefined;
-          return [{ deviceId: device.id, repositoryId: repository.id, projectId: project.id, projectName: project.name,
-            adapters: ["repository-check" as const, ...(repository.orcaReview ? ["orca-review" as const] : []),
-              ...(repository.codexDevelopment ? ["codex-development" as const] : []),
-              ...(claudeModels?.length ? ["claude-development" as const] : [])],
-            ...(claudeModels?.length ? { claudeModels } : {}),
-          }];
+          const associatedRepository = device.repositories.find(repository => repository.id === association.repositoryId);
+          if (!associatedRepository) return [];
+          return ownedDevices.flatMap((ownedDevice) => ownedDevice.repositories.flatMap((repository) => {
+            if (!repositoriesMatch(associatedRepository, repository)) return [];
+            const key = `${project.id}\u0000${ownedDevice.id}\u0000${repository.id}`;
+            if (seen.has(key)) return [];
+            seen.add(key);
+            const claudeModels = repository.claudeDevelopment ? repository.claudeModels : undefined;
+            return [{ deviceId: ownedDevice.id, repositoryId: repository.id, projectId: project.id, projectName: project.name,
+              adapters: ["repository-check" as const, ...(repository.orcaReview ? ["orca-review" as const] : []),
+                ...(repository.codexDevelopment ? ["codex-development" as const] : []),
+                ...(claudeModels?.length ? ["claude-development" as const] : [])],
+              ...(claudeModels?.length ? { claudeModels } : {}),
+            }];
+          }));
         });
       }
       if (targets.length > 50) throw new Error("The mission has too many runner targets to delegate.");
@@ -597,6 +605,20 @@ export class ConversationRuntimeRepository {
 
       const workspaceMission = parent.context.workspaceVersion === 1;
       if (workspaceMission && !input.projectId) throw new DelegatedMissionError();
+      const [device] = await transaction.select().from(devices).where(and(
+        eq(devices.organizationId, input.organizationId),
+        eq(devices.id, input.deviceId),
+        eq(devices.memberId, input.memberId),
+        isNull(devices.revokedAt),
+      )).for("share").limit(1);
+      const targetRepository = device?.repositories.find((repository) => repositorySupports(
+        repository,
+        input.repositoryId,
+        input.adapter,
+        input.model,
+      ));
+      if (!device || !targetRepository) throw new DelegatedMissionError();
+
       if (input.projectId) {
         const [actor] = await transaction.select().from(members).where(and(
           eq(members.organizationId, input.organizationId), eq(members.id, input.memberId),
@@ -604,25 +626,23 @@ export class ConversationRuntimeRepository {
         if (!actor) throw new DelegatedMissionError();
         await requireProjectAccess(transaction, { organizationId: input.organizationId, externalSubject: actor.externalSubject }, input.projectId);
         if (conversation.projectId && conversation.projectId !== input.projectId) throw new DelegatedMissionError();
-        const [association] = await transaction.select().from(projectRepositories).where(and(
-          eq(projectRepositories.organizationId, input.organizationId), eq(projectRepositories.projectId, input.projectId),
-          eq(projectRepositories.deviceId, input.deviceId), eq(projectRepositories.repositoryId, input.repositoryId),
-        )).for("share").limit(1);
-        if (!association) throw new DelegatedMissionError();
+        const associations = await transaction.select({ association: projectRepositories, repositories: devices.repositories })
+          .from(projectRepositories)
+          .innerJoin(devices, and(
+            eq(devices.organizationId, projectRepositories.organizationId),
+            eq(devices.id, projectRepositories.deviceId),
+            isNull(devices.revokedAt),
+          ))
+          .where(and(
+            eq(projectRepositories.organizationId, input.organizationId),
+            eq(projectRepositories.projectId, input.projectId),
+          )).for("share");
+        const authorized = associations.some(({ association, repositories }) => {
+          const associatedRepository = repositories.find(({ id }) => id === association.repositoryId);
+          return Boolean(associatedRepository && repositoriesMatch(associatedRepository, targetRepository));
+        });
+        if (!authorized) throw new DelegatedMissionError();
       }
-
-      const [device] = await transaction.select().from(devices).where(and(
-        eq(devices.organizationId, input.organizationId),
-        eq(devices.id, input.deviceId),
-        input.projectId ? undefined : eq(devices.memberId, input.memberId),
-        isNull(devices.revokedAt),
-      )).for("share").limit(1);
-      if (!device?.repositories.some((repository) => repositorySupports(
-        repository,
-        input.repositoryId,
-        input.adapter,
-        input.model,
-      ))) throw new DelegatedMissionError();
 
       let missionConversationId = input.conversationId;
       if (workspaceMission) {

@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
 import type { StoredDevice } from "../src/credential-store.js";
 import { LocalRunnerBridge } from "../src/local-bridge.js";
 
 const origin = "http://localhost:3000";
+const execute = promisify(execFile);
 
 test("enrolls through the loopback bridge without returning the credential", async () => {
   let saved: StoredDevice | undefined;
@@ -76,11 +79,13 @@ test("rejects enrollment from an untrusted web origin", async () => {
   }
 });
 
-test("registers a repository locally without returning its path", async () => {
+test("finds a GitHub checkout locally without returning its path", async () => {
   const temporary = await mkdtemp(join(tmpdir(), "runner-bridge-registration-"));
   const repositoryPath = join(temporary, "private-repository");
   const repositoriesFile = join(temporary, "config", "repositories.json");
   await mkdir(repositoryPath);
+  await execute("/usr/bin/git", ["init", repositoryPath]);
+  await execute("/usr/bin/git", ["-C", repositoryPath, "remote", "add", "origin", "git@github.com:OnlineNow/private-repository.git"]);
   const device: StoredDevice = {
     deviceId: "device-1",
     name: "Test Mac",
@@ -99,14 +104,17 @@ test("registers a repository locally without returning its path", async () => {
     const response = await fetch(`http://127.0.0.1:${port}/repositories`, {
       method: "POST",
       headers: { origin, "content-type": "application/json" },
-      body: JSON.stringify({ name: "Private repository", path: repositoryPath }),
+      body: JSON.stringify({ githubUrl: "https://github.com/onlinenow/private-repository", searchRoot: temporary }),
     });
     assert.equal(response.status, 201);
     const body = await response.text();
-    assert.match(body, /private-repository-[a-f0-9]{8}/);
+    assert.match(body, /github-[a-f0-9]{32}/);
+    assert.match(body, /onlinenow/);
     assert.doesNotMatch(body, new RegExp(repositoryPath));
+    assert.doesNotMatch(body, new RegExp(temporary));
     const configuration = JSON.parse(await readFile(repositoriesFile, "utf8")) as Array<Record<string, unknown>>;
     assert.equal(configuration[0]?.path, await realpath(repositoryPath));
+    assert.deepEqual(configuration[0]?.github, { owner: "onlinenow", name: "private-repository" });
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     await rm(temporary, { recursive: true, force: true });

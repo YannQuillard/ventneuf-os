@@ -92,6 +92,7 @@ export const devices = pgTable(
       codexDevelopment?: boolean;
       claudeDevelopment?: boolean;
       claudeModels?: ClaudeModel[];
+      github?: { owner: string; name: string };
     }>>().default([]).notNull(),
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),

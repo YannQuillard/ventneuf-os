@@ -23,6 +23,10 @@ const repository = z.object({
   codexDevelopment: z.boolean().optional(),
   claudeDevelopment: z.boolean().optional(),
   claudeModels: z.array(z.enum(claudeModelAliases)).min(1).max(claudeModelAliases.length).optional(),
+  github: z.object({
+    owner: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,38})$/),
+    name: z.string().regex(/^[a-z0-9._-]{1,100}$/),
+  }).strict().optional(),
 }).strict().refine((value) => value.claudeModels === undefined || value.claudeDevelopment === true, {
   path: ["claudeModels"],
   message: "Claude models require the Claude development capability.",

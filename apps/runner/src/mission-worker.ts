@@ -38,6 +38,7 @@ export interface MissionClient {
     codexDevelopment?: boolean;
     claudeDevelopment?: boolean;
     claudeModels?: ClaudeModel[];
+    github?: { owner: string; name: string };
   }>): Promise<void>;
   claimMission(device: StoredDevice, owner: string): Promise<ClaimedMission | null>;
   reportMission(device: StoredDevice, missionId: string, report: MissionReport): Promise<void>;
@@ -73,9 +74,10 @@ export class RunnerMissionWorker {
         });
       }
       await this.options.client.registerRepositories(device, repositories.map(({
-        id, name, orcaReview, codexDevelopment, claudeDevelopment, claudeModels,
+        id, name, orcaReview, codexDevelopment, claudeDevelopment, claudeModels, github,
       }) => ({ id, name, ...(orcaReview ? { orcaReview } : {}), ...(codexDevelopment ? { codexDevelopment } : {}),
-        ...(claudeDevelopment ? { claudeDevelopment } : {}), ...(claudeModels ? { claudeModels } : {}) })));
+        ...(claudeDevelopment ? { claudeDevelopment } : {}), ...(claudeModels ? { claudeModels } : {}),
+        ...(github ? { github } : {}) })));
       const mission = await this.options.client.claimMission(device, this.owner);
       if (!mission) return;
       let latestExecution: AgentExecutionSnapshot | undefined;

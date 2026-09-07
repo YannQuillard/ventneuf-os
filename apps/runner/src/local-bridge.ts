@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { AddressInfo } from "node:net";
 import type { CredentialStore, StoredDevice } from "./credential-store.js";
 import type { RunnerCloudClient } from "./cloud-client.js";
-import { addRegisteredRepository } from "./repositories.js";
+import { addGitHubRepository, hasRepositorySearchRoots } from "./repositories.js";
 import type { RunnerUpdater } from "./runner-update.js";
 
 const maxRequestBytes = 8_192;
@@ -53,6 +53,11 @@ export class LocalRunnerBridge {
       if (request.method === "GET" && request.url === "/status") {
         return this.json(response, 200, this.publicStatus());
       }
+      if (request.method === "GET" && request.url === "/repository-settings") {
+        if (!this.device) return this.json(response, 409, { error: "runner_not_enrolled" });
+        if (!this.options.repositoriesFile) return this.json(response, 503, { error: "repository_configuration_unavailable" });
+        return this.json(response, 200, { hasSearchFolders: await hasRepositorySearchRoots(this.options.repositoriesFile) });
+      }
       if (request.method === "POST" && request.url === "/enroll") {
         const body = await this.readJson(request) as { token?: unknown };
         if (typeof body.token !== "string" || body.token.length > 256) {
@@ -67,12 +72,15 @@ export class LocalRunnerBridge {
       if (request.method === "POST" && request.url === "/repositories") {
         if (!this.device) return this.json(response, 409, { error: "runner_not_enrolled" });
         if (!this.options.repositoriesFile) return this.json(response, 503, { error: "repository_configuration_unavailable" });
-        const body = await this.readJson(request) as { name?: unknown; path?: unknown };
-        if (typeof body.name !== "string" || typeof body.path !== "string") {
+        const body = await this.readJson(request) as { githubUrl?: unknown; searchRoot?: unknown };
+        if (typeof body.githubUrl !== "string" || (body.searchRoot !== undefined && typeof body.searchRoot !== "string")) {
           return this.json(response, 400, { error: "invalid_request" });
         }
-        const repository = await addRegisteredRepository(this.options.repositoriesFile, { name: body.name, path: body.path });
-        return this.json(response, 201, { repository: { id: repository.id, name: repository.name } });
+        const repository = await addGitHubRepository(this.options.repositoriesFile, {
+          url: body.githubUrl,
+          ...(body.searchRoot ? { searchRoot: body.searchRoot } : {}),
+        });
+        return this.json(response, 201, { repository: { id: repository.id, name: repository.name, github: repository.github } });
       }
       if (request.method === "GET" && request.url === "/updates") {
         if (!this.device) return this.json(response, 409, { error: "runner_not_enrolled" });

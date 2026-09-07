@@ -36,35 +36,39 @@ function recentlySeen(device: Device) {
   return Boolean(device.lastSeenAt && Date.now() - new Date(device.lastSeenAt).getTime() < 90_000);
 }
 
-function RegisterRepositoryDialog({ isOpen, onOpenChange, onRegistered }: {
+function RegisterRepositoryDialog({ isOpen, onOpenChange, onRegistered, hasSearchFolders }: {
   isOpen: boolean;
   onOpenChange: (isOpen: boolean) => void;
   onRegistered: (name: string) => void;
+  hasSearchFolders: boolean;
 }) {
-  const [name, setName] = useState("");
-  const [path, setPath] = useState("");
+  const [githubUrl, setGitHubUrl] = useState("");
+  const [searchRoot, setSearchRoot] = useState("");
   const [isSubmitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string>();
 
   useEffect(() => {
-    if (isOpen) { setName(""); setPath(""); setError(undefined); }
+    if (isOpen) { setGitHubUrl(""); setSearchRoot(""); setError(undefined); }
   }, [isOpen]);
 
   const submit = async () => {
-    if (!name.trim() || !path.trim()) { setError("Enter a name and an absolute repository path."); return; }
+    if (!githubUrl.trim() || (!hasSearchFolders && !searchRoot.trim())) {
+      setError("Enter a GitHub repository and an absolute search folder."); return;
+    }
     setSubmitting(true);
     setError(undefined);
     try {
       const response = await fetch(`${localRunnerUrl}/repositories`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: name.trim(), path: path.trim() }),
+        body: JSON.stringify({ githubUrl: githubUrl.trim(), ...(searchRoot.trim() ? { searchRoot: searchRoot.trim() } : {}) }),
       });
       if (!response.ok) {
         const failure = await response.json().catch(() => undefined) as { message?: string } | undefined;
         throw new Error(failure?.message ?? "The local runner could not register this repository.");
       }
-      onRegistered(name.trim());
+      const payload = await response.json() as { repository: { name: string } };
+      onRegistered(payload.repository.name);
       onOpenChange(false);
     } catch (reason) {
       setError(reason instanceof TypeError
@@ -75,16 +79,22 @@ function RegisterRepositoryDialog({ isOpen, onOpenChange, onRegistered }: {
 
   return <Dialog isOpen={isOpen} onOpenChange={onOpenChange} purpose="form" width={520}>
     <Layout height="auto" defaultHasDividers
-      header={<DialogHeader title="Register repository" subtitle="Keep the local path on this Mac" onOpenChange={onOpenChange} />}
+      header={<DialogHeader title="Connect GitHub repository" subtitle="Match this repository to a checkout on this Mac" onOpenChange={onOpenChange} />}
       content={<LayoutContent padding={4}><FormLayout defaultOptionality="required">
-        <TextInput label="Name" value={name} onChange={setName} placeholder="Repository name" isRequired hasAutoFocus />
-        <TextInput label="Absolute path" value={path} onChange={setPath} placeholder="/absolute/path/to/repository" isRequired
-          description="The path is validated and stored only by the local runner." onEnter={() => void submit()} />
+        <TextInput label="GitHub repository" value={githubUrl} onChange={setGitHubUrl}
+          placeholder="https://github.com/owner/repository" isRequired hasAutoFocus
+          description="Use the same GitHub repository on each member's Mac to connect it to shared projects." />
+        <TextInput label={hasSearchFolders ? "Add another search folder" : "Search folder"} value={searchRoot} onChange={setSearchRoot}
+          placeholder="/Users/you/dev" isRequired={!hasSearchFolders} isOptional={hasSearchFolders}
+          description={hasSearchFolders
+            ? "Leave empty to search your saved folders. Paths never leave this Mac."
+            : "This folder is saved by the runner for future repositories. Paths never leave this Mac."}
+          onEnter={() => void submit()} />
         {error ? <Text type="supporting" color="primary" role="alert">{error}</Text> : null}
       </FormLayout></LayoutContent>}
       footer={<LayoutFooter><HStack gap={2} hAlign="end">
         <Button label="Cancel" variant="secondary" onClick={() => onOpenChange(false)} />
-        <Button label="Register" variant="primary" isLoading={isSubmitting} clickAction={submit} />
+        <Button label="Connect" variant="primary" isLoading={isSubmitting} clickAction={submit} />
       </HStack></LayoutFooter>} />
   </Dialog>;
 }
@@ -119,6 +129,7 @@ export function RunnerSetup() {
   const [missionNotice, setMissionNotice] = useState<string>();
   const [repositoryNotice, setRepositoryNotice] = useState<string>();
   const [isRepositoryOpen, setRepositoryOpen] = useState(false);
+  const [hasSearchFolders, setHasSearchFolders] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<RunnerUpdateStatus>();
   const [isUpdateOpen, setUpdateOpen] = useState(false);
 
@@ -136,10 +147,16 @@ export function RunnerSetup() {
     setLocal(localResult.status === "fulfilled" ? localResult.value : undefined);
     if (localResult.status === "fulfilled" && localResult.value.status === "online") {
       try {
-        const response = await fetch(`${localRunnerUrl}/updates`, { cache: "no-store" });
-        setUpdateStatus(response.ok ? await response.json() as RunnerUpdateStatus : undefined);
-      } catch { setUpdateStatus(undefined); }
-    } else setUpdateStatus(undefined);
+        const [updateResponse, settingsResponse] = await Promise.all([
+          fetch(`${localRunnerUrl}/updates`, { cache: "no-store" }),
+          fetch(`${localRunnerUrl}/repository-settings`, { cache: "no-store" }),
+        ]);
+        setUpdateStatus(updateResponse.ok ? await updateResponse.json() as RunnerUpdateStatus : undefined);
+        setHasSearchFolders(settingsResponse.ok
+          ? (await settingsResponse.json() as { hasSearchFolders: boolean }).hasSearchFolders
+          : false);
+      } catch { setUpdateStatus(undefined); setHasSearchFolders(false); }
+    } else { setUpdateStatus(undefined); setHasSearchFolders(false); }
     if (cloudResult.status === "fulfilled") {
       setCloudDevices(cloudResult.value.devices);
       setDeviceError(undefined);
@@ -218,7 +235,7 @@ export function RunnerSetup() {
       <HStack gap={3} vAlign="center" wrap="wrap">
         <StackItem size="fill"><Heading level={3}>Runners</Heading></StackItem>
         <Button label="Refresh" size="sm" variant="ghost" clickAction={() => void refresh()} />
-        {local?.status === "online" ? <Button label="Register repository" variant="secondary" size="sm"
+        {local?.status === "online" ? <Button label="Connect repository" variant="secondary" size="sm"
           onClick={() => setRepositoryOpen(true)} /> : null}
         {local?.status === "online" && updateStatus?.available ? <Button label="Update runner" variant="primary" size="sm"
           onClick={() => setUpdateOpen(true)} /> : null}
@@ -247,8 +264,9 @@ export function RunnerSetup() {
       {missionNotice ? <VStack gap={2}><Text type="supporting" role="status">{missionNotice}</Text><Button label="Open Hermes" href="/" variant="secondary" size="sm" /></VStack> : null}
       {repositoryNotice ? <Text type="supporting" role="status">{repositoryNotice}</Text> : null}
       {error || deviceError ? <Text type="supporting" role="alert">{error ?? deviceError}</Text> : null}
-      <RegisterRepositoryDialog isOpen={isRepositoryOpen} onOpenChange={setRepositoryOpen} onRegistered={(name) => {
-        setRepositoryNotice(`${name} was registered locally and will be available for projects after the next runner sync.`);
+      <RegisterRepositoryDialog isOpen={isRepositoryOpen} onOpenChange={setRepositoryOpen} hasSearchFolders={hasSearchFolders} onRegistered={(name) => {
+        setRepositoryNotice(`${name} was connected locally and will be available for projects after the next runner sync.`);
+        setHasSearchFolders(true);
         window.setTimeout(() => void refresh(), 6_000);
       }} />
       <RunnerUpdateDialog isOpen={isUpdateOpen} onOpenChange={setUpdateOpen} status={updateStatus} onUpdate={updateRunner} />
