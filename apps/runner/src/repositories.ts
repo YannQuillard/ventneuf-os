@@ -1,6 +1,7 @@
-import { lstat, opendir, readFile, realpath, stat } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { lstat, mkdir, opendir, readFile, realpath, rename, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import type { AgentExecutionSnapshot } from "@ventneuf/domain";
 
 export const claudeModelAliases = ["opus", "sonnet", "fable"] as const;
@@ -25,6 +26,13 @@ export interface RegisteredRepository {
   claudeModels?: ClaudeModel[];
 }
 export const defaultRepositoriesFile = () => join(homedir(), ".config", "ventneuf.os", "repositories.json");
+
+function repositoryId(name: string, path: string) {
+  const slug = name.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48)
+    || basename(path).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48)
+    || "repository";
+  return `${slug}-${createHash("sha256").update(path).digest("hex").slice(0, 8)}`;
+}
 
 export async function loadRepositories(path: string): Promise<RegisteredRepository[]> {
   try {
@@ -59,6 +67,27 @@ export async function loadRepositories(path: string): Promise<RegisteredReposito
     });
   }
   return repositories;
+}
+
+export async function addRegisteredRepository(configurationPath: string, input: { name: string; path: string }) {
+  const name = input.name.trim();
+  if (!name || name.length > 100 || !isAbsolute(input.path) || input.path.length > 4_096) {
+    throw new Error("Enter a name and an absolute repository path.");
+  }
+  const path = await realpath(input.path);
+  if (!(await stat(path)).isDirectory()) throw new Error("The repository path must be a directory.");
+  const repositories = await loadRepositories(configurationPath);
+  if (repositories.some((repository) => repository.path === path)) {
+    throw new Error("This repository is already registered.");
+  }
+  if (repositories.length >= 100) throw new Error("The repository configuration is full.");
+  const repository: RegisteredRepository = { id: repositoryId(name, path), name, path };
+  if (repositories.some(({ id }) => id === repository.id)) throw new Error("A repository with this identity is already registered.");
+  await mkdir(dirname(configurationPath), { recursive: true, mode: 0o700 });
+  const temporaryPath = `${configurationPath}.${randomUUID()}.tmp`;
+  await writeFile(temporaryPath, `${JSON.stringify([...repositories, repository], null, 2)}\n`, { mode: 0o600, flag: "wx" });
+  await rename(temporaryPath, configurationPath);
+  return repository;
 }
 
 export interface RunnerMission {

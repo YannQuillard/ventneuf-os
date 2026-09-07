@@ -1,9 +1,12 @@
 "use client";
 
 import { Button } from "@astryxdesign/core/Button";
-import { HStack, StackItem, VStack } from "@astryxdesign/core/Layout";
+import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
+import { FormLayout } from "@astryxdesign/core/FormLayout";
+import { HStack, Layout, LayoutContent, LayoutFooter, StackItem, VStack } from "@astryxdesign/core/Layout";
 import { StatusDot } from "@astryxdesign/core/StatusDot";
 import { Heading, Text } from "@astryxdesign/core/Text";
+import { TextInput } from "@astryxdesign/core/TextInput";
 import { List, ListItem } from "@astryxdesign/core/List";
 import { DeviceSection } from "./_components/device-section";
 import { useCallback, useEffect, useState } from "react";
@@ -27,6 +30,59 @@ function recentlySeen(device: Device) {
   return Boolean(device.lastSeenAt && Date.now() - new Date(device.lastSeenAt).getTime() < 90_000);
 }
 
+function RegisterRepositoryDialog({ isOpen, onOpenChange, onRegistered }: {
+  isOpen: boolean;
+  onOpenChange: (isOpen: boolean) => void;
+  onRegistered: (name: string) => void;
+}) {
+  const [name, setName] = useState("");
+  const [path, setPath] = useState("");
+  const [isSubmitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string>();
+
+  useEffect(() => {
+    if (isOpen) { setName(""); setPath(""); setError(undefined); }
+  }, [isOpen]);
+
+  const submit = async () => {
+    if (!name.trim() || !path.trim()) { setError("Enter a name and an absolute repository path."); return; }
+    setSubmitting(true);
+    setError(undefined);
+    try {
+      const response = await fetch(`${localRunnerUrl}/repositories`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: name.trim(), path: path.trim() }),
+      });
+      if (!response.ok) {
+        const failure = await response.json().catch(() => undefined) as { message?: string } | undefined;
+        throw new Error(failure?.message ?? "The local runner could not register this repository.");
+      }
+      onRegistered(name.trim());
+      onOpenChange(false);
+    } catch (reason) {
+      setError(reason instanceof TypeError
+        ? "Start the ventneuf.os runner on this Mac, then try again."
+        : reason instanceof Error ? reason.message : "Repository registration failed.");
+    } finally { setSubmitting(false); }
+  };
+
+  return <Dialog isOpen={isOpen} onOpenChange={onOpenChange} purpose="form" width={520}>
+    <Layout height="auto" defaultHasDividers
+      header={<DialogHeader title="Register repository" subtitle="Keep the local path on this Mac" onOpenChange={onOpenChange} />}
+      content={<LayoutContent padding={4}><FormLayout defaultOptionality="required">
+        <TextInput label="Name" value={name} onChange={setName} placeholder="Repository name" isRequired hasAutoFocus />
+        <TextInput label="Absolute path" value={path} onChange={setPath} placeholder="/absolute/path/to/repository" isRequired
+          description="The path is validated and stored only by the local runner." onEnter={() => void submit()} />
+        {error ? <Text type="supporting" color="primary" role="alert">{error}</Text> : null}
+      </FormLayout></LayoutContent>}
+      footer={<LayoutFooter><HStack gap={2} hAlign="end">
+        <Button label="Cancel" variant="secondary" onClick={() => onOpenChange(false)} />
+        <Button label="Register" variant="primary" isLoading={isSubmitting} clickAction={submit} />
+      </HStack></LayoutFooter>} />
+  </Dialog>;
+}
+
 export function RunnerSetup() {
   const [local, setLocal] = useState<LocalStatus>();
   const [cloudDevices, setCloudDevices] = useState<Device[]>([]);
@@ -35,6 +91,8 @@ export function RunnerSetup() {
   const [deviceError, setDeviceError] = useState<string>();
   const [error, setError] = useState<string>();
   const [missionNotice, setMissionNotice] = useState<string>();
+  const [repositoryNotice, setRepositoryNotice] = useState<string>();
+  const [isRepositoryOpen, setRepositoryOpen] = useState(false);
 
   const refresh = useCallback(async () => {
     const [localResult, cloudResult] = await Promise.allSettled([
@@ -109,6 +167,8 @@ export function RunnerSetup() {
       <HStack gap={3} vAlign="center" wrap="wrap">
         <StackItem size="fill"><Heading level={3}>Runners</Heading></StackItem>
         <Button label="Refresh" size="sm" variant="ghost" clickAction={() => void refresh()} />
+        {local?.status === "online" ? <Button label="Register repository" variant="secondary" size="sm"
+          onClick={() => setRepositoryOpen(true)} /> : null}
         {local?.status !== "online" ? <Button label="Connect this Mac" variant="primary" size="sm" isLoading={isConnecting} clickAction={connect} /> : null}
       </HStack>
       {isLoaded ? cloudDevices.map((device) => (
@@ -132,7 +192,12 @@ export function RunnerSetup() {
         <HStack gap={2}><StatusDot variant="success" label="Local runner connected" /><Text type="supporting">{local.device.name} is connected locally. Waiting for its cloud heartbeat.</Text></HStack>
       ) : null}
       {missionNotice ? <VStack gap={2}><Text type="supporting" role="status">{missionNotice}</Text><Button label="Open Hermes" href="/" variant="secondary" size="sm" /></VStack> : null}
+      {repositoryNotice ? <Text type="supporting" role="status">{repositoryNotice}</Text> : null}
       {error || deviceError ? <Text type="supporting" role="alert">{error ?? deviceError}</Text> : null}
+      <RegisterRepositoryDialog isOpen={isRepositoryOpen} onOpenChange={setRepositoryOpen} onRegistered={(name) => {
+        setRepositoryNotice(`${name} was registered locally and will be available for projects after the next runner sync.`);
+        window.setTimeout(() => void refresh(), 6_000);
+      }} />
     </VStack>
   );
 }

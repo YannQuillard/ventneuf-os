@@ -122,7 +122,9 @@ export function NewProjectDialog({ isOpen, onOpenChange, devices, initial, onCre
     <TextArea label="Project context" value={context} onChange={setContext} rows={4} isOptional
       description="Purpose, constraints, and durable background Hermes should use for this project." />
     <MultiSelector label="Repositories" options={options} value={repositories} onChange={setRepositories}
-      placeholder={options.length ? "Choose repositories" : "No registered repositories"} triggerDisplay="labels" isOptional
+      placeholder={options.length ? "Choose repositories" : "No registered repositories"} triggerDisplay="labels" isOptional hasClear
+      hasSelectAll={options.length > 1} hasSearch={options.length > 15}
+      description="Select one or more registered repositories. A repository can be reused across projects."
       isDisabled={!options.length} disabledMessage="Register a repository from Devices before associating it with a project." />
   </FormDialog>;
 }

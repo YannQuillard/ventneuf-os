@@ -52,12 +52,14 @@ if (command === "install") {
   if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new Error("VENTNEUF_RUNNER_PORT is invalid.");
 
   const client = new RunnerCloudClient(new URL(controlPlaneUrl()));
+  const repositoriesFile = process.env.VENTNEUF_REPOSITORIES_FILE ?? defaultRepositoriesFile();
   const store = new MacOSKeychainCredentialStore(userInfo().username);
   const bridge = new LocalRunnerBridge({
     client,
     store,
     deviceName: hostname(),
     allowedOrigins,
+    repositoriesFile,
   });
   await bridge.start(port);
   const review = process.env.VENTNEUF_ORCA_PATH && process.env.VENTNEUF_CODEX_PATH
@@ -67,7 +69,7 @@ if (command === "install") {
   const claudeDevelopment = process.env.VENTNEUF_ORCA_PATH && process.env.VENTNEUF_CLAUDE_PATH
     ? new ClaudeDevelopmentAdapter({ orcaPath: process.env.VENTNEUF_ORCA_PATH, claudePath: process.env.VENTNEUF_CLAUDE_PATH }) : undefined;
   new RunnerMissionWorker({ client, store, adapter: new RunnerAdapters(review, development, claudeDevelopment),
-    repositories: async () => (await loadRepositories(process.env.VENTNEUF_REPOSITORIES_FILE ?? defaultRepositoriesFile()))
+    repositories: async () => (await loadRepositories(repositoriesFile))
       .map((repository) => ({
         ...repository,
         orcaReview: Boolean(review && repository.orcaReview),

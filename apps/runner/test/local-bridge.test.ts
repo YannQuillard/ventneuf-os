@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, mkdir, readFile, realpath, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import type { StoredDevice } from "../src/credential-store.js";
 import { LocalRunnerBridge } from "../src/local-bridge.js";
@@ -70,5 +73,42 @@ test("rejects enrollment from an untrusted web origin", async () => {
     assert.equal(response.status, 403);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("registers a repository locally without returning its path", async () => {
+  const temporary = await mkdtemp(join(tmpdir(), "runner-bridge-registration-"));
+  const repositoryPath = join(temporary, "private-repository");
+  const repositoriesFile = join(temporary, "config", "repositories.json");
+  await mkdir(repositoryPath);
+  const device: StoredDevice = {
+    deviceId: "device-1",
+    name: "Test Mac",
+    platform: "darwin",
+    credential: "secret-credential",
+  };
+  const bridge = new LocalRunnerBridge({
+    client: { enroll: async () => device, heartbeat: async () => undefined },
+    store: { load: async () => device, save: async () => undefined },
+    deviceName: "Test Mac",
+    allowedOrigins: new Set([origin]),
+    repositoriesFile,
+  });
+  const { server, port } = await bridge.start(0);
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/repositories`, {
+      method: "POST",
+      headers: { origin, "content-type": "application/json" },
+      body: JSON.stringify({ name: "Private repository", path: repositoryPath }),
+    });
+    assert.equal(response.status, 201);
+    const body = await response.text();
+    assert.match(body, /private-repository-[a-f0-9]{8}/);
+    assert.doesNotMatch(body, new RegExp(repositoryPath));
+    const configuration = JSON.parse(await readFile(repositoriesFile, "utf8")) as Array<Record<string, unknown>>;
+    assert.equal(configuration[0]?.path, await realpath(repositoryPath));
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await rm(temporary, { recursive: true, force: true });
   }
 });
