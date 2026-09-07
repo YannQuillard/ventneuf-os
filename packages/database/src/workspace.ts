@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { DatabaseTransaction, Database } from "./client.js";
 import {
@@ -24,6 +25,33 @@ export class WorkspaceAccessError extends Error {
     super(message);
     this.name = "WorkspaceAccessError";
   }
+}
+
+export class WorkspaceMemoryFenceError extends Error {
+  constructor(message = "The Hermes memory scope is no longer current.") {
+    super(message);
+    this.name = "WorkspaceMemoryFenceError";
+  }
+}
+
+export type HermesMemoryScopeKind = "personal" | "conversation";
+
+/** Server-only routing information for an isolated native Hermes profile. */
+export interface HermesMemoryScope {
+  scopeId: string;
+  kind: HermesMemoryScopeKind;
+}
+
+export interface ConversationMemoryFence {
+  organizationId: string;
+  conversationId: string;
+  memoryEpoch: string;
+}
+
+export interface MissionMemoryScopeFence {
+  organizationId: string;
+  missionId: string;
+  expectedScopeId: string;
 }
 
 async function selectOneForLock<T>(
@@ -162,6 +190,248 @@ export async function requireConversationAccess(
     );
   }
   return { member, conversation, canManage };
+}
+
+async function effectiveConversationAudience(
+  transaction: DatabaseTransaction,
+  conversation: typeof conversations.$inferSelect,
+  lock: RowLock,
+) {
+  const grants = await transaction
+    .select({ memberId: conversationGrants.memberId })
+    .from(conversationGrants)
+    .where(and(
+      eq(conversationGrants.organizationId, conversation.organizationId),
+      eq(conversationGrants.conversationId, conversation.id),
+    ))
+    .for(lock);
+  const recipients = [conversation.ownerMemberId, ...grants.map(({ memberId }) => memberId)]
+    .filter((memberId): memberId is string => memberId !== null);
+
+  if (!conversation.projectId) return [...new Set(recipients)].sort();
+
+  const project = await selectOneForLock(
+    transaction
+      .select()
+      .from(projects)
+      .where(and(
+        eq(projects.organizationId, conversation.organizationId),
+        eq(projects.id, conversation.projectId),
+      ))
+      .limit(1),
+    lock,
+  );
+  if (!project) throw new WorkspaceAccessError("Project not found or access denied.");
+
+  const memberships = await transaction
+    .select({ memberId: projectMembers.memberId })
+    .from(projectMembers)
+    .where(and(
+      eq(projectMembers.organizationId, conversation.organizationId),
+      eq(projectMembers.projectId, project.id),
+      inArray(projectMembers.memberId, recipients),
+    ))
+    .for(lock);
+  const permitted = new Set([project.ownerMemberId, ...memberships.map(({ memberId }) => memberId)]);
+  const audience = [...new Set(recipients.filter((memberId) => permitted.has(memberId)))].sort();
+  if (!audience.includes(conversation.ownerMemberId ?? "")) {
+    throw new WorkspaceAccessError("Project conversation owner no longer has access.");
+  }
+  return audience;
+}
+
+function opaqueScopeId(value: Record<string, unknown>) {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+async function currentScopeForAccessibleConversation(
+  transaction: DatabaseTransaction,
+  conversation: typeof conversations.$inferSelect,
+  lock: RowLock,
+): Promise<HermesMemoryScope> {
+  const audience = await effectiveConversationAudience(transaction, conversation, lock);
+  if (audience.length === 1 && audience[0] === conversation.ownerMemberId) {
+    return {
+      scopeId: opaqueScopeId({ version: 1, kind: "personal", organizationId: conversation.organizationId, memberId: conversation.ownerMemberId }),
+      kind: "personal",
+    };
+  }
+  const audienceHash = createHash("sha256").update(JSON.stringify(audience)).digest("base64url");
+  return {
+    scopeId: opaqueScopeId({
+      version: 1,
+      kind: "conversation",
+      organizationId: conversation.organizationId,
+      conversationId: conversation.id,
+      memoryEpoch: conversation.memoryEpoch,
+      audienceHash,
+    }),
+    kind: "conversation",
+  };
+}
+
+function conversationMemoryFence(
+  conversation: typeof conversations.$inferSelect,
+  scopeId: string,
+): ConversationMemoryFence & { scopeId: string } {
+  return {
+    organizationId: conversation.organizationId,
+    conversationId: conversation.id,
+    memoryEpoch: conversation.memoryEpoch,
+    scopeId,
+  };
+}
+
+export async function currentPersonalScope(transaction: DatabaseTransaction, scope: WorkspaceScope): Promise<HermesMemoryScope> {
+  const member = await requireWorkspaceMember(transaction, scope);
+  return {
+    scopeId: opaqueScopeId({ version: 1, kind: "personal", organizationId: scope.organizationId, memberId: member.id }),
+    kind: "personal",
+  };
+}
+
+export async function currentScopeForConversation(
+  transaction: DatabaseTransaction,
+  scope: WorkspaceScope,
+  conversationId: string,
+) {
+  const access = await requireConversationAccess(transaction, scope, conversationId, { lock: "share" });
+  const hermesMemoryScope = await currentScopeForAccessibleConversation(transaction, access.conversation, "share");
+  return { ...access, hermesMemoryScope, memoryFence: conversationMemoryFence(access.conversation, hermesMemoryScope.scopeId) };
+}
+
+export async function currentScopeForMission(
+  transaction: DatabaseTransaction,
+  scope: WorkspaceScope,
+  missionId: string,
+) {
+  const [mission] = await transaction
+    .select()
+    .from(missions)
+    .where(and(eq(missions.organizationId, scope.organizationId), eq(missions.id, missionId)))
+    .limit(1)
+    .for("share");
+  if (!mission) throw new WorkspaceAccessError("Mission not found or access denied.");
+  const access = await requireConversationAccess(transaction, scope, mission.conversationId, { lock: "share" });
+  const hermesMemoryScope = await currentScopeForAccessibleConversation(transaction, access.conversation, "share");
+  return {
+    ...access,
+    mission,
+    hermesMemoryScope,
+    memoryFence: conversationMemoryFence(access.conversation, hermesMemoryScope.scopeId),
+  };
+}
+
+/**
+ * Lock the conversation before writing a Hermes result. A grant or project
+ * audience change rotates this value in the same transaction, fencing stale
+ * native-profile runs from appending messages or restoring a context ID.
+ */
+export async function requireCurrentConversationMemoryFence(
+  transaction: DatabaseTransaction,
+  fence: ConversationMemoryFence,
+) {
+  const conversation = await selectOneForLock(
+    transaction
+      .select()
+      .from(conversations)
+      .where(and(
+        eq(conversations.organizationId, fence.organizationId),
+        eq(conversations.id, fence.conversationId),
+      ))
+      .limit(1),
+    "update",
+  );
+  if (!conversation || conversation.memoryEpoch !== fence.memoryEpoch) {
+    throw new WorkspaceMemoryFenceError();
+  }
+  return conversation;
+}
+
+/**
+ * Runtime-only fence for mission results and events. Call this inside the same
+ * transaction that persists the output, before any mission or message write.
+ */
+export async function requireCurrentMissionMemoryScope(
+  transaction: DatabaseTransaction,
+  fence: MissionMemoryScopeFence,
+) {
+  const [mission] = await transaction
+    .select()
+    .from(missions)
+    .where(and(
+      eq(missions.organizationId, fence.organizationId),
+      eq(missions.id, fence.missionId),
+    ))
+    .limit(1)
+    .for("update");
+  if (!mission) throw new WorkspaceMemoryFenceError();
+  const conversation = await selectOneForLock(
+    transaction
+      .select()
+      .from(conversations)
+      .where(and(
+        eq(conversations.organizationId, fence.organizationId),
+        eq(conversations.id, mission.conversationId),
+      ))
+      .limit(1),
+    "update",
+  );
+  if (!conversation) throw new WorkspaceMemoryFenceError();
+  const hermesMemoryScope = await currentScopeForAccessibleConversation(transaction, conversation, "update");
+  if (hermesMemoryScope.scopeId !== fence.expectedScopeId) throw new WorkspaceMemoryFenceError();
+  return {
+    mission,
+    conversation,
+    hermesMemoryScope,
+    memoryFence: conversationMemoryFence(conversation, hermesMemoryScope.scopeId),
+  };
+}
+
+async function rotateConversationMemoryEpoch(
+  transaction: DatabaseTransaction,
+  organizationId: string,
+  conversationId: string,
+) {
+  const [conversation] = await transaction
+    .update(conversations)
+    .set({ memoryEpoch: sql`gen_random_uuid()`, hermesContextId: null, updatedAt: new Date() })
+    .where(and(
+      eq(conversations.organizationId, organizationId),
+      eq(conversations.id, conversationId),
+    ))
+    .returning();
+  if (!conversation) throw new WorkspaceAccessError("Conversation not found or access denied.");
+  return conversation;
+}
+
+async function rotateProjectConversationAudiencesForMember(
+  transaction: DatabaseTransaction,
+  organizationId: string,
+  projectId: string,
+  memberId: string,
+) {
+  const affected = await transaction
+    .select({ id: conversations.id })
+    .from(conversations)
+    .innerJoin(conversationGrants, and(
+      eq(conversationGrants.organizationId, conversations.organizationId),
+      eq(conversationGrants.conversationId, conversations.id),
+    ))
+    .where(and(
+      eq(conversations.organizationId, organizationId),
+      eq(conversations.projectId, projectId),
+      eq(conversationGrants.memberId, memberId),
+    ))
+    .for("update");
+  if (affected.length === 0) return;
+  await transaction
+    .update(conversations)
+    .set({ memoryEpoch: sql`gen_random_uuid()`, hermesContextId: null, updatedAt: new Date() })
+    .where(and(
+      eq(conversations.organizationId, organizationId),
+      inArray(conversations.id, affected.map(({ id }) => id)),
+    ));
 }
 
 type ProjectRepositoryAssociation = { deviceId: string; repositoryId: string };
@@ -470,11 +740,14 @@ export class WorkspaceRepository {
         eq(members.id, recipientMemberId),
       )).limit(1);
       if (!recipient || recipient.id === member.id) throw new WorkspaceAccessError("Project recipient not found or access denied.");
-      await transaction.insert(projectMembers).values({
+      const added = await transaction.insert(projectMembers).values({
         organizationId: scope.organizationId,
         projectId: project.id,
         memberId: recipient.id,
-      }).onConflictDoNothing();
+      }).onConflictDoNothing().returning({ memberId: projectMembers.memberId });
+      if (added.length > 0) {
+        await rotateProjectConversationAudiencesForMember(transaction, scope.organizationId, project.id, recipient.id);
+      }
       return this.projectView(transaction, project, member.id);
     });
   }
@@ -483,11 +756,14 @@ export class WorkspaceRepository {
     return this.database.withOrganization(scope.organizationId, async (transaction) => {
       const { member, project, canManage } = await requireProjectAccess(transaction, scope, projectId, { lock: "update" });
       if (!canManage || recipientMemberId === member.id) throw new WorkspaceAccessError("Project recipient not found or access denied.");
-      await transaction.delete(projectMembers).where(and(
+      const removed = await transaction.delete(projectMembers).where(and(
         eq(projectMembers.organizationId, scope.organizationId),
         eq(projectMembers.projectId, project.id),
         eq(projectMembers.memberId, recipientMemberId),
-      ));
+      )).returning({ memberId: projectMembers.memberId });
+      if (removed.length > 0) {
+        await rotateProjectConversationAudiencesForMember(transaction, scope.organizationId, project.id, recipientMemberId);
+      }
       return this.projectView(transaction, project, member.id);
     });
   }
@@ -596,11 +872,14 @@ export class WorkspaceRepository {
       if (conversation.projectId) {
         await requireProjectAccessForMember(transaction, scope.organizationId, recipient.id, conversation.projectId, "share");
       }
-      await transaction.insert(conversationGrants).values({
+      const added = await transaction.insert(conversationGrants).values({
         organizationId: scope.organizationId,
         conversationId: conversation.id,
         memberId: recipient.id,
-      }).onConflictDoNothing();
+      }).onConflictDoNothing().returning({ memberId: conversationGrants.memberId });
+      if (added.length > 0) {
+        await rotateConversationMemoryEpoch(transaction, scope.organizationId, conversation.id);
+      }
       return this.conversationView(transaction, conversation, member.id);
     });
   }
@@ -609,11 +888,14 @@ export class WorkspaceRepository {
     return this.database.withOrganization(scope.organizationId, async (transaction) => {
       const { member, conversation, canManage } = await requireConversationAccess(transaction, scope, conversationId, { lock: "update" });
       if (!canManage || recipientMemberId === member.id) throw new WorkspaceAccessError("Conversation recipient not found or access denied.");
-      await transaction.delete(conversationGrants).where(and(
+      const removed = await transaction.delete(conversationGrants).where(and(
         eq(conversationGrants.organizationId, scope.organizationId),
         eq(conversationGrants.conversationId, conversation.id),
         eq(conversationGrants.memberId, recipientMemberId),
-      ));
+      )).returning({ memberId: conversationGrants.memberId });
+      if (removed.length > 0) {
+        await rotateConversationMemoryEpoch(transaction, scope.organizationId, conversation.id);
+      }
       return this.conversationView(transaction, conversation, member.id);
     });
   }

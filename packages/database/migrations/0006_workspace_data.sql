@@ -39,7 +39,8 @@ ALTER TABLE "conversations"
   ADD COLUMN "parent_conversation_id" uuid,
   ADD COLUMN "mission_id" uuid,
   ADD COLUMN "kind" "workspace_conversation_kind" NOT NULL DEFAULT 'private',
-  ADD COLUMN "is_primary" boolean NOT NULL DEFAULT false;--> statement-breakpoint
+  ADD COLUMN "is_primary" boolean NOT NULL DEFAULT false,
+  ADD COLUMN "memory_epoch" uuid NOT NULL DEFAULT gen_random_uuid();--> statement-breakpoint
 WITH ranked AS (
   SELECT "id", row_number() OVER (
     PARTITION BY "organization_id", "owner_member_id" ORDER BY "created_at", "id"

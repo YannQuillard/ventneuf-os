@@ -271,6 +271,7 @@ export const conversations = pgTable(
     missionId: uuid("mission_id"),
     kind: workspaceConversationKind("kind").default("private").notNull(),
     isPrimary: boolean("is_primary").default(false).notNull(),
+    memoryEpoch: uuid("memory_epoch").defaultRandom().notNull(),
     hermesContextId: text("hermes_context_id"),
     title: text("title"),
     ...timestamps,
