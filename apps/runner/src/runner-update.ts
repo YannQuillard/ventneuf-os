@@ -11,7 +11,7 @@ const checksumName = `${archiveName}.sha256`;
 const maxArtifactBytes = 10 * 1024 * 1024;
 
 interface ReleaseAsset { name: string; browser_download_url: string }
-interface ReleaseResponse { tag_name?: unknown; assets?: unknown }
+interface ReleaseResponse { tag_name?: unknown; assets?: unknown; published_at?: unknown }
 
 function isRunnerRelease(value: unknown): value is ReleaseResponse & { tag_name: string } {
   return Boolean(value && typeof value === "object" && typeof (value as ReleaseResponse).tag_name === "string"
@@ -42,7 +42,14 @@ async function download(url: string, limit = maxArtifactBytes) {
 async function latestRelease(releasesUrl: string) {
   const response = JSON.parse((await download(releasesUrl, 1_000_000)).toString("utf8")) as unknown;
   const payload = (Array.isArray(response)
-    ? response.find(isRunnerRelease)
+    ? response.filter(isRunnerRelease).reduce<ReleaseResponse | undefined>((latest, candidate) => {
+      if (!latest) return candidate;
+      const latestPublishedAt = typeof latest.published_at === "string" ? Date.parse(latest.published_at) : Number.NaN;
+      const candidatePublishedAt = typeof candidate.published_at === "string" ? Date.parse(candidate.published_at) : Number.NaN;
+      return Number.isFinite(candidatePublishedAt) && (!Number.isFinite(latestPublishedAt) || candidatePublishedAt > latestPublishedAt)
+        ? candidate
+        : latest;
+    }, undefined)
     : response) as ReleaseResponse | undefined;
   if (!payload) throw new Error("No runner release is available.");
   const version = releaseVersion(payload.tag_name);

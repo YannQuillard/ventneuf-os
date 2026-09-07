@@ -18,6 +18,7 @@ test("downloads, verifies, atomically installs, and confirms a runner release", 
   const archive = join(temporary, "runner.tar.gz");
   const currentVersion = "1".repeat(40);
   const latestVersion = "2".repeat(40);
+  const staleVersion = "f".repeat(40);
   await mkdir(installation);
   await mkdir(releaseSource);
   await writeFile(join(installation, "index.js"), "old runner\n");
@@ -30,10 +31,13 @@ test("downloads, verifies, atomically installs, and confirms a runner release", 
   let servedChecksum = "0".repeat(64);
   const server = createServer((request, response) => {
     const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
-    if (request.url === "/latest") response.end(JSON.stringify([{ tag_name: `runner-${latestVersion}`, assets: [
-      { name: "ventneuf-runner-darwin.tar.gz", browser_download_url: `${base}/archive` },
-      { name: "ventneuf-runner-darwin.tar.gz.sha256", browser_download_url: `${base}/checksum` },
-    ] }]));
+    if (request.url === "/latest") response.end(JSON.stringify([
+      { tag_name: `runner-${staleVersion}`, published_at: "2026-01-01T00:00:00Z", assets: [] },
+      { tag_name: `runner-${latestVersion}`, published_at: "2026-01-02T00:00:00Z", assets: [
+        { name: "ventneuf-runner-darwin.tar.gz", browser_download_url: `${base}/archive` },
+        { name: "ventneuf-runner-darwin.tar.gz.sha256", browser_download_url: `${base}/checksum` },
+      ] },
+    ]));
     else if (request.url === "/archive") response.end(archiveBody);
     else if (request.url === "/checksum") response.end(`${servedChecksum}  ventneuf-runner-darwin.tar.gz\n`);
     else response.writeHead(404).end();
