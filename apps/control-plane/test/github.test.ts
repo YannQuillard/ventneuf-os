@@ -49,11 +49,14 @@ test("binds GitHub authorization and repository discovery to one member", async 
   const state = authorizationUrl.searchParams.get("state")!;
   await assert.rejects(connector.complete({ ...scope, externalSubject: "member-b" }, "github-code", state), /state is invalid/);
   await connector.complete(scope, "github-code", state);
-  assert.deepEqual(await connector.status(scope), {
-    connected: true,
-    login: "mateo",
-    installUrl: "https://github.com/apps/ventneuf-os/installations/new",
-  });
+  const status = await connector.status(scope);
+  assert.equal(status.connected, true);
+  assert.equal(status.login, "mateo");
+  const installUrl = new URL(status.installUrl);
+  assert.equal(`${installUrl.origin}${installUrl.pathname}`, "https://github.com/apps/ventneuf-os/installations/new");
+  const installState = installUrl.searchParams.get("state");
+  assert.ok(installState);
+  await assert.rejects(connector.complete({ ...scope, externalSubject: "member-b" }, "github-code", installState), /state is invalid/);
   assert.deepEqual(await connector.repositories(scope), [{
     id: "99",
     owner: "mateo",
