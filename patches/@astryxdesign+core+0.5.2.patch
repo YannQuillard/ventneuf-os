@@ -1,0 +1,13 @@
+diff --git a/node_modules/@astryxdesign/core/dist/Layer/layerHost.js b/node_modules/@astryxdesign/core/dist/Layer/layerHost.js
+index 0750ec2..85fe021 100644
+--- a/node_modules/@astryxdesign/core/dist/Layer/layerHost.js
++++ b/node_modules/@astryxdesign/core/dist/Layer/layerHost.js
+@@ -70,7 +70,7 @@ export function resolveLayerPortalTarget(inlineParent) {
+   let outermostUnsafe = null;
+   let node = inlineParent;
+   while (node) {
+-    if (UNSAFE_HOSTS.has(node.tagName.toLowerCase())) {
++    if (node.isContentEditable || UNSAFE_HOSTS.has(node.tagName.toLowerCase())) {
+       outermostUnsafe = node;
+     }
+     node = node.parentElement;

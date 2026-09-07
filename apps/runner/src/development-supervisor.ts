@@ -1,8 +1,9 @@
 import { ExecutionActivity, executionRecorder } from "./execution-activity.js";
+import { approvalCommand, approvalCommandSecrets, approvalReason } from "./approval-evidence.js";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { readFile, realpath, rm, writeFile } from "node:fs/promises";
-import { userInfo } from "node:os";
+import { homedir, userInfo } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
@@ -160,6 +161,24 @@ function commandReviewDetails(
   return { target: `${program} command`, command: `${program} command` };
 }
 
+function commandExpectedEffect(
+  category: AgentApprovalRequest["action"]["category"],
+  command: string,
+  cwd: string,
+  filesystemScope: "none" | "mission" | "external",
+  networkRequested: boolean,
+) {
+  if (category === "pull_request.create") return `The requested GitHub pull request may be created from ${cwd}.`;
+  if (category === "pull_request.merge") return `The requested GitHub pull request may be merged from ${cwd}.`;
+  if (category === "deployment.apply") return `External deployment state may be changed from ${cwd}.`;
+  if (/\bgit\s+push\b/i.test(command)) return `Git commits may be pushed to the configured remote from ${cwd}.`;
+  if (/\bgh\b[^\n]{0,200}\b(?:api|release)\b/i.test(command)) return `The GitHub API or release may be changed from ${cwd}.`;
+  if (/\bnpm\s+publish\b/i.test(command)) return `The package may be published from ${cwd}.`;
+  if (filesystemScope === "external") return `The command may access filesystem paths outside the mission worktree from ${cwd}.`;
+  if (networkRequested) return `The command may access the network from ${cwd}.`;
+  return `The command may use additional permissions from ${cwd}.`;
+}
+
 export function classifyCodexApproval(
   method: PendingApproval["method"],
   params: Record<string, unknown>,
@@ -233,17 +252,22 @@ export function classifyCodexApproval(
     };
   }
 
-  const command = bounded(params.command, 8_000);
+  const rawCommand = typeof params.command === "string" ? params.command.trim() : "";
+  const privatePaths = [worktree, homedir()];
+  const command = approvalCommand(rawCommand, privatePaths);
   const cwd = bounded(params.cwd, 1_000);
-  if (!command || !cwd || !isAbsolute(cwd) || !within(worktree, cwd)) return undefined;
-  const category = commandCategory(command, params);
+  if (!rawCommand || !cwd || !isAbsolute(cwd) || !within(worktree, cwd)) return undefined;
+  const category = commandCategory(rawCommand, params);
   const filesystemScope = requestedFilesystemScope(params.additionalPermissions, worktree);
   const review = filesystemScope === "external" && category === "development.command"
-    ? { target: "filesystem access outside the mission worktree", command: `${commandProgram(command)} command` }
-    : commandReviewDetails(command, category, params);
+    ? { target: "filesystem access outside the mission worktree", command: `${commandProgram(rawCommand)} command` }
+    : commandReviewDetails(rawCommand, category, params);
   const network = params.networkApprovalContext as { host?: unknown; protocol?: unknown } | undefined;
-  const material = JSON.stringify({ method, command, cwd: relative(worktree, cwd) || ".", category,
+  const relativeCwd = relative(worktree, cwd) || ".";
+  const material = JSON.stringify({ method, command: rawCommand, cwd: relativeCwd, category,
     network: params.networkApprovalContext ?? null, additionalPermissions: params.additionalPermissions ?? null });
+  const agentReason = approvalReason(params.reason ?? params.description, privatePaths, approvalCommandSecrets(rawCommand));
+  const expectedEffect = commandExpectedEffect(category, rawCommand, relativeCwd, filesystemScope, category === "network.access");
   return {
     requestId: randomUUID(),
     action: {
@@ -259,14 +283,20 @@ export function classifyCodexApproval(
             : category === "network.access"
               ? "Allow this Codex command to access the network."
               : "Allow this Codex command to run with additional permissions.",
-      expectedEffect: `The requested command may run from ${relative(worktree, cwd) || "."}.`.slice(0, 1_000),
+      expectedEffect,
     },
-    reason: "Codex requested additional permission for a development command.",
+    reason: agentReason
+      ? `Codex requested additional permission for a development command. Agent reason: ${agentReason.text}`
+      : "Codex requested additional permission for a development command.",
     evidence: {
       method,
-      command: review.command,
-      commandLength: command.length,
-      cwd: relative(worktree, cwd) || ".",
+      command: command.command,
+      commandLength: command.commandLength,
+      commandTruncated: command.commandTruncated,
+      commandRedacted: command.commandRedacted,
+      cwd: relativeCwd,
+      agentReason: agentReason?.text ?? "Codex requested additional permission for a development command.",
+      expectedEffect,
       ...(category === "network.access" ? { destination: review.target } : {}),
       ...(filesystemScope !== "none" ? { filesystem: filesystemScope } : {}),
       ...(network?.protocol && ["git", "http", "https", "ssh"].includes(String(network.protocol).toLowerCase())
