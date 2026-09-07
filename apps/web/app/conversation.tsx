@@ -71,12 +71,15 @@ function quoted(content: string) {
   return `${content.trim().split("\n").map((line) => `> ${line}`).join("\n")}\n\n`;
 }
 
-function lastAssistantRetry(messages: Message[]) {
+function lastAssistantRetry(messages: Message[], currentMemberId?: string) {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     if (messages[index].role !== "assistant") continue;
     for (let earlier = index - 1; earlier >= 0; earlier -= 1) {
       if (messages[earlier].role === "user") {
-        return { id: messages[index].id, prompt: messages[earlier].content };
+        const memberId = messages[earlier].memberId;
+        return !memberId || memberId === currentMemberId
+          ? { id: messages[index].id, prompt: messages[earlier].content }
+          : undefined;
       }
     }
     return undefined;
@@ -92,7 +95,8 @@ export function HermesConversation({ conversationId, title = "Hermes", subtitle 
   onAccessRevoked?: () => void;
   showSuggestions?: boolean;
 }) {
-  const { isMobile, openNavigation } = useWorkspaceNavigation();
+  const { isMobile, openNavigation, snapshot } = useWorkspaceNavigation();
+  const currentMemberId = snapshot?.currentMember.id;
   const [messages, setMessages] = useState<Message[]>([]);
   const [pending, setPending] = useState<PendingMessage[]>([]);
   const [content, setContent] = useState("");
@@ -321,11 +325,12 @@ export function HermesConversation({ conversationId, title = "Hermes", subtitle 
         role: "user",
         content: text,
         createdAt,
+        memberId: currentMemberId,
       })),
     ]
     : messages;
   const pendingById = new Map(pending.map((entry) => [entry.id, entry]));
-  const retry = lastAssistantRetry(messages);
+  const retry = lastAssistantRetry(messages, currentMemberId);
   const selected = selectedMessageId === undefined
     ? undefined
     : timeline.find(({ id }) => id === selectedMessageId);
@@ -346,6 +351,7 @@ export function HermesConversation({ conversationId, title = "Hermes", subtitle 
       <HStack height="100%">
         <VStack style={chatColumn}>
           <ConversationSurface value={content} onChange={setContent} inputRef={composerInput} error={error}
+            scope={conversationId ? "Conversation knowledge" : "Personal knowledge"}
             onSubmit={(value) => { setContent(""); void submit(value); }}
             emptyState={isLoaded ? (
               <VStack gap={6} hAlign="center" width="100%" maxWidth={560} padding={4}>
@@ -378,12 +384,6 @@ export function HermesConversation({ conversationId, title = "Hermes", subtitle 
           >
             {timeline.length > 0 || awaitingReply ? (
               <>
-              {approvals.filter((approval) => approval.missionId === (agentExecution?.missionId ?? mission?.id)).map((approval) => (
-                <VStack key={approval.id} padding={4} paddingBlockEnd={0}>
-                  <MissionApprovalRequest approval={approval} onDecided={refresh}
-                    onAskHermes={() => void submit(`Please explain approval request ${approval.id}, including why it is needed, its exact target, effect, and safer alternatives.`)} />
-                </VStack>
-              ))}
               <ChatMessageList isStreaming={awaitingReply || revealingId !== undefined}>
                 {timeline.map((message, index) => {
                   const entry = pendingById.get(message.id);
@@ -411,6 +411,7 @@ export function HermesConversation({ conversationId, title = "Hermes", subtitle 
                           : () => resend(retryPrompt, entry?.id)}
                         onDismiss={entry?.hasFailed ? () => dismiss(entry.id) : undefined}
                         onInspect={() => inspect(message.id)}
+                        currentMemberId={currentMemberId}
                         memoryHref={conversationId ? `/memory?conversationId=${encodeURIComponent(conversationId)}` : "/memory"}
                       />
                     </Fragment>
@@ -475,6 +476,12 @@ export function HermesConversation({ conversationId, title = "Hermes", subtitle 
                   </AssistantMessage>
                 ) : null}
               </ChatMessageList>
+              {approvals.filter((approval) => approval.missionId === (agentExecution?.missionId ?? mission?.id)).map((approval) => (
+                <VStack key={approval.id} padding={4} paddingBlockStart={0}>
+                  <MissionApprovalRequest approval={approval} onDecided={refresh}
+                    onAskHermes={() => void submit(`Please explain approval request ${approval.id}, including why it is needed, its exact target, effect, and safer alternatives.`)} />
+                </VStack>
+              ))}
               </>
             ) : null}
           </ConversationSurface>

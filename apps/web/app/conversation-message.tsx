@@ -30,6 +30,7 @@ interface ConversationMessageProps {
   onDismiss?: () => void;
   onInspect?: () => void;
   memoryHref?: string;
+  currentMemberId?: string;
 }
 
 function timing(message: Message): MissionTiming | undefined {
@@ -65,6 +66,8 @@ function InspectAction({ onInspect }: { onInspect?: () => void }) {
 function UserMessageActions({
   content,
   hasFailed,
+  isOwn,
+  onQuote,
   onEdit,
   onRetry,
   onDismiss,
@@ -72,6 +75,8 @@ function UserMessageActions({
 }: {
   content: string;
   hasFailed: boolean;
+  isOwn: boolean;
+  onQuote?: (content: string) => void;
   onEdit?: (content: string) => void;
   onRetry?: () => void;
   onDismiss?: () => void;
@@ -103,14 +108,24 @@ function UserMessageActions({
 
   return (
     <div className="message-actions">
-      {onEdit ? (
+      {isOwn && onEdit ? (
         <IconButton
-          label="Edit this message and send it again"
-          tooltip="Edit & resend"
+          label="Reuse this message in the composer"
+          tooltip="Reuse"
           variant="ghost"
           size="sm"
           icon={<Icon icon={PencilSquareIcon} size="sm" />}
           onClick={() => onEdit(content)}
+        />
+      ) : null}
+      {!isOwn && onQuote ? (
+        <IconButton
+          label="Quote this participant's message in the composer"
+          tooltip="Quote"
+          variant="ghost"
+          size="sm"
+          icon={<Icon icon={ArrowUturnLeftIcon} size="sm" />}
+          onClick={() => onQuote(content)}
         />
       ) : null}
       <InspectAction onInspect={onInspect} />
@@ -129,6 +144,7 @@ export function ConversationMessage({
   onDismiss,
   onInspect,
   memoryHref = "/memory",
+  currentMemberId,
 }: ConversationMessageProps) {
   if (message.role === "system" || message.role === "tool") {
     return (
@@ -139,8 +155,9 @@ export function ConversationMessage({
   }
 
   if (message.role === "user") {
+    const isOwn = !message.memberId || message.memberId === currentMemberId;
     return (
-      <ChatMessage sender="user" name={message.memberName}>
+      <ChatMessage sender={isOwn ? "user" : "assistant"} name={isOwn ? "You" : message.memberName}>
         <ChatMessageBubble
           metadata={(
             <ChatMessageMetadata
@@ -150,7 +167,9 @@ export function ConversationMessage({
                 <UserMessageActions
                   content={message.content}
                   hasFailed={status === "error"}
-                  onEdit={onEdit}
+                  isOwn={isOwn}
+                  onQuote={onQuote}
+                  onEdit={isOwn ? onEdit : undefined}
                   onRetry={onRetry}
                   onDismiss={onDismiss}
                   onInspect={onInspect}
