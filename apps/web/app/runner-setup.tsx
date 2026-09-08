@@ -282,6 +282,15 @@ function RowMetadata({ isWarning, label, children }: { isWarning?: boolean; labe
   </HStack>;
 }
 
+function Presence({ isOnline, lastSeenAt }: { isOnline: boolean; lastSeenAt?: string }) {
+  return <HStack gap={1.5} vAlign="center">
+    <StatusDot variant={isOnline ? "success" : "neutral"} label={isOnline ? "Online" : "Offline"} />
+    <Text type="supporting">{lastSeenAt
+      ? <>{isOnline ? "Heartbeat " : "Last seen "}<Timestamp value={lastSeenAt} format="time" /></>
+      : isOnline ? "Online" : "Offline"}</Text>
+  </HStack>;
+}
+
 function LoadingSection({ index, titleWidth, rows = 1 }: { index: number; titleWidth: number; rows?: number }) {
   return <VStack gap={3}>
     <Skeleton width={titleWidth} height={22} index={index} />
@@ -487,7 +496,7 @@ export function RunnerSetup() {
       {isOnline ? <VStack gap={4}>
         <Item density="compact" label={local?.device?.name ?? "This Mac"} description={localDetail}
           endContent={<HStack gap={2} vAlign="center">
-            {localDevice?.lastSeenAt ? <Text type="supporting">Heartbeat <Timestamp value={localDevice.lastSeenAt} format="time" /></Text> : null}
+            <Presence isOnline lastSeenAt={localDevice?.lastSeenAt} />
             {updateStatus?.available ? <Button label="Update" size="sm" variant="secondary" onClick={() => setUpdateOpen(true)} /> : null}
           </HStack>} />
 
@@ -538,8 +547,7 @@ export function RunnerSetup() {
         return <ListItem key={device.id} label={device.name}
           endContent={<HStack gap={2} vAlign="center">
             <Text type="supporting" maxLines={1}>{detail}</Text>
-            {device.lastSeenAt ? <Text type="supporting">{isDeviceOnline ? "Heartbeat " : "Last seen "}
-              <Timestamp value={device.lastSeenAt} format="time" /></Text> : null}
+            <Presence isOnline={isDeviceOnline} lastSeenAt={device.lastSeenAt} />
           </HStack>} />;
       })}</List> : <EmptyRow>No runners enrolled yet.</EmptyRow>}
     </Section> : null}
