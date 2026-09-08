@@ -104,7 +104,7 @@ test("workspace projects and conversations require explicit tenant-scoped grants
       insert into messages (organization_id, conversation_id, member_id, role, content)
       values (${organizationId}, ${ownerThread.id}, ${owner.id}, 'user', 'Private project request')
     `;
-    assert.deepEqual(await workspace.listConversations(collaboratorScope), []);
+    assert.deepEqual((await workspace.listConversations(collaboratorScope)).map(({ id }) => id), [project.generalConversationId]);
     await assert.rejects(workspace.getConversation(collaboratorScope, ownerThread.id), WorkspaceAccessError);
     await assert.rejects(workspace.listMessages(collaboratorScope, ownerThread.id), WorkspaceAccessError);
 
@@ -122,7 +122,10 @@ test("workspace projects and conversations require explicit tenant-scoped grants
     await admin`update conversations set hermes_context_id = 'private-context' where id = ${ownerThread.id}`;
 
     await workspace.shareConversation(ownerScope, ownerThread.id, collaborator.id);
-    assert.deepEqual((await workspace.listConversations(collaboratorScope)).map(({ id }) => id), [ownerThread.id]);
+    assert.deepEqual((await workspace.listConversations(collaboratorScope)).map(({ id }) => id), [
+      project.generalConversationId,
+      ownerThread.id,
+    ]);
     assert.equal((await workspace.listMessages(collaboratorScope, ownerThread.id))[0]?.content, "Private project request");
     const ownerSharedScope = await database.withOrganization(organizationId, (transaction) =>
       currentScopeForConversation(transaction, ownerScope, ownerThread.id));
