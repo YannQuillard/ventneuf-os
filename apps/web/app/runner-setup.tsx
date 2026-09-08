@@ -435,9 +435,9 @@ export function RunnerSetup() {
   const repositoryBeingConfigured = settings.repositories.find(({ id }) => id === repositoryToConfigure);
   const isRelocatingRepository = Boolean(repositoryBeingLocated && (localByGitHubId.get(repositoryBeingLocated.id)
     ?? localByGitHubId.get(repositoryBeingLocated.fullName.toLowerCase())));
-  const capabilities = (repositories: DeviceRepository[]) => [
-    repositories.some((repository) => repository.codexDevelopment) ? "Codex" : undefined,
-    repositories.some((repository) => repository.claudeDevelopment) ? "Claude Code" : undefined,
+  const capabilities = (repositories: DeviceRepository[], available?: LocalStatus["harnesses"]) => [
+    (available?.codex ?? repositories.some((repository) => repository.codexDevelopment || repository.orcaReview)) ? "Codex" : undefined,
+    (available?.claude ?? repositories.some((repository) => repository.claudeDevelopment)) ? "Claude Code" : undefined,
     repositories.some((repository) => repository.orcaReview) ? "Read-only review" : undefined,
   ].filter(Boolean).join(" · ");
 
@@ -497,8 +497,8 @@ export function RunnerSetup() {
     <VStack gap={3}><SectionHeader title="Runners" level={3} description="Enrolled Macs, their presence, and execution harnesses." />
       {isLoaded && cloudDevices.length ? cloudDevices.map((device) => {
         const repositories = device.repositories ?? [];
-        const harnesses = capabilities(repositories);
         const isLocal = local?.device?.id === device.id;
+        const harnesses = capabilities(repositories, isLocal ? local.harnesses : undefined);
         return <DeviceSection key={device.id} name={device.name} isOnline={recentlySeen(device)}
           detail={[device.platform === "darwin" ? "macOS" : device.platform, `${repositories.length} repositor${repositories.length === 1 ? "y" : "ies"}`, harnesses].filter(Boolean).join(" · ")}
           lastSeenAt={device.lastSeenAt} actions={isLocal && updateStatus?.available
