@@ -6,8 +6,10 @@ import {
   type RunnerApprovalResponse,
 } from "./mission-worker.js";
 import type { StoredDevice } from "./credential-store.js";
-import { reasoningEfforts, type AgentExecutionSnapshot, type ReasoningEffort } from "@ventneuf/domain";
+import type { AgentExecutionSnapshot, ReasoningEffort } from "@ventneuf/domain";
 import { isClaudeModel, type ClaudeModel, type MissionStatus } from "./repositories.js";
+
+const reasoningEfforts: readonly ReasoningEffort[] = ["low", "medium", "high", "xhigh", "max"];
 
 interface EnrollmentResponse {
   device: {
