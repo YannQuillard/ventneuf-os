@@ -87,8 +87,8 @@ export class RunnerUpdater {
     restart?: () => void;
   } = {}) {}
 
-  private async release() {
-    if (this.cached && this.cached.expiresAt > Date.now()) return this.cached.release;
+  private async release(forceRefresh = false) {
+    if (!forceRefresh && this.cached && this.cached.expiresAt > Date.now()) return this.cached.release;
     const release = await latestRelease(this.options.releasesUrl ?? defaultReleasesUrl);
     this.cached = { release, expiresAt: Date.now() + 15 * 60_000 };
     return release;
@@ -107,7 +107,7 @@ export class RunnerUpdater {
   }
 
   private async installRelease() {
-    const release = await this.release();
+    const release = await this.release(true);
     if ((await readRunnerVersion(this.installationDirectory)) === release.version) return release.version;
     const [archive, checksumFile] = await Promise.all([download(release.archiveUrl), download(release.checksumUrl, 1_024)]);
     const expectedChecksum = checksumFile.toString("utf8").trim().split(/\s+/)[0];

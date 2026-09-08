@@ -29,15 +29,19 @@ test("downloads, verifies, atomically installs, and confirms a runner release", 
   const archiveBody = await readFile(archive);
   const checksum = createHash("sha256").update(archiveBody).digest("hex");
   let servedChecksum = "0".repeat(64);
+  let releaseRequests = 0;
   const server = createServer((request, response) => {
     const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
-    if (request.url === "/latest") response.end(JSON.stringify([
-      { tag_name: `runner-${staleVersion}`, published_at: "2026-01-01T00:00:00Z", assets: [] },
-      { tag_name: `runner-${latestVersion}`, published_at: "2026-01-02T00:00:00Z", assets: [
-        { name: "ventneuf-runner-darwin.tar.gz", browser_download_url: `${base}/archive` },
-        { name: "ventneuf-runner-darwin.tar.gz.sha256", browser_download_url: `${base}/checksum` },
-      ] },
-    ]));
+    if (request.url === "/latest") {
+      releaseRequests += 1;
+      response.end(JSON.stringify([
+        { tag_name: `runner-${staleVersion}`, published_at: "2026-01-01T00:00:00Z", assets: [] },
+        { tag_name: `runner-${latestVersion}`, published_at: "2026-01-02T00:00:00Z", assets: [
+          { name: "ventneuf-runner-darwin.tar.gz", browser_download_url: `${base}/archive` },
+          { name: "ventneuf-runner-darwin.tar.gz.sha256", browser_download_url: `${base}/checksum` },
+        ] },
+      ]));
+    }
     else if (request.url === "/archive") response.end(archiveBody);
     else if (request.url === "/checksum") response.end(`${servedChecksum}  ventneuf-runner-darwin.tar.gz\n`);
     else response.writeHead(404).end();
@@ -51,12 +55,15 @@ test("downloads, verifies, atomically installs, and confirms a runner release", 
     assert.equal(await readFile(join(installation, "index.js"), "utf8"), "old runner\n");
     assert.equal(restarted, false);
     servedChecksum = checksum;
+    releaseRequests = 0;
     const updater = new RunnerUpdater(installation, {
       releasesUrl,
       restart: () => { restarted = true; },
     });
     assert.deepEqual(await updater.status(), { currentVersion, latestVersion, available: true });
+    assert.equal(releaseRequests, 1);
     assert.equal(await updater.install(), latestVersion);
+    assert.equal(releaseRequests, 2);
     assert.equal(await readFile(join(installation, "index.js"), "utf8"), "new runner\n");
     assert.equal(restarted, true);
     assert.equal(await readFile(`${installation}.previous/index.js`, "utf8"), "old runner\n");
