@@ -87,6 +87,10 @@ if (command === "install") {
     allowedOrigins,
     repositoriesFile,
     selectFolder,
+    harnesses: {
+      codex: Boolean(process.env.VENTNEUF_ORCA_PATH && process.env.VENTNEUF_CODEX_PATH),
+      claude: Boolean(process.env.VENTNEUF_ORCA_PATH && process.env.VENTNEUF_CLAUDE_PATH),
+    },
     updater: new RunnerUpdater(dirname(fileURLToPath(import.meta.url))),
   });
   await bridge.start(port);

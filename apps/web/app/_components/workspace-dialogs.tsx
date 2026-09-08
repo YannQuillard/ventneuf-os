@@ -229,7 +229,7 @@ export function NewMissionDialog({ isOpen, onOpenChange, projectName, initialObj
     <Selector label="Execution harness and lead model" value={harnessSelection} onChange={value => { setHarnessSelection(value); setSubagentModels(["inherit"]); }} isRequired
       options={harnessOptions.map(({ value, label }) => ({ value, label }))} isDisabled={!harnessOptions.length}
       disabledMessage="Enable Codex or Claude Code development on a repository associated with this project."
-      description="The mission runs in this native subscription; Hermes only coordinates its dispatch." />
+      description="The mission runs with the selected native subscription." />
     <Selector label="Lead agent reasoning" value={leadReasoningEffort} onChange={value => setLeadReasoningEffort(value as ReasoningEffort)} isRequired
       options={[{ value: "low", label: "Low" }, { value: "medium", label: "Medium" }, { value: "high", label: "High" }, { value: "xhigh", label: "Extra high" }, { value: "max", label: "Maximum" }]}
       description="Applied to the main Codex or Claude Code agent." />

@@ -2,11 +2,13 @@
 
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
+import { CheckboxInput } from "@astryxdesign/core/CheckboxInput";
 import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
 import { FormLayout } from "@astryxdesign/core/FormLayout";
 import { HStack, Layout, LayoutContent, LayoutFooter, StackItem, VStack } from "@astryxdesign/core/Layout";
 import { List, ListItem } from "@astryxdesign/core/List";
 import { MoreMenu } from "@astryxdesign/core/MoreMenu";
+import { MultiSelector } from "@astryxdesign/core/MultiSelector";
 import { Selector } from "@astryxdesign/core/Selector";
 import { Skeleton } from "@astryxdesign/core/Skeleton";
 import { StatusDot } from "@astryxdesign/core/StatusDot";
@@ -19,15 +21,17 @@ import { DeviceSection } from "./_components/device-section";
 const localRunnerUrl = "http://127.0.0.1:41929";
 
 interface DeviceRepository {
-  id: string; name: string; orcaReview?: boolean; codexDevelopment?: boolean; claudeDevelopment?: boolean;
+  id: string; name: string; orcaReview?: boolean; codexDevelopment?: boolean; codexModels?: string[];
+  claudeDevelopment?: boolean; claudeModels?: string[];
 }
 interface Device { id: string; name: string; platform: string; repositories?: DeviceRepository[]; lastSeenAt?: string }
-interface LocalStatus { status: "online" | "not_enrolled"; device?: Device }
+interface LocalStatus { status: "online" | "not_enrolled"; device?: Device; harnesses?: { codex: boolean; claude: boolean } }
 interface RunnerUpdateStatus { currentVersion: string; latestVersion: string; available: boolean }
 interface GitHubStatus { connected: boolean; login?: string; installUrl: string }
 interface GitHubRepository { id: string; fullName: string; private?: boolean; htmlUrl: string; cloneUrl: string }
 interface LocalRepository {
   id: string; name: string; path: string; available: boolean;
+  codexDevelopment?: boolean; codexModels?: string[]; claudeDevelopment?: boolean; claudeModels?: string[];
   github?: { id?: string; owner: string; name: string };
 }
 interface RepositorySettings {
@@ -156,6 +160,65 @@ function RepositoryDialog({ isOpen, onOpenChange, repositories, searchFolderCoun
   </Dialog>;
 }
 
+function HarnessDialog({ isOpen, onOpenChange, repository, available, onSaved }: {
+  isOpen: boolean;
+  onOpenChange: (isOpen: boolean) => void;
+  repository?: LocalRepository;
+  available?: { codex: boolean; claude: boolean };
+  onSaved: () => Promise<void>;
+}) {
+  const [codex, setCodex] = useState(false);
+  const [codexModels, setCodexModels] = useState("");
+  const [claude, setClaude] = useState(false);
+  const [claudeModels, setClaudeModels] = useState<string[]>(["opus"]);
+  const [error, setError] = useState<string>();
+  const [isSaving, setSaving] = useState(false);
+  useEffect(() => {
+    if (!isOpen) return;
+    setCodex(Boolean(repository?.codexDevelopment));
+    setCodexModels(repository?.codexModels?.join(", ") ?? "");
+    setClaude(Boolean(repository?.claudeDevelopment));
+    setClaudeModels(repository?.claudeModels?.length ? repository.claudeModels : ["opus"]);
+    setError(undefined);
+  }, [isOpen, repository]);
+  const save = async () => {
+    if (!repository) return;
+    const parsedCodexModels = codexModels.split(",").map(model => model.trim()).filter(Boolean);
+    if (claude && !claudeModels.length) return setError("Choose at least one Claude Code model.");
+    setSaving(true); setError(undefined);
+    try {
+      await localRequest("/repositories/capabilities", { method: "PATCH", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: repository.id, codexDevelopment: codex,
+          ...(codex && parsedCodexModels.length ? { codexModels: parsedCodexModels } : {}),
+          claudeDevelopment: claude, ...(claude ? { claudeModels } : {}) }) });
+      await onSaved(); onOpenChange(false);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to save execution harnesses."); }
+    finally { setSaving(false); }
+  };
+  return <Dialog isOpen={isOpen} onOpenChange={onOpenChange} purpose="form" width={560}>
+    <Layout height="auto" defaultHasDividers
+      header={<DialogHeader title="Execution harnesses" subtitle={repository?.name} onOpenChange={onOpenChange} />}
+      content={<LayoutContent padding={4}><FormLayout defaultOptionality="optional">
+        <CheckboxInput label="Codex" value={codex} onChange={setCodex}
+          description="Allow missions for this repository to run with your Codex subscription."
+          isDisabled={available?.codex === false} disabledMessage="Codex is not configured in this runner service." />
+        {codex ? <TextInput label="Codex models" value={codexModels} onChange={setCodexModels} isOptional
+          placeholder="Use subscription default" description="Optional comma-separated model IDs available to this subscription." /> : null}
+        <CheckboxInput label="Claude Code" value={claude} onChange={setClaude}
+          description="Allow missions for this repository to run with your Claude Code subscription."
+          isDisabled={available?.claude === false} disabledMessage="Claude Code is not configured in this runner service." />
+        {claude ? <MultiSelector label="Claude Code models" value={claudeModels} onChange={setClaudeModels}
+          options={[{ value: "opus", label: "Opus" }, { value: "sonnet", label: "Sonnet" }, { value: "fable", label: "Fable" }]}
+          triggerDisplay="labels" isRequired description="Models available for lead agents and native sub-agents." /> : null}
+        {error ? <Text type="supporting" role="alert">{error}</Text> : null}
+      </FormLayout></LayoutContent>}
+      footer={<LayoutFooter><HStack gap={2} hAlign="end">
+        <Button label="Cancel" variant="secondary" onClick={() => onOpenChange(false)} />
+        <Button label="Save harnesses" variant="primary" isLoading={isSaving} clickAction={save} />
+      </HStack></LayoutFooter>} />
+  </Dialog>;
+}
+
 function RunnerUpdateDialog({ isOpen, onOpenChange, status, onUpdate }: {
   isOpen: boolean; onOpenChange: (isOpen: boolean) => void; status?: RunnerUpdateStatus; onUpdate: () => Promise<void>;
 }) {
@@ -225,6 +288,7 @@ export function RunnerSetup() {
   const [folderToEdit, setFolderToEdit] = useState<string>();
   const [isRepositoryOpen, setRepositoryOpen] = useState(false);
   const [repositoryToLocate, setRepositoryToLocate] = useState<string>();
+  const [repositoryToConfigure, setRepositoryToConfigure] = useState<string>();
   const [isUpdateOpen, setUpdateOpen] = useState(false);
 
   const refresh = useCallback(async (includeGitHub = true) => {
@@ -368,6 +432,7 @@ export function RunnerSetup() {
     };
   }), [githubRepositories, settings.repositories]);
   const repositoryBeingLocated = repositoryChoices.find(({ id }) => id === repositoryToLocate);
+  const repositoryBeingConfigured = settings.repositories.find(({ id }) => id === repositoryToConfigure);
   const isRelocatingRepository = Boolean(repositoryBeingLocated && (localByGitHubId.get(repositoryBeingLocated.id)
     ?? localByGitHubId.get(repositoryBeingLocated.fullName.toLowerCase())));
   const capabilities = (repositories: DeviceRepository[]) => [
@@ -412,12 +477,15 @@ export function RunnerSetup() {
         }) => {
           const status = localRepository.available ? "Available on this Mac" : "Local folder not found";
           const visibility = isPrivate === undefined ? undefined : isPrivate ? "Private" : "Public";
-          return <ListItem key={localRepository.id} label={fullName} description={[visibility, status].filter(Boolean).join(" · ")}
+          const harnesses = [localRepository.codexDevelopment ? "Codex" : undefined,
+            localRepository.claudeDevelopment ? "Claude Code" : undefined].filter(Boolean).join(" · ");
+          return <ListItem key={localRepository.id} label={fullName} description={[visibility, status, harnesses].filter(Boolean).join(" · ")}
             startContent={!localRepository.available ? <StatusDot variant="warning" label="Missing" /> : undefined}
             endContent={<HStack gap={2}>
               {!localRepository.available && choiceId ? <Button label="Relocate" size="sm" variant="secondary"
                 onClick={() => { setRepositoryToLocate(choiceId); setRepositoryOpen(true); }} /> : null}
               <MoreMenu label={`Options for ${fullName}`} size="sm" alignment="end" items={[
+                { label: "Execution harnesses", onClick: () => setRepositoryToConfigure(localRepository.id) },
                 ...(choiceId ? [{ label: "Change local folder", onClick: () => { setRepositoryToLocate(choiceId); setRepositoryOpen(true); } }] : []),
                 { label: "Remove from this Mac", onClick: () => void removeRepository(localRepository.id) },
               ]} />
@@ -445,6 +513,9 @@ export function RunnerSetup() {
       searchFolderCount={settings.searchFolders.filter(({ available }) => available).length} initialRepositoryId={repositoryToLocate}
       requirePath={isRelocatingRepository}
       onSaved={async (name) => { await refresh(); toast({ body: `${name} connected to this Mac`, uniqueID: "repository-connected" }); }} />
+    <HarnessDialog isOpen={Boolean(repositoryToConfigure)} onOpenChange={isOpen => { if (!isOpen) setRepositoryToConfigure(undefined); }}
+      repository={repositoryBeingConfigured} available={local?.harnesses}
+      onSaved={async () => { await refresh(); toast({ body: "Execution harnesses updated", uniqueID: "repository-harnesses-updated" }); }} />
     <RunnerUpdateDialog isOpen={isUpdateOpen} onOpenChange={setUpdateOpen} status={updateStatus} onUpdate={updateRunner} />
   </VStack>;
 }

@@ -99,6 +99,7 @@ test("finds a GitHub checkout locally without returning its path", async () => {
     allowedOrigins: new Set([origin]),
     repositoriesFile,
     selectFolder: async () => temporary,
+    harnesses: { codex: true, claude: true },
   });
   const { server, port } = await bridge.start(0);
   try {
@@ -130,6 +131,23 @@ test("finds a GitHub checkout locally without returning its path", async () => {
         github: { id: "123456789", owner: "onlinenow", name: "private-repository" },
       }],
     });
+
+    const capabilities = await fetch(`http://127.0.0.1:${port}/repositories/capabilities`, {
+      method: "PATCH", headers: { origin, "content-type": "application/json" }, body: JSON.stringify({
+        id: configuration[0]?.id, codexDevelopment: true, codexModels: ["gpt-5.3-codex"],
+        claudeDevelopment: true, claudeModels: ["opus", "sonnet"],
+      }),
+    });
+    assert.equal(capabilities.status, 200);
+    const configured = JSON.parse(await readFile(repositoriesFile, "utf8")) as Array<Record<string, unknown>>;
+    assert.equal(configured[0]?.codexDevelopment, true);
+    assert.deepEqual(configured[0]?.codexModels, ["gpt-5.3-codex"]);
+    assert.equal(configured[0]?.claudeDevelopment, true);
+    assert.deepEqual(configured[0]?.claudeModels, ["opus", "sonnet"]);
+    const configuredSettings = await fetch(`http://127.0.0.1:${port}/repository-settings`, { headers: { origin } });
+    const configuredBody = await configuredSettings.json() as { repositories: Array<Record<string, unknown>> };
+    assert.equal(configuredBody.repositories[0]?.codexDevelopment, true);
+    assert.equal(configuredBody.repositories[0]?.claudeDevelopment, true);
 
     const selected = await fetch(`http://127.0.0.1:${port}/folders/select`, { method: "POST", headers: { origin } });
     assert.deepEqual(await selected.json(), { path: temporary });
