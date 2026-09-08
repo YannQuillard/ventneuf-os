@@ -37,6 +37,7 @@ export class RunnerCloudClient {
     name: string;
     orcaReview?: boolean;
     codexDevelopment?: boolean;
+    codexModels?: string[];
     claudeDevelopment?: boolean;
     claudeModels?: ClaudeModel[];
     github?: { id?: string; owner: string; name: string };
@@ -56,8 +57,12 @@ export class RunnerCloudClient {
       || !Number.isFinite(Date.parse(mission.leaseExpiresAt))
       || (["codex-development", "claude-development"].includes(mission.adapter)
         && (!mission.authorityExpiresAt || !Number.isFinite(Date.parse(mission.authorityExpiresAt))))
-      || (mission.adapter === "claude-development" ? !isClaudeModel(mission.model) : mission.model !== undefined)
+      || (mission.adapter === "claude-development" ? !isClaudeModel(mission.model)
+        : !mission.adapter.endsWith("development") && mission.model !== undefined)
       || (mission.reasoningEffort !== undefined && !reasoningEfforts.includes(mission.reasoningEffort as ReasoningEffort))
+      || (mission.subagents !== undefined && (!Array.isArray(mission.subagents.models) || !mission.subagents.models.length
+        || mission.subagents.models.length > 8 || mission.subagents.models.some(model => typeof model !== "string" || !model)
+        || !reasoningEfforts.includes(mission.subagents.reasoningEffort)))
       || (mission.approvalDecision !== undefined && !this.isApprovalDecision(mission.approvalDecision))) {
       throw new Error("Invalid runner mission response.");
     }

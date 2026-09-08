@@ -28,8 +28,8 @@ export interface WorkspaceProject {
 export type ConversationKind = "private" | "topic" | "mission";
 export type ReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max";
 export interface MissionExecutionPreferences {
-  orchestrator: { model: string; reasoningEffort: ReasoningEffort };
-  agents: Array<{ provider: "claude"; model: string; reasoningEffort: ReasoningEffort }>;
+  harness: { provider: "codex" | "claude"; model?: string; reasoningEffort: ReasoningEffort };
+  subagents: { models: string[]; reasoningEffort: ReasoningEffort };
 }
 
 export interface WorkspaceConversation {
@@ -74,7 +74,48 @@ export interface WorkspaceDevice {
   id: string;
   name: string;
   lastSeenAt?: string;
-  repositories?: Array<{ id: string; name: string; github?: { id?: string; owner: string; name: string } }>;
+  repositories?: Array<{ id: string; name: string; codexDevelopment?: boolean; codexModels?: string[];
+    claudeDevelopment?: boolean; claudeModels?: string[]; github?: { id?: string; owner: string; name: string } }>;
+}
+
+export interface MissionHarnessOption {
+  value: string;
+  label: string;
+  provider: "codex" | "claude";
+  model?: string;
+  subagentModels: Array<{ value: string; label: string }>;
+}
+
+export function missionHarnessOptions(project: WorkspaceProject, devices: WorkspaceDevice[]): MissionHarnessOption[] {
+  let codexEnabled = false;
+  const codexModels = new Set<string>();
+  const claudeModels = new Set<string>();
+  for (const association of project.repositoryAssociations) {
+    const repository = devices.find(({ id }) => id === association.deviceId)?.repositories
+      ?.find(({ id }) => id === association.repositoryId);
+    if (repository?.codexDevelopment) {
+      codexEnabled = true;
+      repository.codexModels?.forEach(model => codexModels.add(model));
+    }
+    if (repository?.claudeDevelopment) repository.claudeModels?.forEach(model => claudeModels.add(model));
+  }
+  return [
+    ...(codexEnabled ? ([...codexModels].length ? [...codexModels].sort().map(model => ({
+      value: `codex:${model}`, label: `Codex · ${model}`, provider: "codex" as const, model,
+      subagentModels: [{ value: "inherit", label: "Inherit lead model" },
+        ...[...codexModels].sort().map(value => ({ value, label: value }))],
+    })) : [{ value: "codex", label: "Codex · Subscription default", provider: "codex" as const,
+      subagentModels: [{ value: "inherit", label: "Inherit lead model" }] }]) : []),
+    ...[...claudeModels].sort().map(model => ({
+      value: `claude:${model}`,
+      label: `Claude Code · ${model.charAt(0).toUpperCase()}${model.slice(1)}`,
+      provider: "claude" as const,
+      model,
+      subagentModels: [{ value: "inherit", label: "Inherit lead model" }, ...[...claudeModels].sort().map(value => ({
+        value, label: value.charAt(0).toUpperCase() + value.slice(1),
+      }))],
+    })),
+  ];
 }
 
 export interface MemoryEntry {

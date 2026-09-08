@@ -17,7 +17,7 @@ import { MoreMenu } from "@astryxdesign/core/MoreMenu";
 import { CodeBracketIcon, RocketLaunchIcon, Squares2X2Icon, UserGroupIcon } from "@heroicons/react/24/outline";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { conversationHref, workspaceRequest, type MissionExecutionPreferences, type WorkspaceConversation, type WorkspaceProject } from "../lib/workspace";
+import { conversationHref, missionHarnessOptions, workspaceRequest, type MissionExecutionPreferences, type WorkspaceConversation, type WorkspaceProject } from "../lib/workspace";
 import { AddProjectMemoryDialog, NewMissionDialog, NewProjectDialog, ShareResourceDialog } from "./_components/workspace-dialogs";
 import { HermesConversation } from "./conversation";
 import { useWorkspaceNavigation } from "./workspace";
@@ -72,6 +72,7 @@ export function ProjectScreen({ projectId }: { projectId: string }) {
   };
   const owner = snapshot?.members.find(({ id }) => id === project.ownerMemberId);
   const visibility = project.recipients.length ? `Shared with ${project.recipients.length}` : "Private project";
+  const availableHarnesses = missionHarnessOptions(project, devices);
 
   const share = async (added: string[], removed: string[]) => {
     for (const memberId of added) await workspaceRequest(`/projects/${encodeURIComponent(project.id)}/members/${encodeURIComponent(memberId)}`, { method: "PUT" });
@@ -116,6 +117,7 @@ export function ProjectScreen({ projectId }: { projectId: string }) {
       </HStack>} />
     <AddProjectMemoryDialog isOpen={isMemoryOpen} onOpenChange={setMemoryOpen} projectName={project.name} onAdd={addProjectMemory} />
     <NewMissionDialog isOpen={isMissionOpen} onOpenChange={setMissionOpen} projectName={project.name}
+      harnessOptions={availableHarnesses}
       initialTitle={missionRequest ? `Follow up with ${missionRequest.actorName}` : undefined}
       initialObjective={missionRequest?.summary} onCreate={createMission} />
   </>;
@@ -183,6 +185,7 @@ export function ProjectScreen({ projectId }: { projectId: string }) {
     </VStack></LayoutHeader>}
       content={<LayoutContent padding={0} label={`${project.name} ${view}`}><div id={`project-${view}`} role="tabpanel">{content}</div></LayoutContent>} />
     <NewMissionDialog isOpen={isMissionOpen} onOpenChange={setMissionOpen} projectName={project.name}
+      harnessOptions={availableHarnesses}
       initialTitle={missionRequest ? `Follow up with ${missionRequest.actorName}` : undefined}
       initialObjective={missionRequest?.summary} onCreate={createMission} />
     <NewProjectDialog isOpen={isEditOpen} onOpenChange={setEditOpen} devices={devices}

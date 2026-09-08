@@ -13,6 +13,7 @@ const targetSchema = z.object({
   projectId: z.string().uuid().optional(),
   projectName: z.string().max(100).optional(),
   adapters: z.array(adapterSchema).min(1).max(4),
+  codexModels: z.array(z.string().trim().min(1).max(100)).min(1).max(20).optional(),
   claudeModels: z.array(z.enum(claudeModelAliases)).min(1).max(claudeModelAliases.length).optional(),
 }).strict().superRefine((target, context) => {
   if (target.adapters.includes("claude-development") !== Boolean(target.claudeModels?.length)) {
@@ -21,6 +22,9 @@ const targetSchema = z.object({
       path: ["claudeModels"],
       message: "Claude models must be present exactly when Claude development is delegated.",
     });
+  }
+  if (!target.adapters.includes("codex-development") && target.codexModels?.length) {
+    context.addIssue({ code: "custom", path: ["codexModels"], message: "Codex models require delegated Codex development." });
   }
 });
 

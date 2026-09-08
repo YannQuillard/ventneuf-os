@@ -32,8 +32,8 @@ export const reasoningEfforts = ["low", "medium", "high", "xhigh", "max"] as con
 export type ReasoningEffort = typeof reasoningEfforts[number];
 
 export interface MissionExecutionPreferences {
-  orchestrator: { model: string; reasoningEffort: ReasoningEffort };
-  agents: Array<{ provider: "codex" | "claude"; model: string; reasoningEffort: ReasoningEffort }>;
+  harness: { provider: "codex" | "claude"; model?: string; reasoningEffort: ReasoningEffort };
+  subagents: { models: string[]; reasoningEffort: ReasoningEffort };
 }
 
 export type ApprovalActionCategory = typeof approvalActionCategories[number];

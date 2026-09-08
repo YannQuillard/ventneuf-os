@@ -36,6 +36,7 @@ export interface MissionClient {
     name: string;
     orcaReview?: boolean;
     codexDevelopment?: boolean;
+    codexModels?: string[];
     claudeDevelopment?: boolean;
     claudeModels?: ClaudeModel[];
     github?: { id?: string; owner: string; name: string };
@@ -74,8 +75,9 @@ export class RunnerMissionWorker {
         });
       }
       await this.options.client.registerRepositories(device, repositories.map(({
-        id, name, orcaReview, codexDevelopment, claudeDevelopment, claudeModels, github,
+        id, name, orcaReview, codexDevelopment, codexModels, claudeDevelopment, claudeModels, github,
       }) => ({ id, name, ...(orcaReview ? { orcaReview } : {}), ...(codexDevelopment ? { codexDevelopment } : {}),
+        ...(codexModels ? { codexModels } : {}),
         ...(claudeDevelopment ? { claudeDevelopment } : {}), ...(claudeModels ? { claudeModels } : {}),
         ...(github ? { github } : {}) })));
       const mission = await this.options.client.claimMission(device, this.owner);
@@ -134,11 +136,15 @@ export class RunnerMissionWorker {
             throw new Error("Orca review is not enabled for this repository.");
           }
           if (mission.adapter === "codex-development" && (!repository.codexDevelopment
+            || (mission.model === undefined ? Boolean(repository.codexModels?.length) : !repository.codexModels?.includes(mission.model))
+            || mission.subagents?.models.some(model => model !== "inherit" && !repository.codexModels?.includes(model))
             || !Number.isFinite(deadline) || deadline <= Date.now())) {
             throw new Error("Codex development is not enabled or its authority expired.");
           }
           if (mission.adapter === "claude-development" && (!repository.claudeDevelopment
-            || !mission.model || !repository.claudeModels?.includes(mission.model)
+            || !mission.model || !(repository.claudeModels as readonly string[] | undefined)?.includes(mission.model)
+            || mission.subagents?.models.some(model => model !== "inherit"
+              && !(repository.claudeModels as readonly string[] | undefined)?.includes(model))
             || !Number.isFinite(deadline) || deadline <= Date.now())) {
             throw new Error("Claude development is not enabled or its authority expired.");
           }

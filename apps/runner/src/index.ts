@@ -102,6 +102,9 @@ if (command === "install") {
         ...repository,
         orcaReview: Boolean(review && repository.orcaReview),
         codexDevelopment: Boolean(development && repository.codexDevelopment),
+        ...(development && repository.codexDevelopment && repository.codexModels
+          ? { codexModels: repository.codexModels }
+          : {}),
         claudeDevelopment: Boolean(claudeDevelopment && repository.claudeDevelopment),
         ...(claudeDevelopment && repository.claudeDevelopment && repository.claudeModels
           ? { claudeModels: repository.claudeModels }

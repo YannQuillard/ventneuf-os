@@ -315,8 +315,9 @@ export class AgentDevelopmentAdapter implements MissionAdapter {
       missionId: mission.id,
       repositoryId: repository.id,
       objective: mission.objective,
-      ...(this.options.agent === "claude" ? { model: mission.model } : {}),
+      ...(mission.model ? { model: mission.model } : {}),
       ...(mission.reasoningEffort ? { reasoningEffort: mission.reasoningEffort } : {}),
+      ...(mission.subagents ? { subagents: mission.subagents } : {}),
       ...(this.options.agent === "codex" ? { codexPath: this.options.agentPath } : { claudePath: this.options.agentPath }),
       gitPath,
       gitAuthorName,
@@ -399,8 +400,9 @@ export class AgentDevelopmentAdapter implements MissionAdapter {
     if (mission.adapter !== adapter || mission.repositoryId !== repository.id
       || !enabled || !execution || !/^[a-f0-9-]{36}$/.test(mission.id)
       || (this.options.agent === "claude"
-        && (!mission.model || !repository.claudeModels?.includes(mission.model)))
-      || (this.options.agent === "codex" && mission.model !== undefined)
+        && (!mission.model || !(repository.claudeModels as readonly string[] | undefined)?.includes(mission.model)))
+      || (this.options.agent === "codex"
+        && (mission.model === undefined ? Boolean(repository.codexModels?.length) : !repository.codexModels?.includes(mission.model)))
       || !mission.authorityExpiresAt) throw new Error("The development mission is outside this repository scope.");
     const authorityExpiresAt = Date.parse(mission.authorityExpiresAt);
     if (!Number.isFinite(authorityExpiresAt) || authorityExpiresAt <= Date.now()) throw new Error("Development authority expired.");
@@ -422,6 +424,7 @@ export class AgentDevelopmentAdapter implements MissionAdapter {
       || (job.agent ?? "codex") !== this.options.agent
       || job.model !== mission.model
       || job.reasoningEffort !== mission.reasoningEffort
+      || JSON.stringify(job.subagents) !== JSON.stringify(mission.subagents)
       || configuredAgentPath !== this.options.agentPath || job.gitPath !== gitPath
       || job.authorityExpiresAt !== authorityExpiresAt
       || await realpath(state.worktreePath) !== state.worktreePath) {

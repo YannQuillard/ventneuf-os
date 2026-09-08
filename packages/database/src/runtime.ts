@@ -36,6 +36,7 @@ export interface HermesDispatchScope {
     projectId?: string;
     projectName?: string;
     adapters: DelegatedRunnerAdapter[];
+    codexModels?: string[];
     claudeModels?: ClaudeModel[];
   }>;
 }
@@ -45,19 +46,21 @@ function repositorySupports(
     id: string;
     orcaReview?: boolean;
     codexDevelopment?: boolean;
+    codexModels?: string[];
     claudeDevelopment?: boolean;
     claudeModels?: ClaudeModel[];
   },
   repositoryId: string,
   adapter: DelegatedRunnerAdapter,
-  model?: ClaudeModel,
+  model?: string,
 ) {
   return repository.id === repositoryId
     && (adapter !== "orca-review" || repository.orcaReview === true)
-    && (adapter !== "codex-development" || repository.codexDevelopment === true)
+    && (adapter !== "codex-development" || (repository.codexDevelopment === true
+      && (model === undefined ? !repository.codexModels?.length : repository.codexModels?.includes(model) === true)))
     && (adapter !== "claude-development" || (repository.claudeDevelopment === true
-      && model !== undefined && repository.claudeModels?.includes(model) === true))
-    && (adapter === "claude-development" || model === undefined);
+      && model !== undefined && (repository.claudeModels as readonly string[] | undefined)?.includes(model) === true))
+    && (!adapter.endsWith("development") ? model === undefined : true);
 }
 
 export class ConversationRuntimeRepository {
@@ -75,7 +78,8 @@ export class ConversationRuntimeRepository {
     content: string;
     contextId?: string;
     conversationId?: string;
-    runner?: { deviceId: string; repositoryId: string; adapter?: DelegatedRunnerAdapter; model?: ClaudeModel; reasoningEffort?: ReasoningEffort };
+    runner?: { deviceId: string; repositoryId: string; adapter?: DelegatedRunnerAdapter; model?: string;
+      reasoningEffort?: ReasoningEffort; subagents?: MissionExecutionPreferences["subagents"] };
     execution?: MissionExecutionPreferences;
   }) {
     const acceptedAt = new Date();
@@ -200,10 +204,12 @@ export class ConversationRuntimeRepository {
             type: input.runner ? `runner.${input.runner.adapter ?? "repository-check"}` : "hermes.conversation",
             ...(input.runner ? { repositoryId: input.runner.repositoryId } : {}),
             ...(input.runner?.adapter === "codex-development" ? {
-              agent: { adapter: "codex", reasoningEffort: input.runner.reasoningEffort },
+              agent: { adapter: "codex", model: input.runner.model, reasoningEffort: input.runner.reasoningEffort,
+                subagents: input.runner.subagents },
               authority: developmentAuthority(new Date(acceptedAt.getTime() + developmentAuthorityMs)),
             } : input.runner?.adapter === "claude-development" ? {
-              agent: { adapter: "claude", model: input.runner.model, reasoningEffort: input.runner.reasoningEffort },
+              agent: { adapter: "claude", model: input.runner.model, reasoningEffort: input.runner.reasoningEffort,
+                subagents: input.runner.subagents },
               authority: developmentAuthority(new Date(acceptedAt.getTime() + developmentAuthorityMs)),
             } : {}),
             timing: { acceptedAt: acceptedAt.toISOString() },
@@ -491,6 +497,7 @@ export class ConversationRuntimeRepository {
           isNull(devices.revokedAt),
         ));
       let targets: HermesDispatchScope["targets"] = ownedDevices.flatMap((device) => device.repositories.map((repository) => {
+        const codexModels = repository.codexDevelopment ? repository.codexModels : undefined;
         const claudeModels = repository.claudeDevelopment ? repository.claudeModels : undefined;
         return {
           deviceId: device.id,
@@ -502,6 +509,7 @@ export class ConversationRuntimeRepository {
             ...(claudeModels?.length ? ["claude-development" as const] : []),
           ],
           ...(claudeModels?.length ? { claudeModels } : {}),
+          ...(codexModels?.length ? { codexModels } : {}),
         };
       }));
       if (mission.context.workspaceVersion === 1) {
@@ -522,12 +530,14 @@ export class ConversationRuntimeRepository {
             const key = `${project.id}\u0000${ownedDevice.id}\u0000${repository.id}`;
             if (seen.has(key)) return [];
             seen.add(key);
+            const codexModels = repository.codexDevelopment ? repository.codexModels : undefined;
             const claudeModels = repository.claudeDevelopment ? repository.claudeModels : undefined;
             return [{ deviceId: ownedDevice.id, repositoryId: repository.id, projectId: project.id, projectName: project.name,
               adapters: ["repository-check" as const, ...(repository.orcaReview ? ["orca-review" as const] : []),
                 ...(repository.codexDevelopment ? ["codex-development" as const] : []),
                 ...(claudeModels?.length ? ["claude-development" as const] : [])],
               ...(claudeModels?.length ? { claudeModels } : {}),
+              ...(codexModels?.length ? { codexModels } : {}),
             }];
           }));
         });
@@ -557,8 +567,9 @@ export class ConversationRuntimeRepository {
     repositoryId: string;
     projectId?: string;
     adapter: DelegatedRunnerAdapter;
-    model?: ClaudeModel;
+    model?: string;
     reasoningEffort?: ReasoningEffort;
+    subagents?: MissionExecutionPreferences["subagents"];
   }) {
     const acceptedAt = new Date();
     return this.database.withOrganization(input.organizationId, async (transaction) => {
@@ -597,12 +608,13 @@ export class ConversationRuntimeRepository {
         sql`${missions.context}->'delegation'->>'requestId' = ${input.requestId}`,
       )).limit(1);
       if (existing) {
-        const existingAgent = existing.context?.agent as { model?: unknown } | undefined;
+        const existingAgent = existing.context?.agent as { model?: unknown; subagents?: unknown } | undefined;
         if (existing.goal !== input.objective || existing.assignedDeviceId !== input.deviceId
           || existing.context?.repositoryId !== input.repositoryId
           || existing.context?.type !== `runner.${input.adapter}`
           || existing.projectId !== (input.projectId ?? null)
-          || existingAgent?.model !== input.model) throw new DelegatedMissionError();
+          || existingAgent?.model !== input.model
+          || JSON.stringify(existingAgent?.subagents) !== JSON.stringify(input.subagents)) throw new DelegatedMissionError();
         return { conversationId: existing.conversationId, mission: existing };
       }
 
@@ -691,10 +703,12 @@ export class ConversationRuntimeRepository {
             expiresAt: input.expiresAt.toISOString(),
           },
           ...(input.adapter === "codex-development" ? {
-            agent: { adapter: "codex", reasoningEffort: input.reasoningEffort },
+            agent: { adapter: "codex", model: input.model, reasoningEffort: input.reasoningEffort,
+              subagents: input.subagents },
             authority: developmentAuthority(new Date(acceptedAt.getTime() + developmentAuthorityMs)),
           } : input.adapter === "claude-development" ? {
-            agent: { adapter: "claude", model: input.model, reasoningEffort: input.reasoningEffort },
+            agent: { adapter: "claude", model: input.model, reasoningEffort: input.reasoningEffort,
+              subagents: input.subagents },
             authority: developmentAuthority(new Date(acceptedAt.getTime() + developmentAuthorityMs)),
           } : {}),
           timing: { acceptedAt: acceptedAt.toISOString() },

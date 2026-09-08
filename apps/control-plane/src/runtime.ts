@@ -75,8 +75,8 @@ function messageWithDelegation(message: string, grant: MissionDelegationGrant, e
     "You may dispatch bounded runner work only through the ventneuf MCP mission.dispatch tool.",
     "If a target advertises projectId, pass it unchanged. Explain or ask which project to use when several targets match; never silently choose another project. If there are no project targets, ask the member to create a project and associate an available repository before dispatching.",
     "The dispatch result identifies a dedicated mission conversation. Link it using /c/<conversationId> and continue mission-specific coordination there.",
-    "For claude-development, choose and pass one model from that target's claudeModels list. Never rely on the runner's local default model.",
-    ...(execution ? ["Honor this member-selected execution plan when dispatching agents. Use every listed agent only when the task benefits from parallel work, and do not silently substitute models or reasoning levels:", JSON.stringify(execution)] : []),
+    "Dispatch the exact member-selected native harness: codex-development for Codex or claude-development for Claude Code. Pass its lead model when selected, its lead reasoning effort, and its native sub-agent plan. Do not apply these choices to Hermes itself.",
+    ...(execution ? ["Honor this member-selected native execution plan and do not silently substitute its harness, models, or reasoning levels:", JSON.stringify(execution)] : []),
     "Pass the delegation token below and a stable UUID requestId with every dispatch. Reuse the requestId when retrying the same dispatch.",
     `Available targets: ${JSON.stringify(grant.claims.targets)}`,
     `Delegation token: ${grant.token}`,
@@ -282,11 +282,8 @@ export class MissionWorker {
         missionId: envelope.missionId,
         queueMs: activeTiming.queueMs,
       });
-      const execution = record.mission.context.execution as { orchestrator?: { model?: string; reasoningEffort?: "low" | "medium" | "high" | "xhigh" | "max" } } | undefined;
       const reply = await this.hermes.ask({
         message: hermesMessage,
-        ...(execution?.orchestrator?.model ? { model: execution.orchestrator.model } : {}),
-        ...(execution?.orchestrator?.reasoningEffort ? { reasoningEffort: execution.orchestrator.reasoningEffort } : {}),
         scopeId: memoryScope.scopeId,
         contextId: record.hermesContextId ?? undefined,
         runId: resumeRunId,

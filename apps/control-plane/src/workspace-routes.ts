@@ -20,9 +20,12 @@ const conversationInput = z.object({
   parentConversationId: id.optional(),
 }).strict();
 const executionInput = z.object({
-  orchestrator: z.object({ model: z.string().trim().min(1).max(100), reasoningEffort: z.enum(reasoningEfforts) }).strict(),
-  agents: z.array(z.object({ provider: z.enum(["codex", "claude"]), model: z.string().trim().min(1).max(100),
-    reasoningEffort: z.enum(reasoningEfforts) }).strict()).min(1).max(8),
+  harness: z.object({ provider: z.enum(["codex", "claude"]), model: z.string().trim().min(1).max(100).optional(),
+    reasoningEffort: z.enum(reasoningEfforts) }).strict().superRefine((harness, context) => {
+      if (harness.provider === "claude" && !harness.model) context.addIssue({ code: "custom", message: "Claude Code requires a lead model." });
+    }),
+  subagents: z.object({ models: z.array(z.string().trim().min(1).max(100)).min(1).max(8),
+    reasoningEffort: z.enum(reasoningEfforts) }).strict(),
 }).strict();
 
 type Authenticate = (request: Request, response: Response) => Promise<AuthorizationContext | undefined>;

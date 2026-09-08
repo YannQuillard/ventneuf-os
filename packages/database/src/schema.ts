@@ -90,6 +90,7 @@ export const devices = pgTable(
       name: string;
       orcaReview?: boolean;
       codexDevelopment?: boolean;
+      codexModels?: string[];
       claudeDevelopment?: boolean;
       claudeModels?: ClaudeModel[];
       github?: { id?: string; owner: string; name: string };

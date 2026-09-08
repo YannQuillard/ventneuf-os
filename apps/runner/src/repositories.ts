@@ -21,12 +21,19 @@ function isClaudeModelList(value: unknown): value is ClaudeModel[] {
     && value.every(isClaudeModel) && new Set(value).size === value.length;
 }
 
+function isCodexModelList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.length > 0 && value.length <= 20
+    && value.every(model => typeof model === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,99}$/.test(model))
+    && new Set(value).size === value.length;
+}
+
 export interface RegisteredRepository {
   id: string;
   name: string;
   path: string;
   orcaReview?: boolean;
   codexDevelopment?: boolean;
+  codexModels?: string[];
   claudeDevelopment?: boolean;
   claudeModels?: ClaudeModel[];
   github?: GitHubRepositoryIdentity;
@@ -168,6 +175,8 @@ async function readStoredRepositories(path: string): Promise<RegisteredRepositor
       || typeof entry.path !== "string" || !isAbsolute(entry.path)
       || (entry.orcaReview !== undefined && typeof entry.orcaReview !== "boolean")
       || (entry.codexDevelopment !== undefined && typeof entry.codexDevelopment !== "boolean")
+      || (entry.codexModels !== undefined && !isCodexModelList(entry.codexModels))
+      || (entry.codexModels !== undefined && entry.codexDevelopment !== true)
       || (entry.claudeDevelopment !== undefined && typeof entry.claudeDevelopment !== "boolean")
       || (entry.claudeModels !== undefined && !isClaudeModelList(entry.claudeModels))
       || (entry.claudeModels !== undefined && entry.claudeDevelopment !== true)
@@ -181,6 +190,7 @@ async function readStoredRepositories(path: string): Promise<RegisteredRepositor
     repositories.push({ id: entry.id, name: entry.name.trim(), path: entry.path,
       ...(entry.orcaReview === true ? { orcaReview: true } : {}),
       ...(entry.codexDevelopment === true ? { codexDevelopment: true } : {}),
+      ...(entry.codexModels !== undefined ? { codexModels: [...entry.codexModels] } : {}),
       ...(entry.claudeDevelopment === true ? { claudeDevelopment: true } : {}),
       ...(entry.claudeModels !== undefined ? { claudeModels: [...entry.claudeModels] } : {}),
       ...(entry.github !== undefined ? { github: { ...(entry.github.id ? { id: entry.github.id } : {}),
@@ -362,8 +372,9 @@ export interface RunnerMission {
   objective: string;
   attempt?: number;
   authorityExpiresAt?: string;
-  model?: ClaudeModel;
+  model?: string;
   reasoningEffort?: ReasoningEffort;
+  subagents?: { models: string[]; reasoningEffort: ReasoningEffort };
   approvalDecision?: MissionApprovalDecision;
 }
 export interface MissionApprovalDecision {
