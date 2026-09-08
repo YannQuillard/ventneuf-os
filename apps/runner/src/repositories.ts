@@ -123,7 +123,7 @@ function searchRootsPath(configurationPath: string) {
   return `${configurationPath}.search-roots.json`;
 }
 
-async function loadSearchRoots(configurationPath: string) {
+async function loadSearchRootEntries(configurationPath: string) {
   const path = searchRootsPath(configurationPath);
   try {
     if ((await stat(path)).size > 16_384) throw new Error("Repository search folder configuration is too large.");
@@ -135,11 +135,7 @@ async function loadSearchRoots(configurationPath: string) {
   if (!Array.isArray(entries) || entries.length > 20 || entries.some((entry) => typeof entry !== "string" || !isAbsolute(entry))) {
     throw new Error("Invalid repository search folder configuration.");
   }
-  return Promise.all(entries.map(async (entry) => {
-    const path = await realpath(entry);
-    if (!(await stat(path)).isDirectory()) throw new Error("A repository search folder must be a directory.");
-    return path;
-  }));
+  return entries as string[];
 }
 
 async function saveSearchRoots(configurationPath: string, roots: string[]) {
@@ -151,10 +147,10 @@ async function saveSearchRoots(configurationPath: string, roots: string[]) {
 }
 
 export async function hasRepositorySearchRoots(configurationPath: string) {
-  return (await loadSearchRoots(configurationPath)).length > 0;
+  return (await loadSearchRootEntries(configurationPath)).length > 0;
 }
 
-export async function loadRepositories(path: string): Promise<RegisteredRepository[]> {
+async function readStoredRepositories(path: string): Promise<RegisteredRepository[]> {
   try {
     if ((await stat(path)).size > 65_536) throw new Error("Repository configuration is too large.");
   } catch (error) {
@@ -181,9 +177,7 @@ export async function loadRepositories(path: string): Promise<RegisteredReposito
       throw new Error("Invalid repository configuration.");
     }
     ids.add(entry.id);
-    const path = await realpath(entry.path);
-    if (!(await stat(path)).isDirectory()) throw new Error("A registered repository must be a directory.");
-    repositories.push({ id: entry.id, name: entry.name.trim(), path,
+    repositories.push({ id: entry.id, name: entry.name.trim(), path: entry.path,
       ...(entry.orcaReview === true ? { orcaReview: true } : {}),
       ...(entry.codexDevelopment === true ? { codexDevelopment: true } : {}),
       ...(entry.claudeDevelopment === true ? { claudeDevelopment: true } : {}),
@@ -193,6 +187,78 @@ export async function loadRepositories(path: string): Promise<RegisteredReposito
     });
   }
   return repositories;
+}
+
+async function existingDirectory(path: string) {
+  try {
+    const resolved = await realpath(path);
+    return (await stat(resolved)).isDirectory() ? resolved : undefined;
+  } catch { return undefined; }
+}
+
+export async function loadRepositories(path: string): Promise<RegisteredRepository[]> {
+  const repositories = await readStoredRepositories(path);
+  return Promise.all(repositories.map(async (repository) => {
+    const resolved = await existingDirectory(repository.path);
+    if (!resolved) throw new Error("A registered repository must be a directory.");
+    return { ...repository, path: resolved };
+  }));
+}
+
+export async function repositorySettings(configurationPath: string) {
+  const [searchFolders, repositories] = await Promise.all([
+    loadSearchRootEntries(configurationPath),
+    readStoredRepositories(configurationPath),
+  ]);
+  return {
+    searchFolders: await Promise.all(searchFolders.map(async (path) => ({ path, available: Boolean(await existingDirectory(path)) }))),
+    repositories: await Promise.all(repositories.map(async ({ id, name, path, github }) => ({
+      id, name, path, available: Boolean(await existingDirectory(path)), ...(github ? { github } : {}),
+    }))),
+  };
+}
+
+async function normalizeFolder(path: string, message: string) {
+  if (!isAbsolute(path) || path.length > 4_096) throw new Error("Enter an absolute folder path.");
+  const resolved = await existingDirectory(path);
+  if (!resolved) throw new Error(message);
+  return resolved;
+}
+
+export async function addRepositorySearchFolder(configurationPath: string, path: string) {
+  const resolved = await normalizeFolder(path, "The search folder must be an existing directory.");
+  const roots = await loadSearchRootEntries(configurationPath);
+  if (roots.some((root) => root === path || root === resolved)) throw new Error("This search folder is already saved.");
+  if (roots.length >= 20) throw new Error("The repository search folder configuration is full.");
+  await saveSearchRoots(configurationPath, [...roots, resolved]);
+  return resolved;
+}
+
+export async function replaceRepositorySearchFolder(configurationPath: string, currentPath: string, nextPath: string) {
+  const roots = await loadSearchRootEntries(configurationPath);
+  const index = roots.indexOf(currentPath);
+  if (index < 0) throw new Error("The search folder is no longer configured.");
+  const resolved = await normalizeFolder(nextPath, "The new search folder must be an existing directory.");
+  if (roots.some((root, candidate) => candidate !== index && (root === nextPath || root === resolved))) {
+    throw new Error("This search folder is already saved.");
+  }
+  roots[index] = resolved;
+  await saveSearchRoots(configurationPath, roots);
+  return resolved;
+}
+
+export async function removeRepositorySearchFolder(configurationPath: string, path: string) {
+  const roots = await loadSearchRootEntries(configurationPath);
+  const remaining = roots.filter((root) => root !== path);
+  if (remaining.length === roots.length) throw new Error("The search folder is no longer configured.");
+  await saveSearchRoots(configurationPath, remaining);
+}
+
+export async function removeRegisteredRepository(configurationPath: string, id: string) {
+  const repositories = await readStoredRepositories(configurationPath);
+  const remaining = repositories.filter((repository) => repository.id !== id);
+  if (remaining.length === repositories.length) throw new Error("The repository is no longer registered.");
+  await saveRepositories(configurationPath, remaining);
 }
 
 export async function addRegisteredRepository(configurationPath: string, input: { name: string; path: string }) {
@@ -213,30 +279,43 @@ export async function addRegisteredRepository(configurationPath: string, input: 
   return repository;
 }
 
-export async function addGitHubRepository(configurationPath: string, input: { url: string; repositoryId?: string; searchRoot?: string }) {
+export async function addGitHubRepository(configurationPath: string, input: {
+  url: string;
+  repositoryId?: string;
+  searchRoot?: string;
+  repositoryPath?: string;
+}) {
   if (input.searchRoot !== undefined && (!isAbsolute(input.searchRoot) || input.searchRoot.length > 4_096)) {
     throw new Error("Enter an absolute folder to search on this Mac.");
   }
   if (input.repositoryId !== undefined && !/^[0-9]+$/.test(input.repositoryId)) throw new Error("The GitHub repository identity is invalid.");
   const identity = { ...parseGitHubRepository(input.url), ...(input.repositoryId ? { id: input.repositoryId } : {}) };
-  const roots = await loadSearchRoots(configurationPath);
+  const roots = await loadSearchRootEntries(configurationPath);
   if (input.searchRoot) {
-    const root = await realpath(input.searchRoot);
-    if (!(await stat(root)).isDirectory()) throw new Error("The search folder must be a directory.");
+    const root = await normalizeFolder(input.searchRoot, "The search folder must be an existing directory.");
     if (!roots.includes(root)) {
       if (roots.length >= 20) throw new Error("The repository search folder configuration is full.");
       roots.push(root);
       await saveSearchRoots(configurationPath, roots);
     }
   }
-  if (!roots.length) throw new Error("Enter an absolute folder to search on this Mac.");
   let path: string | undefined;
-  for (const root of roots) {
-    path = await findGitHubCheckout(root, identity);
-    if (path) break;
+  if (input.repositoryPath !== undefined) {
+    path = await normalizeFolder(input.repositoryPath, "The repository folder must be an existing directory.");
+    const origin = await repositoryOrigin(path);
+    if (!origin || !sameGitHubRepository(origin, identity)) {
+      throw new Error(`The selected folder is not a checkout of ${identity.owner}/${identity.name}.`);
+    }
+  } else {
+    if (!roots.length) throw new Error("Add a search folder or enter the repository path on this Mac.");
+    for (const root of roots) {
+      if (!await existingDirectory(root)) continue;
+      path = await findGitHubCheckout(root, identity);
+      if (path) break;
+    }
   }
   if (!path) throw new Error(`No checkout of ${identity.owner}/${identity.name} was found in the configured search folders.`);
-  const repositories = await loadRepositories(configurationPath);
+  const repositories = await readStoredRepositories(configurationPath);
   const existingIndex = repositories.findIndex((repository) => repository.path === path);
   if (existingIndex >= 0) {
     const existing = repositories[existingIndex]!;
@@ -254,8 +333,14 @@ export async function addGitHubRepository(configurationPath: string, input: { ur
     await saveRepositories(configurationPath, repositories);
     return updated;
   }
-  if (repositories.some((repository) => repository.github && sameGitHubRepository(repository.github, identity))) {
-    throw new Error("This GitHub repository is already connected.");
+  const identityIndex = repositories.findIndex((repository) => repository.github && sameGitHubRepository(repository.github, identity));
+  if (identityIndex >= 0) {
+    const existing = repositories[identityIndex]!;
+    if (existing.path === path) throw new Error("This GitHub repository is already connected.");
+    const updated = { ...existing, path, github: identity };
+    repositories[identityIndex] = updated;
+    await saveRepositories(configurationPath, repositories);
+    return updated;
   }
   if (repositories.length >= 100) throw new Error("The repository configuration is full.");
   const repository: RegisteredRepository = {

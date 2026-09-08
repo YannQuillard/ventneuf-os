@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readFile, realpath, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -98,6 +98,7 @@ test("finds a GitHub checkout locally without returning its path", async () => {
     deviceName: "Test Mac",
     allowedOrigins: new Set([origin]),
     repositoriesFile,
+    selectFolder: async () => temporary,
   });
   const { server, port } = await bridge.start(0);
   try {
@@ -116,6 +117,60 @@ test("finds a GitHub checkout locally without returning its path", async () => {
     const configuration = JSON.parse(await readFile(repositoriesFile, "utf8")) as Array<Record<string, unknown>>;
     assert.equal(configuration[0]?.path, await realpath(repositoryPath));
     assert.deepEqual(configuration[0]?.github, { id: "123456789", owner: "onlinenow", name: "private-repository" });
+
+    const settings = await fetch(`http://127.0.0.1:${port}/repository-settings`, { headers: { origin } });
+    assert.equal(settings.status, 200);
+    assert.deepEqual(await settings.json(), {
+      searchFolders: [{ path: await realpath(temporary), available: true }],
+      repositories: [{
+        id: configuration[0]?.id,
+        name: "onlinenow/private-repository",
+        path: await realpath(repositoryPath),
+        available: true,
+        github: { id: "123456789", owner: "onlinenow", name: "private-repository" },
+      }],
+    });
+
+    const selected = await fetch(`http://127.0.0.1:${port}/folders/select`, { method: "POST", headers: { origin } });
+    assert.deepEqual(await selected.json(), { path: temporary });
+
+    const secondRoot = join(temporary, "other-root");
+    await mkdir(secondRoot);
+    const addedRoot = await fetch(`http://127.0.0.1:${port}/repository-search-folders`, {
+      method: "POST", headers: { origin, "content-type": "application/json" }, body: JSON.stringify({ path: secondRoot }),
+    });
+    assert.equal(addedRoot.status, 201);
+    const replacementRoot = join(temporary, "replacement-root");
+    await mkdir(replacementRoot);
+    const replacedRoot = await fetch(`http://127.0.0.1:${port}/repository-search-folders`, {
+      method: "PATCH", headers: { origin, "content-type": "application/json" },
+      body: JSON.stringify({ currentPath: await realpath(secondRoot), path: replacementRoot }),
+    });
+    assert.equal(replacedRoot.status, 200);
+    const removedRoot = await fetch(`http://127.0.0.1:${port}/repository-search-folders`, {
+      method: "DELETE", headers: { origin, "content-type": "application/json" },
+      body: JSON.stringify({ path: await realpath(replacementRoot) }),
+    });
+    assert.equal(removedRoot.status, 204);
+
+    const relocatedPath = join(temporary, "relocated-repository");
+    await rename(repositoryPath, relocatedPath);
+    const relocated = await fetch(`http://127.0.0.1:${port}/repositories`, {
+      method: "POST", headers: { origin, "content-type": "application/json" }, body: JSON.stringify({
+        githubUrl: "https://github.com/onlinenow/private-repository", githubRepositoryId: "123456789",
+        repositoryPath: relocatedPath,
+      }),
+    });
+    assert.equal(relocated.status, 201);
+    const relocatedConfiguration = JSON.parse(await readFile(repositoriesFile, "utf8")) as Array<Record<string, unknown>>;
+    assert.equal(relocatedConfiguration[0]?.path, await realpath(relocatedPath));
+
+    const removedRepository = await fetch(`http://127.0.0.1:${port}/repositories`, {
+      method: "DELETE", headers: { origin, "content-type": "application/json" },
+      body: JSON.stringify({ id: configuration[0]?.id }),
+    });
+    assert.equal(removedRepository.status, 204);
+    assert.deepEqual(JSON.parse(await readFile(repositoriesFile, "utf8")), []);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     await rm(temporary, { recursive: true, force: true });

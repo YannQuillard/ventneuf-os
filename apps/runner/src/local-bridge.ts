@@ -2,7 +2,14 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { AddressInfo } from "node:net";
 import type { CredentialStore, StoredDevice } from "./credential-store.js";
 import type { RunnerCloudClient } from "./cloud-client.js";
-import { addGitHubRepository, hasRepositorySearchRoots } from "./repositories.js";
+import {
+  addGitHubRepository,
+  addRepositorySearchFolder,
+  removeRegisteredRepository,
+  removeRepositorySearchFolder,
+  replaceRepositorySearchFolder,
+  repositorySettings,
+} from "./repositories.js";
 import type { RunnerUpdater } from "./runner-update.js";
 
 const maxRequestBytes = 8_192;
@@ -13,6 +20,7 @@ export interface LocalBridgeOptions {
   deviceName: string;
   allowedOrigins: Set<string>;
   repositoriesFile?: string;
+  selectFolder?: () => Promise<string | undefined>;
   updater?: Pick<RunnerUpdater, "status" | "install" | "confirmHealthy">;
   heartbeatIntervalMs?: number;
 }
@@ -44,7 +52,7 @@ export class LocalRunnerBridge {
     response.setHeader("vary", "Origin");
     response.setHeader("access-control-allow-private-network", "true");
     if (request.method === "OPTIONS") {
-      response.setHeader("access-control-allow-methods", "GET, POST, OPTIONS");
+      response.setHeader("access-control-allow-methods", "DELETE, GET, PATCH, POST, OPTIONS");
       response.setHeader("access-control-allow-headers", "content-type");
       response.writeHead(204).end();
       return;
@@ -56,7 +64,32 @@ export class LocalRunnerBridge {
       if (request.method === "GET" && request.url === "/repository-settings") {
         if (!this.device) return this.json(response, 409, { error: "runner_not_enrolled" });
         if (!this.options.repositoriesFile) return this.json(response, 503, { error: "repository_configuration_unavailable" });
-        return this.json(response, 200, { hasSearchFolders: await hasRepositorySearchRoots(this.options.repositoriesFile) });
+        return this.json(response, 200, await repositorySettings(this.options.repositoriesFile));
+      }
+      if (request.method === "POST" && request.url === "/folders/select") {
+        if (!this.device) return this.json(response, 409, { error: "runner_not_enrolled" });
+        if (!this.options.selectFolder) return this.json(response, 503, { error: "folder_selection_unavailable" });
+        const path = await this.options.selectFolder();
+        return this.json(response, 200, path ? { path } : { cancelled: true });
+      }
+      if (request.url === "/repository-search-folders" && ["POST", "PATCH", "DELETE"].includes(request.method ?? "")) {
+        if (!this.device) return this.json(response, 409, { error: "runner_not_enrolled" });
+        if (!this.options.repositoriesFile) return this.json(response, 503, { error: "repository_configuration_unavailable" });
+        const body = await this.readJson(request) as { path?: unknown; currentPath?: unknown };
+        if (typeof body.path !== "string" || (body.currentPath !== undefined && typeof body.currentPath !== "string")) {
+          return this.json(response, 400, { error: "invalid_request" });
+        }
+        if (request.method === "POST") {
+          const path = await addRepositorySearchFolder(this.options.repositoriesFile, body.path);
+          return this.json(response, 201, { path });
+        }
+        if (request.method === "PATCH") {
+          if (typeof body.currentPath !== "string") return this.json(response, 400, { error: "invalid_request" });
+          const path = await replaceRepositorySearchFolder(this.options.repositoriesFile, body.currentPath, body.path);
+          return this.json(response, 200, { path });
+        }
+        await removeRepositorySearchFolder(this.options.repositoriesFile, body.path);
+        return this.json(response, 204, undefined);
       }
       if (request.method === "POST" && request.url === "/enroll") {
         const body = await this.readJson(request) as { token?: unknown };
@@ -72,17 +105,34 @@ export class LocalRunnerBridge {
       if (request.method === "POST" && request.url === "/repositories") {
         if (!this.device) return this.json(response, 409, { error: "runner_not_enrolled" });
         if (!this.options.repositoriesFile) return this.json(response, 503, { error: "repository_configuration_unavailable" });
-        const body = await this.readJson(request) as { githubUrl?: unknown; githubRepositoryId?: unknown; searchRoot?: unknown };
+        const body = await this.readJson(request) as {
+          githubUrl?: unknown;
+          githubRepositoryId?: unknown;
+          repositoryPath?: unknown;
+          searchRoot?: unknown;
+        };
         if (typeof body.githubUrl !== "string" || (body.githubRepositoryId !== undefined && typeof body.githubRepositoryId !== "string")
+          || (body.repositoryPath !== undefined && typeof body.repositoryPath !== "string")
           || (body.searchRoot !== undefined && typeof body.searchRoot !== "string")) {
           return this.json(response, 400, { error: "invalid_request" });
         }
         const repository = await addGitHubRepository(this.options.repositoriesFile, {
           url: body.githubUrl,
           ...(body.githubRepositoryId ? { repositoryId: body.githubRepositoryId } : {}),
+          ...(body.repositoryPath ? { repositoryPath: body.repositoryPath } : {}),
           ...(body.searchRoot ? { searchRoot: body.searchRoot } : {}),
         });
         return this.json(response, 201, { repository: { id: repository.id, name: repository.name, github: repository.github } });
+      }
+      if (request.method === "DELETE" && request.url === "/repositories") {
+        if (!this.device) return this.json(response, 409, { error: "runner_not_enrolled" });
+        if (!this.options.repositoriesFile) return this.json(response, 503, { error: "repository_configuration_unavailable" });
+        const body = await this.readJson(request) as { id?: unknown };
+        if (typeof body.id !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(body.id)) {
+          return this.json(response, 400, { error: "invalid_request" });
+        }
+        await removeRegisteredRepository(this.options.repositoriesFile, body.id);
+        return this.json(response, 204, undefined);
       }
       if (request.method === "GET" && request.url === "/updates") {
         if (!this.device) return this.json(response, 409, { error: "runner_not_enrolled" });

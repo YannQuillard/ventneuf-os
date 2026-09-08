@@ -7,7 +7,7 @@ import { Timestamp } from "@astryxdesign/core/Timestamp";
 import type { ReactNode } from "react";
 
 export function DeviceSection({ name, isOnline, detail, lastSeenAt, actions, children }: {
-  name: string; isOnline: boolean; detail: string; lastSeenAt?: string; actions?: ReactNode; children: ReactNode;
+  name: string; isOnline: boolean; detail: string; lastSeenAt?: string; actions?: ReactNode; children?: ReactNode;
 }) {
   return <VStack gap={1}>
     <HStack gap={2} vAlign="center" paddingBlock={1} wrap="wrap">
@@ -17,6 +17,6 @@ export function DeviceSection({ name, isOnline, detail, lastSeenAt, actions, chi
       {lastSeenAt ? <Text type="supporting">{isOnline ? "Heartbeat " : "Last seen "}<Timestamp value={lastSeenAt} format="time" /></Text> : null}
       {actions}
     </HStack>
-    {children}
+    {children ?? null}
   </VStack>;
 }
