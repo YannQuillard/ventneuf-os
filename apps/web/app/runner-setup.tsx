@@ -5,6 +5,9 @@ import { Button } from "@astryxdesign/core/Button";
 import { CheckboxInput } from "@astryxdesign/core/CheckboxInput";
 import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
 import { FormLayout } from "@astryxdesign/core/FormLayout";
+import { Icon } from "@astryxdesign/core/Icon";
+import { IconButton } from "@astryxdesign/core/IconButton";
+import { Item } from "@astryxdesign/core/Item";
 import { HStack, Layout, LayoutContent, LayoutFooter, StackItem, VStack } from "@astryxdesign/core/Layout";
 import { List, ListItem } from "@astryxdesign/core/List";
 import { MoreMenu } from "@astryxdesign/core/MoreMenu";
@@ -14,9 +17,10 @@ import { Skeleton } from "@astryxdesign/core/Skeleton";
 import { StatusDot } from "@astryxdesign/core/StatusDot";
 import { Heading, Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
+import { Timestamp } from "@astryxdesign/core/Timestamp";
 import { useToast } from "@astryxdesign/core/Toast";
+import { PlusIcon } from "@heroicons/react/24/outline";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { DeviceSection } from "./_components/device-section";
 
 const localRunnerUrl = "http://127.0.0.1:41929";
 
@@ -37,6 +41,10 @@ interface LocalRepository {
 interface RepositorySettings {
   searchFolders: Array<{ path: string; available: boolean }>;
   repositories: LocalRepository[];
+}
+
+function platformName(platform?: string) {
+  return platform === "darwin" ? "macOS" : platform;
 }
 
 function recentlySeen(device: Device) {
@@ -234,43 +242,65 @@ function RunnerUpdateDialog({ isOpen, onOpenChange, status, onUpdate }: {
   </Dialog>;
 }
 
-function SectionHeader({ title, description, action, level = 4 }: {
-  title: string; description: string; action?: ReactNode; level?: 3 | 4;
-}) {
-  return <HStack gap={3} vAlign="center" wrap="wrap"><StackItem size="fill"><VStack gap={1}>
-    <Heading level={level}>{title}</Heading><Text type="supporting">{description}</Text>
-  </VStack></StackItem>{action}</HStack>;
-}
-
-function LoadingSection({ index, titleWidth, descriptionWidth, rows = 1 }: {
-  index: number; titleWidth: number; descriptionWidth: number; rows?: number;
+function Section({ title, description, action, children }: {
+  title: string; description?: string; action?: ReactNode; children: ReactNode;
 }) {
   return <VStack gap={3}>
+    <HStack gap={3} vAlign="center" paddingInline={2} wrap="wrap">
+      <StackItem size="fill"><VStack gap={0}>
+        <Heading level={4}>{title}</Heading>
+        {description ? <Text type="supporting">{description}</Text> : null}
+      </VStack></StackItem>
+      {action}
+    </HStack>
+    {children}
+  </VStack>;
+}
+
+function Subsection({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
+  return <VStack gap={1}>
+    <HStack gap={2} vAlign="center" paddingInline={2}>
+      <StackItem size="fill"><Text type="label" color="secondary">{title}</Text></StackItem>
+      {action}
+    </HStack>
+    {children}
+  </VStack>;
+}
+
+function AddButton({ label, onClick }: { label: string; onClick: () => void }) {
+  return <IconButton label={label} tooltip={label} variant="ghost" size="sm" icon={<Icon icon={PlusIcon} size="sm" />} onClick={onClick} />;
+}
+
+function EmptyRow({ children }: { children: string }) {
+  return <HStack paddingInline={2} paddingBlock={1}><Text type="supporting">{children}</Text></HStack>;
+}
+
+function RowMetadata({ isWarning, label, children }: { isWarning?: boolean; label: string; children: string }) {
+  return <HStack gap={2} vAlign="center">
+    {isWarning ? <StatusDot variant="warning" label={label} /> : null}
+    <Text type="supporting" maxLines={1}>{children}</Text>
+  </HStack>;
+}
+
+function LoadingSection({ index, titleWidth, rows = 1 }: { index: number; titleWidth: number; rows?: number }) {
+  return <VStack gap={3}>
+    <Skeleton width={titleWidth} height={22} index={index} />
     <VStack gap={1}>
-      <Skeleton width={titleWidth} height={22} index={index} />
-      <Skeleton width={descriptionWidth} height={16} index={index + 1} />
-    </VStack>
-    <VStack gap={2}>
       {Array.from({ length: rows }, (_, row) =>
-        <Skeleton key={row} width="100%" height={52} index={index + row + 2} />)}
+        <Skeleton key={row} width="100%" height={36} index={index + row + 1} />)}
     </VStack>
   </VStack>;
 }
 
 function RunnerSetupSkeleton() {
-  return <VStack gap={6} padding={4}>
-    <LoadingSection index={0} titleWidth={72} descriptionWidth={360} />
-    <VStack gap={5}>
-      <VStack gap={1}>
-        <Skeleton width={92} height={22} index={3} />
-        <Skeleton width={410} height={16} index={4} />
-      </VStack>
-      <LoadingSection index={5} titleWidth={126} descriptionWidth={420} />
-      <LoadingSection index={8} titleWidth={112} descriptionWidth={460} rows={2} />
-    </VStack>
-    <LoadingSection index={12} titleWidth={82} descriptionWidth={350} />
+  return <VStack gap={8} padding={4}>
+    <LoadingSection index={0} titleWidth={92} rows={1} />
+    <LoadingSection index={2} titleWidth={112} rows={1} />
+    <LoadingSection index={4} titleWidth={104} rows={3} />
+    <LoadingSection index={8} titleWidth={72} rows={1} />
   </VStack>;
 }
+
 
 export function RunnerSetup() {
   const toast = useToast();
@@ -443,70 +473,90 @@ export function RunnerSetup() {
 
   if (!isLoaded) return <RunnerSetupSkeleton />;
 
-  return <VStack gap={6} padding={4}>
-    <VStack gap={3}><SectionHeader title="GitHub" level={3} description="Private repository access belongs to your member account." />
-      {githubStatus ? <List density="compact" hasDividers><ListItem
-        label={githubStatus.connected ? `@${githubStatus.login}` : "GitHub not connected"}
-        description={githubStatus.connected ? hasGitHubRepositoryAccess === false ? "GitHub repository access is temporarily unavailable"
-          : `${githubRepositories.length} repository${githubRepositories.length === 1 ? "" : "ies"} available to this member`
-          : "Connect GitHub to choose repositories without sharing them with other members."}
-        endContent={githubStatus.connected ? <HStack gap={2}>
-          <Button label="Manage GitHub access" href={githubStatus.installUrl} variant="secondary" size="sm" />
-          <MoreMenu label="GitHub options" size="sm" alignment="end" items={[{ label: "Disconnect", onClick: disconnectGitHub }]} />
-        </HStack> : <Button label="Connect GitHub" variant="primary" size="sm" clickAction={connectGitHub} />} /></List> : null}
-    </VStack>
+  const isOnline = local?.status === "online";
+  const localDevice = cloudDevices.find((device) => device.id === local?.device?.id);
+  const otherDevices = cloudDevices.filter((device) => device.id !== local?.device?.id);
+  const localDetail = [platformName(local?.device?.platform),
+    capabilities(localDevice?.repositories ?? [], local?.harnesses)].filter(Boolean).join(" · ");
 
-    <VStack gap={3}><SectionHeader title="This Mac" level={3} description={local?.status === "online"
-      ? "Local paths and repository discovery stay on this device." : "Connect the local runner to manage folders and repositories."}
-      action={local?.status !== "online" ? <Button label="Connect this Mac" variant="primary" size="sm" isLoading={isConnecting} clickAction={connect} /> : undefined} />
-      {local?.status === "online" ? <>
-        <SectionHeader title="Search folders" description="The runner scans these folders when connecting a GitHub repository."
-          action={<Button label="Add folder" size="sm" variant="secondary" onClick={() => { setFolderToEdit(undefined); setFolderOpen(true); }} />} />
-        {settings.searchFolders.length ? <List density="compact" hasDividers>{settings.searchFolders.map((folder) => <ListItem key={folder.path}
-          label={folder.path} description={folder.available ? "Available on this Mac" : "Folder not found"}
-          startContent={folder.available ? undefined : <StatusDot variant="warning" label="Missing" />}
-          endContent={<MoreMenu label={`Options for ${folder.path}`} size="sm" alignment="end" items={[
-            { label: "Change folder", onClick: () => { setFolderToEdit(folder.path); setFolderOpen(true); } },
-            { label: "Remove", onClick: () => void removeFolder(folder.path) },
-          ]} />} />)}</List> : <Text type="supporting">No search folders yet. Add one, or locate each repository directly.</Text>}
+  return <VStack gap={8} padding={4}>
+    {error ? <Banner status="error" title="Devices could not be updated" description={error} /> : null}
 
-        <SectionHeader title="Repositories" description="Repositories connected to this runner and their location on this Mac."
-          action={<Button label="Connect repository" size="sm" variant="secondary" onClick={() => { setRepositoryToLocate(undefined); setRepositoryOpen(true); }} />} />
-        {connectedRepositories.length ? <List density="compact" hasDividers>{connectedRepositories.map(({
-          repository: localRepository, fullName, choiceId, private: isPrivate,
-        }) => {
-          const status = localRepository.available ? "Available on this Mac" : "Local folder not found";
-          const visibility = isPrivate === undefined ? undefined : isPrivate ? "Private" : "Public";
-          const harnesses = [localRepository.codexDevelopment ? "Codex" : undefined,
-            localRepository.claudeDevelopment ? "Claude Code" : undefined].filter(Boolean).join(" · ");
-          return <ListItem key={localRepository.id} label={fullName} description={[visibility, status, harnesses].filter(Boolean).join(" · ")}
-            startContent={!localRepository.available ? <StatusDot variant="warning" label="Missing" /> : undefined}
-            endContent={<HStack gap={2}>
+    <Section title="This Mac" description={isOnline ? undefined : "Connect the local runner to manage folders and repositories."}
+      action={isOnline ? undefined : <Button label="Connect this Mac" variant="primary" size="sm" isLoading={isConnecting} clickAction={connect} />}>
+      {isOnline ? <VStack gap={4}>
+        <Item density="compact" label={local?.device?.name ?? "This Mac"} description={localDetail}
+          endContent={<HStack gap={2} vAlign="center">
+            {localDevice?.lastSeenAt ? <Text type="supporting">Heartbeat <Timestamp value={localDevice.lastSeenAt} format="time" /></Text> : null}
+            {updateStatus?.available ? <Button label="Update" size="sm" variant="secondary" onClick={() => setUpdateOpen(true)} /> : null}
+          </HStack>} />
+
+        <Subsection title="Search folders" action={<AddButton label="Add search folder"
+          onClick={() => { setFolderToEdit(undefined); setFolderOpen(true); }} />}>
+          {settings.searchFolders.length ? <List density="compact" hasDividers>{settings.searchFolders.map((folder) =>
+            <ListItem key={folder.path} label={folder.path} endContent={<HStack gap={2} vAlign="center">
+              {folder.available ? null : <RowMetadata isWarning label="Folder not found">Folder not found</RowMetadata>}
+              <MoreMenu label={`Options for ${folder.path}`} size="sm" alignment="end" items={[
+                { label: "Change folder", onClick: () => { setFolderToEdit(folder.path); setFolderOpen(true); } },
+                { label: "Remove", variant: "destructive", onClick: () => void removeFolder(folder.path) },
+              ]} />
+            </HStack>} />)}</List>
+            : <EmptyRow>No search folders yet. Add one, or locate each repository directly.</EmptyRow>}
+        </Subsection>
+
+        <Subsection title="Repositories" action={<AddButton label="Connect repository"
+          onClick={() => { setRepositoryToLocate(undefined); setRepositoryOpen(true); }} />}>
+          {connectedRepositories.length ? <List density="compact" hasDividers>{connectedRepositories.map(({
+            repository: localRepository, fullName, choiceId, private: isPrivate,
+          }) => {
+            const metadata = [isPrivate === undefined ? undefined : isPrivate ? "Private" : "Public",
+              localRepository.codexDevelopment ? "Codex" : undefined,
+              localRepository.claudeDevelopment ? "Claude Code" : undefined,
+              localRepository.available ? undefined : "Folder not found"].filter(Boolean).join(" · ");
+            return <ListItem key={localRepository.id} label={fullName} endContent={<HStack gap={2} vAlign="center">
+              {metadata ? <RowMetadata isWarning={!localRepository.available} label="Local folder not found">{metadata}</RowMetadata> : null}
               {!localRepository.available && choiceId ? <Button label="Relocate" size="sm" variant="secondary"
                 onClick={() => { setRepositoryToLocate(choiceId); setRepositoryOpen(true); }} /> : null}
               <MoreMenu label={`Options for ${fullName}`} size="sm" alignment="end" items={[
                 { label: "Execution harnesses", onClick: () => setRepositoryToConfigure(localRepository.id) },
                 ...(choiceId ? [{ label: "Change local folder", onClick: () => { setRepositoryToLocate(choiceId); setRepositoryOpen(true); } }] : []),
-                { label: "Remove from this Mac", onClick: () => void removeRepository(localRepository.id) },
+                { label: "Remove from this Mac", variant: "destructive", onClick: () => void removeRepository(localRepository.id) },
               ]} />
             </HStack>} />;
-        })}</List> : <Text type="supporting">No repositories connected to this runner yet.</Text>}
-      </> : null}
-    </VStack>
+          })}</List> : <EmptyRow>No repositories connected to this runner yet.</EmptyRow>}
+        </Subsection>
+      </VStack> : null}
+    </Section>
 
-    <VStack gap={3}><SectionHeader title="Runners" level={3} description="Enrolled Macs, their presence, and execution harnesses." />
-      {isLoaded && cloudDevices.length ? cloudDevices.map((device) => {
+    {otherDevices.length || !isOnline ? <Section title={isOnline ? "Other runners" : "Runners"}>
+      {otherDevices.length ? <List density="compact" hasDividers>{otherDevices.map((device) => {
         const repositories = device.repositories ?? [];
-        const isLocal = local?.device?.id === device.id;
-        const harnesses = capabilities(repositories, isLocal ? local.harnesses : undefined);
-        return <DeviceSection key={device.id} name={device.name} isOnline={recentlySeen(device)}
-          detail={[device.platform === "darwin" ? "macOS" : device.platform, `${repositories.length} repositor${repositories.length === 1 ? "y" : "ies"}`, harnesses].filter(Boolean).join(" · ")}
-          lastSeenAt={device.lastSeenAt} actions={isLocal && updateStatus?.available
-            ? <Button label="Update runner" size="sm" variant="primary" onClick={() => setUpdateOpen(true)} /> : undefined} />;
-      }) : <Text type="supporting">{isLoaded ? "No runners enrolled yet." : "Loading runners…"}</Text>}
-    </VStack>
+        const isDeviceOnline = recentlySeen(device);
+        const detail = [platformName(device.platform),
+          `${repositories.length} ${repositories.length === 1 ? "repository" : "repositories"}`,
+          capabilities(repositories)].filter(Boolean).join(" · ");
+        return <ListItem key={device.id} label={device.name}
+          endContent={<HStack gap={2} vAlign="center">
+            <Text type="supporting" maxLines={1}>{detail}</Text>
+            {device.lastSeenAt ? <Text type="supporting">{isDeviceOnline ? "Heartbeat " : "Last seen "}
+              <Timestamp value={device.lastSeenAt} format="time" /></Text> : null}
+          </HStack>} />;
+      })}</List> : <EmptyRow>No runners enrolled yet.</EmptyRow>}
+    </Section> : null}
 
-    {error ? <Banner status="error" title="Devices could not be updated" description={error} /> : null}
+    <Section title="GitHub" description="Private repository access belongs to your member account.">
+      {githubStatus ? <Item density="compact" layout="inline"
+        label={githubStatus.connected ? `@${githubStatus.login}` : "GitHub not connected"}
+        description={githubStatus.connected
+          ? hasGitHubRepositoryAccess === false ? "Repository access temporarily unavailable"
+            : `${githubRepositories.length} ${githubRepositories.length === 1 ? "repository" : "repositories"} available`
+          : "Connect GitHub to choose repositories without sharing them with other members."}
+        endContent={githubStatus.connected ? <MoreMenu label="GitHub options" size="sm" alignment="end" items={[
+          { label: "Manage GitHub access", onClick: () => window.location.assign(githubStatus.installUrl) },
+          { label: "Disconnect", variant: "destructive", onClick: disconnectGitHub },
+        ]} /> : <Button label="Connect GitHub" variant="primary" size="sm" clickAction={connectGitHub} />} /> : null}
+    </Section>
+
     <FolderDialog isOpen={isFolderOpen} onOpenChange={setFolderOpen} currentPath={folderToEdit}
       onSaved={async () => { await refresh(); toast({ body: folderToEdit ? "Search folder updated" : "Search folder added" }); }} />
     <RepositoryDialog isOpen={isRepositoryOpen} onOpenChange={setRepositoryOpen} repositories={repositoryChoices}
