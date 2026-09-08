@@ -44,10 +44,17 @@ export function UpdateNotifications() {
       } catch { /* A runner notification appears after the local bridge becomes reachable. */ }
     };
     const onFocus = () => void check();
+    const onVisibilityChange = () => { if (document.visibilityState === "visible") void check(); };
     void check();
-    const timer = window.setInterval(() => void check(), 60_000);
+    const timer = window.setInterval(() => void check(), 30_000);
     window.addEventListener("focus", onFocus);
-    return () => { isDisposed = true; window.clearInterval(timer); window.removeEventListener("focus", onFocus); };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      isDisposed = true;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
   }, [toast]);
 
   return null;

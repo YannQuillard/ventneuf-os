@@ -6,12 +6,16 @@ import { LinkProvider } from "@astryxdesign/core/Link";
 import { neutralTheme } from "@astryxdesign/theme-neutral/built";
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { UpdateNotifications } from "./_components/update-notifications";
 
 export function Providers({ children }: { children: ReactNode }) {
   return (
     <Theme theme={neutralTheme}>
       <LayerProvider toast={{ position: "bottomEnd", maxVisible: 4 }}>
-        <LinkProvider component={Link}>{children}</LinkProvider>
+        <LinkProvider component={Link}>
+          <UpdateNotifications />
+          {children}
+        </LinkProvider>
       </LayerProvider>
     </Theme>
   );
