@@ -396,13 +396,8 @@ export class AgentDevelopmentAdapter implements MissionAdapter {
 
   async execute(mission: RunnerMission, repository: RegisteredRepository, signal: AbortSignal, execution?: MissionExecution) {
     const adapter = `${this.options.agent}-development`;
-    const enabled = this.options.agent === "codex" ? repository.codexDevelopment : repository.claudeDevelopment;
     if (mission.adapter !== adapter || mission.repositoryId !== repository.id
-      || !enabled || !execution || !/^[a-f0-9-]{36}$/.test(mission.id)
-      || (this.options.agent === "claude"
-        && (!mission.model || !(repository.claudeModels as readonly string[] | undefined)?.includes(mission.model)))
-      || (this.options.agent === "codex"
-        && (mission.model === undefined ? Boolean(repository.codexModels?.length) : !repository.codexModels?.includes(mission.model)))
+      || !execution || !/^[a-f0-9-]{36}$/.test(mission.id)
       || !mission.authorityExpiresAt) throw new Error("The development mission is outside this repository scope.");
     const authorityExpiresAt = Date.parse(mission.authorityExpiresAt);
     if (!Number.isFinite(authorityExpiresAt) || authorityExpiresAt <= Date.now()) throw new Error("Development authority expired.");

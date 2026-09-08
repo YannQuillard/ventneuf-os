@@ -32,10 +32,6 @@ export interface RegisteredRepository {
   name: string;
   path: string;
   orcaReview?: boolean;
-  codexDevelopment?: boolean;
-  codexModels?: string[];
-  claudeDevelopment?: boolean;
-  claudeModels?: ClaudeModel[];
   github?: GitHubRepositoryIdentity;
 }
 export interface GitHubRepositoryIdentity { id?: string; owner: string; name: string }
@@ -189,10 +185,6 @@ async function readStoredRepositories(path: string): Promise<RegisteredRepositor
     ids.add(entry.id);
     repositories.push({ id: entry.id, name: entry.name.trim(), path: entry.path,
       ...(entry.orcaReview === true ? { orcaReview: true } : {}),
-      ...(entry.codexDevelopment === true ? { codexDevelopment: true } : {}),
-      ...(entry.codexModels !== undefined ? { codexModels: [...entry.codexModels] } : {}),
-      ...(entry.claudeDevelopment === true ? { claudeDevelopment: true } : {}),
-      ...(entry.claudeModels !== undefined ? { claudeModels: [...entry.claudeModels] } : {}),
       ...(entry.github !== undefined ? { github: { ...(entry.github.id ? { id: entry.github.id } : {}),
         owner: entry.github.owner, name: entry.github.name } } : {}),
     });
@@ -216,6 +208,19 @@ export async function loadRepositories(path: string): Promise<RegisteredReposito
   }));
 }
 
+export async function removeLegacyExecutionSettings(path: string) {
+  let entries: unknown;
+  try { entries = JSON.parse(await readFile(path, "utf8")); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  if (!Array.isArray(entries) || !entries.some(entry => entry && typeof entry === "object"
+    && ["codexDevelopment", "codexModels", "claudeDevelopment", "claudeModels"]
+      .some(key => key in entry))) return;
+  await saveRepositories(path, await readStoredRepositories(path));
+}
+
 export async function repositorySettings(configurationPath: string) {
   const [searchFolders, repositories] = await Promise.all([
     loadSearchRootEntries(configurationPath),
@@ -223,13 +228,8 @@ export async function repositorySettings(configurationPath: string) {
   ]);
   return {
     searchFolders: await Promise.all(searchFolders.map(async (path) => ({ path, available: Boolean(await existingDirectory(path)) }))),
-    repositories: await Promise.all(repositories.map(async ({ id, name, path, github, codexDevelopment, codexModels,
-      claudeDevelopment, claudeModels }) => ({
+    repositories: await Promise.all(repositories.map(async ({ id, name, path, github }) => ({
       id, name, path, available: Boolean(await existingDirectory(path)),
-      ...(codexDevelopment ? { codexDevelopment: true } : {}),
-      ...(codexModels?.length ? { codexModels } : {}),
-      ...(claudeDevelopment ? { claudeDevelopment: true } : {}),
-      ...(claudeModels?.length ? { claudeModels } : {}),
       ...(github ? { github } : {}),
     }))),
   };
@@ -276,38 +276,6 @@ export async function removeRegisteredRepository(configurationPath: string, id: 
   const remaining = repositories.filter((repository) => repository.id !== id);
   if (remaining.length === repositories.length) throw new Error("The repository is no longer registered.");
   await saveRepositories(configurationPath, remaining);
-}
-
-export async function updateRepositoryCapabilities(configurationPath: string, input: {
-  id: string;
-  codexDevelopment: boolean;
-  codexModels?: string[];
-  claudeDevelopment: boolean;
-  claudeModels?: ClaudeModel[];
-}) {
-  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(input.id)
-    || (input.codexModels !== undefined && (!input.codexDevelopment || !isCodexModelList(input.codexModels)))
-    || (input.claudeModels !== undefined && (!input.claudeDevelopment || !isClaudeModelList(input.claudeModels)))
-    || (input.claudeDevelopment && !input.claudeModels?.length)) {
-    throw new Error("Choose valid execution harnesses and models.");
-  }
-  const repositories = await readStoredRepositories(configurationPath);
-  const index = repositories.findIndex(({ id }) => id === input.id);
-  if (index < 0) throw new Error("The repository is no longer registered.");
-  const repository = repositories[index]!;
-  const updated: RegisteredRepository = {
-    id: repository.id,
-    name: repository.name,
-    path: repository.path,
-    ...(repository.orcaReview ? { orcaReview: true } : {}),
-    ...(input.codexDevelopment ? { codexDevelopment: true } : {}),
-    ...(input.codexModels?.length ? { codexModels: [...input.codexModels] } : {}),
-    ...(input.claudeDevelopment ? { claudeDevelopment: true, claudeModels: [...input.claudeModels!] } : {}),
-    ...(repository.github ? { github: repository.github } : {}),
-  };
-  repositories[index] = updated;
-  await saveRepositories(configurationPath, repositories);
-  return updated;
 }
 
 export async function addRegisteredRepository(configurationPath: string, input: { name: string; path: string }) {

@@ -36,6 +36,11 @@ export interface MissionExecutionPreferences {
   subagents: { models: string[]; reasoningEffort: ReasoningEffort };
 }
 
+export interface RunnerExecutionHarnesses {
+  codex?: { models?: string[] };
+  claude?: { models: ClaudeModel[] };
+}
+
 export type ApprovalActionCategory = typeof approvalActionCategories[number];
 export type ApprovalPolicyDecision = "allow" | "hermes" | "human" | "deny";
 

@@ -74,8 +74,8 @@ export interface WorkspaceDevice {
   id: string;
   name: string;
   lastSeenAt?: string;
-  repositories?: Array<{ id: string; name: string; codexDevelopment?: boolean; codexModels?: string[];
-    claudeDevelopment?: boolean; claudeModels?: string[]; github?: { id?: string; owner: string; name: string } }>;
+  executionHarnesses?: { codex?: { models?: string[] }; claude?: { models: string[] } };
+  repositories?: Array<{ id: string; name: string; github?: { id?: string; owner: string; name: string } }>;
 }
 
 export interface MissionHarnessOption {
@@ -91,13 +91,14 @@ export function missionHarnessOptions(project: WorkspaceProject, devices: Worksp
   const codexModels = new Set<string>();
   const claudeModels = new Set<string>();
   for (const association of project.repositoryAssociations) {
-    const repository = devices.find(({ id }) => id === association.deviceId)?.repositories
+    const device = devices.find(({ id }) => id === association.deviceId);
+    const repository = device?.repositories
       ?.find(({ id }) => id === association.repositoryId);
-    if (repository?.codexDevelopment) {
+    if (repository && device?.executionHarnesses?.codex) {
       codexEnabled = true;
-      repository.codexModels?.forEach(model => codexModels.add(model));
+      device.executionHarnesses.codex.models?.forEach(model => codexModels.add(model));
     }
-    if (repository?.claudeDevelopment) repository.claudeModels?.forEach(model => claudeModels.add(model));
+    if (repository && device?.executionHarnesses?.claude) device.executionHarnesses.claude.models.forEach(model => claudeModels.add(model));
   }
   return [
     ...(codexEnabled ? ([...codexModels].length ? [...codexModels].sort().map(model => ({

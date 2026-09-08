@@ -39,7 +39,7 @@ test("runner assignment, concurrent claims, fenced retries, cancellation and ten
       (${otherDeviceId}, ${organizationId}, ${otherMemberId}, 'Other device', 'darwin')`;
     await client`insert into device_credentials (organization_id, device_id, token_hash) values
       (${organizationId}, ${deviceId}, 'runner-test-hash'), (${organizationId}, ${otherDeviceId}, 'other-runner-test-hash')`;
-    await runner.register(scope, [{ id: "sample", name: "Sample" }]);
+    await runner.register(scope, [{ id: "sample", name: "Sample" }], {});
     await assert.rejects(runner.register({ ...scope, credentialHash: "wrong" }, []), RunnerAccessError);
     await assert.rejects(runner.claim({ ...scope, organizationId: otherOrganizationId }, owner, "hash"), RunnerAccessError);
     await assert.rejects(conversations.enqueuePrivateMessage({ organizationId, externalSubject: "other-subject",
@@ -178,10 +178,9 @@ test("runner assignment, concurrent claims, fenced retries, cancellation and ten
       content: "Develop source with Claude",
       runner: { deviceId, repositoryId: "sample", adapter: "claude-development" },
     }), RunnerAssignmentError);
-    await runner.register(scope, [{
-      id: "sample", name: "Sample", orcaReview: true, codexDevelopment: true, claudeDevelopment: true,
-      claudeModels: ["opus"],
-    }]);
+    await runner.register(scope, [{ id: "sample", name: "Sample", orcaReview: true }], {
+      codex: {}, claude: { models: ["opus"] },
+    });
     await assert.rejects(conversations.enqueuePrivateMessage({
       organizationId,
       externalSubject: "runner-subject",

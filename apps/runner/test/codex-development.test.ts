@@ -119,7 +119,6 @@ test("recovers a worktree that Orca finishes after its client times out", async 
       id: "sample",
       name: "Sample",
       path: repository,
-      codexDevelopment: true,
     }, new AbortController().signal, {
       leaseExpiresAt: () => Date.now() + 60_000,
       progress: async () => {},

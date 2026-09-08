@@ -1,6 +1,6 @@
 import { hasWorkspaceMissionAuthority } from "./workspace-access.js";
 import { and, asc, eq, gt, inArray, isNull, lte, or, sql } from "drizzle-orm";
-import { claudeModelAliases, evaluateApprovalPolicy, isAgentExecutionSnapshot, reasoningEfforts, type AgentExecutionSnapshot, type ClaudeModel, type MissionExecutionPreferences, type ReasoningEffort } from "@ventneuf/domain";
+import { claudeModelAliases, evaluateApprovalPolicy, isAgentExecutionSnapshot, reasoningEfforts, type AgentExecutionSnapshot, type ClaudeModel, type MissionExecutionPreferences, type ReasoningEffort, type RunnerExecutionHarnesses } from "@ventneuf/domain";
 import type { Database, DatabaseTransaction } from "./client.js";
 import { deviceCredentials, devices, messages, missionApprovals, missionEvents, missions } from "./schema.js";
 
@@ -64,15 +64,11 @@ export class RunnerMissionRepository {
     id: string;
     name: string;
     orcaReview?: boolean;
-    codexDevelopment?: boolean;
-    codexModels?: string[];
-    claudeDevelopment?: boolean;
-    claudeModels?: ClaudeModel[];
     github?: { id?: string; owner: string; name: string };
-  }>) {
+  }>, executionHarnesses: RunnerExecutionHarnesses) {
     return this.database.withOrganization(scope.organizationId, async (transaction) => {
       await this.authenticate(transaction, scope);
-      await transaction.update(devices).set({ repositories, updatedAt: new Date() }).where(and(
+      await transaction.update(devices).set({ repositories, executionHarnesses, updatedAt: new Date() }).where(and(
         eq(devices.organizationId, scope.organizationId), eq(devices.id, scope.deviceId),
       ));
     });
