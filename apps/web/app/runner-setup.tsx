@@ -272,6 +272,19 @@ export function RunnerSetup() {
   useEffect(() => { void refresh(); const timer = window.setInterval(() => void refresh(false), 15_000);
     return () => window.clearInterval(timer); }, [refresh]);
 
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const githubResult = url.searchParams.get("github");
+    if (!githubResult) return;
+    if (githubResult === "connected") {
+      toast({ body: "GitHub connected", uniqueID: "github-connected" });
+    } else if (githubResult === "error") {
+      toast({ body: "GitHub could not be connected", type: "error", uniqueID: "github-connection-error" });
+    }
+    url.searchParams.delete("github");
+    window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+  }, [toast]);
+
   const connect = useCallback(async () => {
     setConnecting(true); setError(undefined);
     try {
@@ -326,7 +339,7 @@ export function RunnerSetup() {
       .filter(Boolean) as string[];
     return keys.map((key) => [key, repository] as const);
   })), [settings.repositories]);
-  const visibleRepositories = useMemo(() => {
+  const repositoryChoices = useMemo(() => {
     const repositories = [...githubRepositories];
     const identities = new Set(repositories.flatMap((repository) => [repository.id, repository.fullName.toLowerCase()]));
     for (const repository of settings.repositories) {
@@ -342,6 +355,21 @@ export function RunnerSetup() {
     }
     return repositories;
   }, [githubRepositories, settings.repositories]);
+  const connectedRepositories = useMemo(() => settings.repositories.map((repository) => {
+    if (!repository.github) return { repository, fullName: repository.name };
+    const fullName = `${repository.github.owner}/${repository.github.name}`;
+    const githubRepository = githubRepositories.find((candidate) => candidate.id === repository.github?.id
+      || candidate.fullName.toLowerCase() === fullName.toLowerCase());
+    return {
+      repository,
+      fullName,
+      choiceId: githubRepository?.id ?? repository.github.id ?? `local:${fullName.toLowerCase()}`,
+      private: githubRepository?.private,
+    };
+  }), [githubRepositories, settings.repositories]);
+  const repositoryBeingLocated = repositoryChoices.find(({ id }) => id === repositoryToLocate);
+  const isRelocatingRepository = Boolean(repositoryBeingLocated && (localByGitHubId.get(repositoryBeingLocated.id)
+    ?? localByGitHubId.get(repositoryBeingLocated.fullName.toLowerCase())));
   const capabilities = (repositories: DeviceRepository[]) => [
     repositories.some((repository) => repository.codexDevelopment) ? "Codex" : undefined,
     repositories.some((repository) => repository.claudeDevelopment) ? "Claude Code" : undefined,
@@ -377,23 +405,24 @@ export function RunnerSetup() {
             { label: "Remove", onClick: () => void removeFolder(folder.path) },
           ]} />} />)}</List> : <Text type="supporting">No search folders yet. Add one, or locate each repository directly.</Text>}
 
-        <SectionHeader title="Repositories" description="GitHub repositories available to this member and their location on this Mac."
+        <SectionHeader title="Repositories" description="Repositories connected to this runner and their location on this Mac."
           action={<Button label="Connect repository" size="sm" variant="secondary" onClick={() => { setRepositoryToLocate(undefined); setRepositoryOpen(true); }} />} />
-        {visibleRepositories.length ? <List density="compact" hasDividers>{visibleRepositories.map((repository) => {
-          const localRepository = localByGitHubId.get(repository.id) ?? localByGitHubId.get(repository.fullName.toLowerCase());
-          const status = localRepository?.available ? "Available on this Mac" : localRepository ? "Local folder not found" : "Not connected on this Mac";
-          const visibility = repository.private === undefined ? undefined : repository.private ? "Private" : "Public";
-          return <ListItem key={repository.id} label={repository.fullName} description={[visibility, status].filter(Boolean).join(" · ")}
-            startContent={localRepository && !localRepository.available ? <StatusDot variant="warning" label="Missing" /> : undefined}
+        {connectedRepositories.length ? <List density="compact" hasDividers>{connectedRepositories.map(({
+          repository: localRepository, fullName, choiceId, private: isPrivate,
+        }) => {
+          const status = localRepository.available ? "Available on this Mac" : "Local folder not found";
+          const visibility = isPrivate === undefined ? undefined : isPrivate ? "Private" : "Public";
+          return <ListItem key={localRepository.id} label={fullName} description={[visibility, status].filter(Boolean).join(" · ")}
+            startContent={!localRepository.available ? <StatusDot variant="warning" label="Missing" /> : undefined}
             endContent={<HStack gap={2}>
-              {!localRepository?.available ? <Button label={localRepository ? "Relocate" : "Locate"} size="sm" variant="secondary"
-                onClick={() => { setRepositoryToLocate(repository.id); setRepositoryOpen(true); }} /> : null}
-              {localRepository ? <MoreMenu label={`Options for ${repository.fullName}`} size="sm" alignment="end" items={[
-                { label: "Change local folder", onClick: () => { setRepositoryToLocate(repository.id); setRepositoryOpen(true); } },
+              {!localRepository.available && choiceId ? <Button label="Relocate" size="sm" variant="secondary"
+                onClick={() => { setRepositoryToLocate(choiceId); setRepositoryOpen(true); }} /> : null}
+              <MoreMenu label={`Options for ${fullName}`} size="sm" alignment="end" items={[
+                ...(choiceId ? [{ label: "Change local folder", onClick: () => { setRepositoryToLocate(choiceId); setRepositoryOpen(true); } }] : []),
                 { label: "Remove from this Mac", onClick: () => void removeRepository(localRepository.id) },
-              ]} /> : null}
+              ]} />
             </HStack>} />;
-        })}</List> : <Text type="supporting">Grant repository access in GitHub, then connect its checkout on this Mac.</Text>}
+        })}</List> : <Text type="supporting">No repositories connected to this runner yet.</Text>}
       </> : null}
     </VStack>
 
@@ -412,10 +441,10 @@ export function RunnerSetup() {
     {error ? <Banner status="error" title="Devices could not be updated" description={error} /> : null}
     <FolderDialog isOpen={isFolderOpen} onOpenChange={setFolderOpen} currentPath={folderToEdit}
       onSaved={async () => { await refresh(); toast({ body: folderToEdit ? "Search folder updated" : "Search folder added" }); }} />
-    <RepositoryDialog isOpen={isRepositoryOpen} onOpenChange={setRepositoryOpen} repositories={visibleRepositories}
+    <RepositoryDialog isOpen={isRepositoryOpen} onOpenChange={setRepositoryOpen} repositories={repositoryChoices}
       searchFolderCount={settings.searchFolders.filter(({ available }) => available).length} initialRepositoryId={repositoryToLocate}
-      requirePath={Boolean(repositoryToLocate && localByGitHubId.has(repositoryToLocate))}
-      onSaved={async (name) => { await refresh(); toast({ body: `${name} is available on this Mac`, uniqueID: "repository-connected" }); }} />
+      requirePath={isRelocatingRepository}
+      onSaved={async (name) => { await refresh(); toast({ body: `${name} connected to this Mac`, uniqueID: "repository-connected" }); }} />
     <RunnerUpdateDialog isOpen={isUpdateOpen} onOpenChange={setUpdateOpen} status={updateStatus} onUpdate={updateRunner} />
   </VStack>;
 }
