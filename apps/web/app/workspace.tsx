@@ -12,6 +12,7 @@ import { NavigationRows } from "./_components/navigation-rows";
 import { WorkspaceFrame } from "./_components/workspace-frame";
 import { EditDisplayNameDialog, NewConversationDialog, NewProjectDialog } from "./_components/workspace-dialogs";
 import { WorkspaceSideNav } from "./_components/workspace-side-nav";
+import { UpdateNotifications } from "./_components/update-notifications";
 import styles from "./workspace.module.css";
 
 interface WorkspaceContextValue {
@@ -120,6 +121,7 @@ export function Workspace({ email, children }: { email: string; children: ReactN
   }), [devices, error, isLoading, isMobile, openNewConversation, openNewProject, refreshWorkspace, snapshot]);
 
   return <NavigationContext value={context}>
+    <UpdateNotifications />
     <WorkspaceFrame navigation={<WorkspaceSideNav navigation={navigation} member={member}
       onOpenSearch={() => setPaletteOpen(true)} onNewConversation={openNewConversation} onNewProject={openNewProject}
       accountActions={accountActions} />} overlays={<>

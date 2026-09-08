@@ -17,6 +17,18 @@ import { promisify } from "node:util";
 
 const execute = promisify(execFile);
 
+async function selectFolder() {
+  try {
+    const { stdout } = await execute("/usr/bin/osascript", ["-e",
+      "POSIX path of (choose folder with prompt \"Choose a folder for ventneuf.os\")"], { timeout: 120_000, maxBuffer: 8_192 });
+    return stdout.trim() || undefined;
+  } catch (error) {
+    const code = (error as { code?: unknown }).code;
+    if (code === 1 || code === "1") return undefined;
+    throw error;
+  }
+}
+
 async function sourceVersion() {
   try {
     if ((await execute("/usr/bin/git", ["status", "--porcelain"], { cwd: process.cwd() })).stdout.trim()) return undefined;
@@ -74,6 +86,7 @@ if (command === "install") {
     deviceName: hostname(),
     allowedOrigins,
     repositoriesFile,
+    selectFolder,
     updater: new RunnerUpdater(dirname(fileURLToPath(import.meta.url))),
   });
   await bridge.start(port);
