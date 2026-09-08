@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { AgentExecutionSnapshot } from "@ventneuf/domain";
+import type { AgentExecutionSnapshot, RunnerExecutionHarnesses } from "@ventneuf/domain";
 import type { CredentialStore, StoredDevice } from "./credential-store.js";
 import {
   MissionPausedError,
@@ -9,7 +9,6 @@ import {
   type MissionStatus,
   type RunnerMission,
   type RegisteredRepository,
-  type ClaudeModel,
 } from "./repositories.js";
 
 export interface ClaimedMission extends RunnerMission {
@@ -35,12 +34,8 @@ export interface MissionClient {
     id: string;
     name: string;
     orcaReview?: boolean;
-    codexDevelopment?: boolean;
-    codexModels?: string[];
-    claudeDevelopment?: boolean;
-    claudeModels?: ClaudeModel[];
     github?: { id?: string; owner: string; name: string };
-  }>): Promise<void>;
+  }>, harnesses: RunnerExecutionHarnesses): Promise<void>;
   claimMission(device: StoredDevice, owner: string): Promise<ClaimedMission | null>;
   reportMission(device: StoredDevice, missionId: string, report: MissionReport): Promise<void>;
   reportExecution?(device: StoredDevice, missionId: string, report: {
@@ -58,6 +53,7 @@ export class RunnerMissionWorker {
     client: MissionClient;
     store: CredentialStore;
     repositories: () => Promise<RegisteredRepository[]>;
+    harnesses?: () => Promise<RunnerExecutionHarnesses>;
     adapter: MissionAdapter;
     renewalIntervalMs?: number;
   }) {}
@@ -69,17 +65,15 @@ export class RunnerMissionWorker {
       const device = await this.options.store.load();
       if (!device) return;
       const repositories = await this.options.repositories();
+      const harnesses = await this.options.harnesses?.() ?? {};
       if (this.options.adapter.maintain && this.options.client.getMissionStatus) {
         await this.options.adapter.maintain({
           status: (missionId) => this.options.client.getMissionStatus!(device, missionId),
         });
       }
       await this.options.client.registerRepositories(device, repositories.map(({
-        id, name, orcaReview, codexDevelopment, codexModels, claudeDevelopment, claudeModels, github,
-      }) => ({ id, name, ...(orcaReview ? { orcaReview } : {}), ...(codexDevelopment ? { codexDevelopment } : {}),
-        ...(codexModels ? { codexModels } : {}),
-        ...(claudeDevelopment ? { claudeDevelopment } : {}), ...(claudeModels ? { claudeModels } : {}),
-        ...(github ? { github } : {}) })));
+        id, name, orcaReview, github,
+      }) => ({ id, name, ...(orcaReview ? { orcaReview } : {}), ...(github ? { github } : {}) })), harnesses);
       const mission = await this.options.client.claimMission(device, this.owner);
       if (!mission) return;
       let latestExecution: AgentExecutionSnapshot | undefined;
@@ -135,18 +129,18 @@ export class RunnerMissionWorker {
           if (mission.adapter === "orca-review" && !repository.orcaReview) {
             throw new Error("Orca review is not enabled for this repository.");
           }
-          if (mission.adapter === "codex-development" && (!repository.codexDevelopment
-            || (mission.model === undefined ? Boolean(repository.codexModels?.length) : !repository.codexModels?.includes(mission.model))
-            || mission.subagents?.models.some(model => model !== "inherit" && !repository.codexModels?.includes(model))
+          if (mission.adapter === "codex-development" && (!harnesses.codex
+            || (mission.model === undefined ? Boolean(harnesses.codex.models?.length) : !harnesses.codex.models?.includes(mission.model))
+            || mission.subagents?.models.some(model => model !== "inherit" && !harnesses.codex?.models?.includes(model))
             || !Number.isFinite(deadline) || deadline <= Date.now())) {
-            throw new Error("Codex development is not enabled or its authority expired.");
+            throw new Error("Codex is unavailable on this runner or its authority expired.");
           }
-          if (mission.adapter === "claude-development" && (!repository.claudeDevelopment
-            || !mission.model || !(repository.claudeModels as readonly string[] | undefined)?.includes(mission.model)
+          if (mission.adapter === "claude-development" && (!harnesses.claude
+            || !mission.model || !(harnesses.claude.models as readonly string[]).includes(mission.model)
             || mission.subagents?.models.some(model => model !== "inherit"
-              && !(repository.claudeModels as readonly string[] | undefined)?.includes(model))
+              && !(harnesses.claude?.models as readonly string[] | undefined)?.includes(model))
             || !Number.isFinite(deadline) || deadline <= Date.now())) {
-            throw new Error("Claude development is not enabled or its authority expired.");
+            throw new Error("Claude Code is unavailable on this runner or its authority expired.");
           }
           await renew();
         }

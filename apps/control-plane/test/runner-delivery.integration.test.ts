@@ -60,7 +60,7 @@ test("browser API delivers a read-only mission through the real runner client an
     assert.ok(address && typeof address !== "string");
     const baseUrl = new URL(`http://127.0.0.1:${address.port}`);
     const cloud = new RunnerCloudClient(baseUrl);
-    await cloud.registerRepositories(device, [{ id: "sample", name: "Sample" }]);
+    await cloud.registerRepositories(device, [{ id: "sample", name: "Sample" }], {});
     const post = (path: string, body: unknown, token = "integration-user") => fetch(new URL(path, baseUrl), {
       method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(body),
     });
@@ -94,7 +94,7 @@ test("browser API delivers a read-only mission through the real runner client an
     assert.ok(!JSON.stringify(snapshot).includes(credential.token));
     assert.ok(!JSON.stringify(snapshot).includes(temporary));
     assert.equal((await post("/api/missions/runner", { deviceId, repositoryId: "sample", adapter: "orca-review" })).status, 404);
-    await cloud.registerRepositories(device, [{ id: "sample", name: "Sample", orcaReview: true }]);
+    await cloud.registerRepositories(device, [{ id: "sample", name: "Sample", orcaReview: true }], {});
     assert.equal((await post("/api/missions/runner", { deviceId, repositoryId: "sample", adapter: "orca-review" })).status, 202);
     const owner = randomUUID();
     const review = await cloud.claimMission(device, owner);
@@ -107,7 +107,7 @@ test("browser API delivers a read-only mission through the real runner client an
     await repository.cancelMission(organizationId, review.id, {});
     assert.equal(await cloud.getMissionStatus(device, review.id), "cancelled");
     await assert.rejects(cloud.renewMission(device, review.id, { owner, token: review.leaseToken }));
-    await cloud.registerRepositories(device, [{ id: "sample", name: "Sample", codexDevelopment: true }]);
+    await cloud.registerRepositories(device, [{ id: "sample", name: "Sample" }], { codex: {} });
     await repository.enqueuePrivateMessage({ organizationId, externalSubject: "integration-subject", content: "Live coding mission",
       runner: { deviceId, repositoryId: "sample", adapter: "codex-development" } });
     const coding = await cloud.claimMission(device, owner);

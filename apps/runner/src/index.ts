@@ -6,12 +6,13 @@ import { RunnerCloudClient } from "./cloud-client.js";
 import { MacOSKeychainCredentialStore } from "./credential-store.js";
 import { installLaunchAgent, launchAgentStatus, uninstallLaunchAgent } from "./launch-agent.js";
 import { RunnerMissionWorker } from "./mission-worker.js";
-import { defaultRepositoriesFile, loadRepositories } from "./repositories.js";
+import { defaultRepositoriesFile, loadRepositories, removeLegacyExecutionSettings } from "./repositories.js";
 import { CodexDevelopmentAdapter } from "./codex-development.js";
 import { ClaudeDevelopmentAdapter } from "./claude-development.js";
 import { OrcaReviewAdapter, RunnerAdapters } from "./orca-review.js";
 import { LocalRunnerBridge } from "./local-bridge.js";
 import { RunnerUpdater } from "./runner-update.js";
+import { executionHarnessesFile, initializeExecutionHarnesses, loadExecutionHarnesses } from "./execution-harnesses.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -79,6 +80,13 @@ if (command === "install") {
 
   const client = new RunnerCloudClient(new URL(controlPlaneUrl()));
   const repositoriesFile = process.env.VENTNEUF_REPOSITORIES_FILE ?? defaultRepositoriesFile();
+  const harnessesFile = executionHarnessesFile(repositoriesFile);
+  const installedHarnesses = {
+    codex: Boolean(process.env.VENTNEUF_ORCA_PATH && process.env.VENTNEUF_CODEX_PATH),
+    claude: Boolean(process.env.VENTNEUF_ORCA_PATH && process.env.VENTNEUF_CLAUDE_PATH),
+  };
+  await initializeExecutionHarnesses(harnessesFile, repositoriesFile, installedHarnesses);
+  await removeLegacyExecutionSettings(repositoriesFile);
   const store = new MacOSKeychainCredentialStore(userInfo().username);
   const bridge = new LocalRunnerBridge({
     client,
@@ -86,11 +94,9 @@ if (command === "install") {
     deviceName: hostname(),
     allowedOrigins,
     repositoriesFile,
+    harnessesFile,
     selectFolder,
-    harnesses: {
-      codex: Boolean(process.env.VENTNEUF_ORCA_PATH && process.env.VENTNEUF_CODEX_PATH),
-      claude: Boolean(process.env.VENTNEUF_ORCA_PATH && process.env.VENTNEUF_CLAUDE_PATH),
-    },
+    installedHarnesses,
     updater: new RunnerUpdater(dirname(fileURLToPath(import.meta.url))),
   });
   await bridge.start(port);
@@ -101,19 +107,10 @@ if (command === "install") {
   const claudeDevelopment = process.env.VENTNEUF_ORCA_PATH && process.env.VENTNEUF_CLAUDE_PATH
     ? new ClaudeDevelopmentAdapter({ orcaPath: process.env.VENTNEUF_ORCA_PATH, claudePath: process.env.VENTNEUF_CLAUDE_PATH }) : undefined;
   new RunnerMissionWorker({ client, store, adapter: new RunnerAdapters(review, development, claudeDevelopment),
-    repositories: async () => (await loadRepositories(repositoriesFile))
-      .map((repository) => ({
-        ...repository,
-        orcaReview: Boolean(review && repository.orcaReview),
-        codexDevelopment: Boolean(development && repository.codexDevelopment),
-        ...(development && repository.codexDevelopment && repository.codexModels
-          ? { codexModels: repository.codexModels }
-          : {}),
-        claudeDevelopment: Boolean(claudeDevelopment && repository.claudeDevelopment),
-        ...(claudeDevelopment && repository.claudeDevelopment && repository.claudeModels
-          ? { claudeModels: repository.claudeModels }
-          : {}),
-      })),
+    repositories: async () => (await loadRepositories(repositoriesFile)).map((repository) => ({
+      ...repository, orcaReview: Boolean(review && repository.orcaReview),
+    })),
+    harnesses: () => loadExecutionHarnesses(harnessesFile, installedHarnesses),
   }).start();
   console.info(`ventneuf.os runner listening on http://127.0.0.1:${port}`);
 } else {

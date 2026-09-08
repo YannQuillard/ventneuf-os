@@ -83,6 +83,7 @@ test("finds a GitHub checkout locally without returning its path", async () => {
   const temporary = await mkdtemp(join(tmpdir(), "runner-bridge-registration-"));
   const repositoryPath = join(temporary, "private-repository");
   const repositoriesFile = join(temporary, "config", "repositories.json");
+  const harnessesFile = `${repositoriesFile}.harnesses.json`;
   await mkdir(repositoryPath);
   await execute("/usr/bin/git", ["init", repositoryPath]);
   await execute("/usr/bin/git", ["-C", repositoryPath, "remote", "add", "origin", "git@github.com:OnlineNow/private-repository.git"]);
@@ -98,8 +99,9 @@ test("finds a GitHub checkout locally without returning its path", async () => {
     deviceName: "Test Mac",
     allowedOrigins: new Set([origin]),
     repositoriesFile,
+    harnessesFile,
     selectFolder: async () => temporary,
-    harnesses: { codex: true, claude: true },
+    installedHarnesses: { codex: true, claude: true },
   });
   const { server, port } = await bridge.start(0);
   try {
@@ -132,22 +134,22 @@ test("finds a GitHub checkout locally without returning its path", async () => {
       }],
     });
 
-    const capabilities = await fetch(`http://127.0.0.1:${port}/repositories/capabilities`, {
+    const capabilities = await fetch(`http://127.0.0.1:${port}/execution-harnesses`, {
       method: "PATCH", headers: { origin, "content-type": "application/json" }, body: JSON.stringify({
-        id: configuration[0]?.id, codexDevelopment: true, codexModels: ["gpt-5.3-codex"],
-        claudeDevelopment: true, claudeModels: ["opus", "sonnet"],
+        codex: { models: ["gpt-5.3-codex"] }, claude: { models: ["opus", "sonnet"] },
       }),
     });
     assert.equal(capabilities.status, 200);
     const configured = JSON.parse(await readFile(repositoriesFile, "utf8")) as Array<Record<string, unknown>>;
-    assert.equal(configured[0]?.codexDevelopment, true);
-    assert.deepEqual(configured[0]?.codexModels, ["gpt-5.3-codex"]);
-    assert.equal(configured[0]?.claudeDevelopment, true);
-    assert.deepEqual(configured[0]?.claudeModels, ["opus", "sonnet"]);
+    assert.equal(configured[0]?.codexDevelopment, undefined);
+    assert.equal(configured[0]?.claudeDevelopment, undefined);
+    assert.deepEqual(JSON.parse(await readFile(harnessesFile, "utf8")), {
+      codex: { models: ["gpt-5.3-codex"] }, claude: { models: ["opus", "sonnet"] },
+    });
     const configuredSettings = await fetch(`http://127.0.0.1:${port}/repository-settings`, { headers: { origin } });
     const configuredBody = await configuredSettings.json() as { repositories: Array<Record<string, unknown>> };
-    assert.equal(configuredBody.repositories[0]?.codexDevelopment, true);
-    assert.equal(configuredBody.repositories[0]?.claudeDevelopment, true);
+    assert.equal(configuredBody.repositories[0]?.codexDevelopment, undefined);
+    assert.equal(configuredBody.repositories[0]?.claudeDevelopment, undefined);
 
     const selected = await fetch(`http://127.0.0.1:${port}/folders/select`, { method: "POST", headers: { origin } });
     assert.deepEqual(await selected.json(), { path: temporary });

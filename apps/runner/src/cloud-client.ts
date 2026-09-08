@@ -6,8 +6,8 @@ import {
   type RunnerApprovalResponse,
 } from "./mission-worker.js";
 import type { StoredDevice } from "./credential-store.js";
-import type { AgentExecutionSnapshot, ReasoningEffort } from "@ventneuf/domain";
-import { isClaudeModel, type ClaudeModel, type MissionStatus } from "./repositories.js";
+import type { AgentExecutionSnapshot, ReasoningEffort, RunnerExecutionHarnesses } from "@ventneuf/domain";
+import { isClaudeModel, type MissionStatus } from "./repositories.js";
 
 const reasoningEfforts: readonly ReasoningEffort[] = ["low", "medium", "high", "xhigh", "max"];
 
@@ -38,13 +38,9 @@ export class RunnerCloudClient {
     id: string;
     name: string;
     orcaReview?: boolean;
-    codexDevelopment?: boolean;
-    codexModels?: string[];
-    claudeDevelopment?: boolean;
-    claudeModels?: ClaudeModel[];
     github?: { id?: string; owner: string; name: string };
-  }>) {
-    await this.missionRequest(device, "/api/runner/repositories", { repositories });
+  }>, harnesses: RunnerExecutionHarnesses) {
+    await this.missionRequest(device, "/api/runner/repositories", { repositories, harnesses });
   }
 
   async claimMission(device: StoredDevice, owner: string): Promise<ClaimedMission | null> {

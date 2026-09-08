@@ -66,20 +66,20 @@ test("workspace runtime isolates private threads and dispatches delegated work i
     await admin`insert into members (id, organization_id, external_subject, handle, display_name) values
       (${ownerId}, ${organizationId}, ${ownerScope.externalSubject}, 'owner', 'Owner'),
       (${collaboratorId}, ${organizationId}, ${collaboratorScope.externalSubject}, 'collaborator', 'Collaborator')`;
-    await admin`insert into devices (id, organization_id, member_id, name, platform, repositories) values
-      (${deviceId}, ${organizationId}, ${ownerId}, 'Owner device', 'darwin',
+    await admin`insert into devices (id, organization_id, member_id, name, platform, execution_harnesses, repositories) values
+      (${deviceId}, ${organizationId}, ${ownerId}, 'Owner device', 'darwin', '{"claude":{"models":["opus"]}}'::jsonb,
         ${JSON.stringify([
-          { id: "workspace-repository", name: "Workspace repository", github: { owner: "ventneuf", name: "workspace" }, claudeDevelopment: true, claudeModels: ["opus"] },
-          { id: "unassociated-repository", name: "Unassociated repository", claudeDevelopment: true, claudeModels: ["sonnet"] },
+          { id: "workspace-repository", name: "Workspace repository", github: { owner: "ventneuf", name: "workspace" } },
+          { id: "unassociated-repository", name: "Unassociated repository" },
         ])}::jsonb),
-      (${collaboratorDeviceId}, ${organizationId}, ${collaboratorId}, 'Collaborator device', 'darwin',
-        ${JSON.stringify([{ id: "collaborator-repository", name: "Workspace repository", github: { owner: "ventneuf", name: "workspace" }, claudeDevelopment: true, claudeModels: ["opus"] }])}::jsonb),
-      (${progressDeviceId}, ${organizationId}, ${collaboratorId}, 'Progress device', 'darwin',
-        ${JSON.stringify([{ id: "collaborator-repository", name: "Workspace repository", github: { owner: "ventneuf", name: "workspace" }, claudeDevelopment: true, claudeModels: ["opus"] }])}::jsonb),
-      (${completionDeviceId}, ${organizationId}, ${collaboratorId}, 'Completion device', 'darwin',
-        ${JSON.stringify([{ id: "collaborator-repository", name: "Workspace repository", github: { owner: "ventneuf", name: "workspace" }, claudeDevelopment: true, claudeModels: ["opus"] }])}::jsonb),
-      (${approvalDeviceId}, ${organizationId}, ${collaboratorId}, 'Approval device', 'darwin',
-        ${JSON.stringify([{ id: "collaborator-repository", name: "Workspace repository", github: { owner: "ventneuf", name: "workspace" }, claudeDevelopment: true, claudeModels: ["opus"] }])}::jsonb)`;
+      (${collaboratorDeviceId}, ${organizationId}, ${collaboratorId}, 'Collaborator device', 'darwin', '{"claude":{"models":["opus"]}}'::jsonb,
+        ${JSON.stringify([{ id: "collaborator-repository", name: "Workspace repository", github: { owner: "ventneuf", name: "workspace" } }])}::jsonb),
+      (${progressDeviceId}, ${organizationId}, ${collaboratorId}, 'Progress device', 'darwin', '{"claude":{"models":["opus"]}}'::jsonb,
+        ${JSON.stringify([{ id: "collaborator-repository", name: "Workspace repository", github: { owner: "ventneuf", name: "workspace" } }])}::jsonb),
+      (${completionDeviceId}, ${organizationId}, ${collaboratorId}, 'Completion device', 'darwin', '{"claude":{"models":["opus"]}}'::jsonb,
+        ${JSON.stringify([{ id: "collaborator-repository", name: "Workspace repository", github: { owner: "ventneuf", name: "workspace" } }])}::jsonb),
+      (${approvalDeviceId}, ${organizationId}, ${collaboratorId}, 'Approval device', 'darwin', '{"claude":{"models":["opus"]}}'::jsonb,
+        ${JSON.stringify([{ id: "collaborator-repository", name: "Workspace repository", github: { owner: "ventneuf", name: "workspace" } }])}::jsonb)`;
     await admin`insert into device_credentials (organization_id, device_id, token_hash)
       values (${organizationId}, ${deviceId}, ${runnerScope.credentialHash}),
       (${organizationId}, ${collaboratorDeviceId}, ${collaboratorRunnerScope.credentialHash}),

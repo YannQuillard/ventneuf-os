@@ -14,7 +14,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
-import type { ClaudeModel } from "@ventneuf/domain";
+import type { RunnerExecutionHarnesses } from "@ventneuf/domain";
 
 export const memberRole = pgEnum("member_role", ["owner", "member"]);
 export const channelKind = pgEnum("channel_kind", ["project", "shared", "private"]);
@@ -89,12 +89,9 @@ export const devices = pgTable(
       id: string;
       name: string;
       orcaReview?: boolean;
-      codexDevelopment?: boolean;
-      codexModels?: string[];
-      claudeDevelopment?: boolean;
-      claudeModels?: ClaudeModel[];
       github?: { id?: string; owner: string; name: string };
     }>>().default([]).notNull(),
+    executionHarnesses: jsonb("execution_harnesses").$type<RunnerExecutionHarnesses>().default({}).notNull(),
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
     ...timestamps,

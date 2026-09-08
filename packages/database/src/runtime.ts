@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
-import type { ClaudeModel, MissionAuthority, MissionExecutionPreferences, ReasoningEffort } from "@ventneuf/domain";
+import type { ClaudeModel, MissionAuthority, MissionExecutionPreferences, ReasoningEffort, RunnerExecutionHarnesses } from "@ventneuf/domain";
 import type { Database } from "./client.js";
 import { requireConversationAccess, requireProjectAccess, currentScopeForMission, requireCurrentMissionMemoryScope, WorkspaceAccessError } from "./workspace-access.js";
 import { publicApproval } from "./mission-approvals.js";
@@ -45,21 +45,18 @@ function repositorySupports(
   repository: {
     id: string;
     orcaReview?: boolean;
-    codexDevelopment?: boolean;
-    codexModels?: string[];
-    claudeDevelopment?: boolean;
-    claudeModels?: ClaudeModel[];
   },
+  harnesses: RunnerExecutionHarnesses,
   repositoryId: string,
   adapter: DelegatedRunnerAdapter,
   model?: string,
 ) {
   return repository.id === repositoryId
     && (adapter !== "orca-review" || repository.orcaReview === true)
-    && (adapter !== "codex-development" || (repository.codexDevelopment === true
-      && (model === undefined ? !repository.codexModels?.length : repository.codexModels?.includes(model) === true)))
-    && (adapter !== "claude-development" || (repository.claudeDevelopment === true
-      && model !== undefined && (repository.claudeModels as readonly string[] | undefined)?.includes(model) === true))
+    && (adapter !== "codex-development" || (harnesses.codex !== undefined
+      && (model === undefined ? !harnesses.codex.models?.length : harnesses.codex.models?.includes(model) === true)))
+    && (adapter !== "claude-development" || (harnesses.claude !== undefined
+      && model !== undefined && (harnesses.claude.models as readonly string[]).includes(model)))
     && (!adapter.endsWith("development") ? model === undefined : true);
 }
 
@@ -136,6 +133,7 @@ export class ConversationRuntimeRepository {
         )).for("share").limit(1);
         if (!device?.repositories.some((repository) => repositorySupports(
           repository,
+          device.executionHarnesses,
           input.runner!.repositoryId,
           input.runner!.adapter ?? "repository-check",
           input.runner!.model,
@@ -489,7 +487,7 @@ export class ConversationRuntimeRepository {
       } else if (result.ownerMemberId !== mission.requestedByMemberId) return undefined;
 
       const ownedDevices = await transaction
-        .select({ id: devices.id, repositories: devices.repositories })
+        .select({ id: devices.id, repositories: devices.repositories, executionHarnesses: devices.executionHarnesses })
         .from(devices)
         .where(and(
           eq(devices.organizationId, organizationId),
@@ -497,16 +495,16 @@ export class ConversationRuntimeRepository {
           isNull(devices.revokedAt),
         ));
       let targets: HermesDispatchScope["targets"] = ownedDevices.flatMap((device) => device.repositories.map((repository) => {
-        const codexModels = repository.codexDevelopment ? repository.codexModels : undefined;
-        const claudeModels = repository.claudeDevelopment ? repository.claudeModels : undefined;
+        const codexModels = device.executionHarnesses.codex?.models;
+        const claudeModels = device.executionHarnesses.claude?.models;
         return {
           deviceId: device.id,
           repositoryId: repository.id,
           adapters: [
             "repository-check" as const,
             ...(repository.orcaReview ? ["orca-review" as const] : []),
-            ...(repository.codexDevelopment ? ["codex-development" as const] : []),
-            ...(claudeModels?.length ? ["claude-development" as const] : []),
+            ...(device.executionHarnesses.codex ? ["codex-development" as const] : []),
+            ...(device.executionHarnesses.claude ? ["claude-development" as const] : []),
           ],
           ...(claudeModels?.length ? { claudeModels } : {}),
           ...(codexModels?.length ? { codexModels } : {}),
@@ -530,12 +528,12 @@ export class ConversationRuntimeRepository {
             const key = `${project.id}\u0000${ownedDevice.id}\u0000${repository.id}`;
             if (seen.has(key)) return [];
             seen.add(key);
-            const codexModels = repository.codexDevelopment ? repository.codexModels : undefined;
-            const claudeModels = repository.claudeDevelopment ? repository.claudeModels : undefined;
+            const codexModels = ownedDevice.executionHarnesses.codex?.models;
+            const claudeModels = ownedDevice.executionHarnesses.claude?.models;
             return [{ deviceId: ownedDevice.id, repositoryId: repository.id, projectId: project.id, projectName: project.name,
               adapters: ["repository-check" as const, ...(repository.orcaReview ? ["orca-review" as const] : []),
-                ...(repository.codexDevelopment ? ["codex-development" as const] : []),
-                ...(claudeModels?.length ? ["claude-development" as const] : [])],
+                ...(ownedDevice.executionHarnesses.codex ? ["codex-development" as const] : []),
+                ...(ownedDevice.executionHarnesses.claude ? ["claude-development" as const] : [])],
               ...(claudeModels?.length ? { claudeModels } : {}),
               ...(codexModels?.length ? { codexModels } : {}),
             }];
@@ -628,6 +626,7 @@ export class ConversationRuntimeRepository {
       )).for("share").limit(1);
       const targetRepository = device?.repositories.find((repository) => repositorySupports(
         repository,
+        device.executionHarnesses,
         input.repositoryId,
         input.adapter,
         input.model,

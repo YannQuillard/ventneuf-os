@@ -62,6 +62,7 @@ export class DeviceRuntimeRepository {
         name: devices.name,
         platform: devices.platform,
         repositories: devices.repositories,
+        executionHarnesses: devices.executionHarnesses,
         lastSeenAt: devices.lastSeenAt,
         revokedAt: devices.revokedAt,
       })

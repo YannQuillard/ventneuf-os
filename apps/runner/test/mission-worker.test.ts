@@ -4,7 +4,8 @@ import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LeaseRejectedError, RunnerMissionWorker, type MissionClient, type MissionReport } from "../src/mission-worker.js";
-import { addRegisteredRepository, loadRepositories, MissionPausedError, RepositoryCheckAdapter } from "../src/repositories.js";
+import { addRegisteredRepository, loadRepositories, MissionPausedError, removeLegacyExecutionSettings, RepositoryCheckAdapter } from "../src/repositories.js";
+import { initializeExecutionHarnesses } from "../src/execution-harnesses.js";
 
 const device = { deviceId: "device-1", credential: "private-credential", name: "Test Mac", platform: "darwin" as const };
 const mission = { id: "mission-1", repositoryId: "sample", adapter: "repository-check" as const,
@@ -26,9 +27,9 @@ test("repository check uses explicit configuration and never reads source conten
     }]));
     const [repository] = await loadRepositories(configuration);
     assert.ok(repository);
-    assert.equal(repository.codexDevelopment, true);
-    assert.equal(repository.claudeDevelopment, true);
-    assert.deepEqual(repository.claudeModels, ["opus"]);
+    assert.equal("codexDevelopment" in repository, false);
+    assert.equal("claudeDevelopment" in repository, false);
+    assert.equal("claudeModels" in repository, false);
     const adapter = new RepositoryCheckAdapter();
     const result = await adapter.execute(mission, repository, new AbortController().signal);
     assert.match(result, /3 top-level entries/);
@@ -61,6 +62,30 @@ test("adds repositories to the local configuration without enabling execution ca
     assert.match(second.id, /^second-repository-[a-f0-9]{8}$/);
     assert.deepEqual(await loadRepositories(configuration), [first, second]);
     await assert.rejects(addRegisteredRepository(configuration, { name: "Duplicate", path: firstPath }), /already registered/);
+  } finally { await rm(temporary, { recursive: true, force: true }); }
+});
+
+test("migrates repository harness settings into one runner-level configuration", async () => {
+  const temporary = await mkdtemp(join(tmpdir(), "runner-harness-migration-"));
+  try {
+    const repositories = join(temporary, "repositories.json");
+    const harnesses = `${repositories}.harnesses.json`;
+    await writeFile(repositories, JSON.stringify([
+      { id: "first", name: "First", path: "/first", codexDevelopment: true, codexModels: ["gpt-codex"] },
+      { id: "second", name: "Second", path: "/second", codexDevelopment: true,
+        claudeDevelopment: true, claudeModels: ["sonnet", "opus"] },
+    ]));
+    assert.deepEqual(await initializeExecutionHarnesses(harnesses, repositories, { codex: true, claude: true }), {
+      codex: {}, claude: { models: ["sonnet", "opus"] },
+    });
+    await removeLegacyExecutionSettings(repositories);
+    assert.deepEqual(JSON.parse(await readFile(harnesses, "utf8")), {
+      codex: {}, claude: { models: ["sonnet", "opus"] },
+    });
+    assert.deepEqual(JSON.parse(await readFile(repositories, "utf8")), [
+      { id: "first", name: "First", path: "/first" },
+      { id: "second", name: "Second", path: "/second" },
+    ]);
   } finally { await rm(temporary, { recursive: true, force: true }); }
 });
 
@@ -165,15 +190,13 @@ test("routes a Claude approval through the leased worker and pauses without fail
   const worker = new RunnerMissionWorker({
     store: { load: async () => device, save: async () => {} },
     repositories: async () => [{
-      id: "sample", name: "Sample", path: "/repository", orcaReview: true, codexDevelopment: true,
-      claudeDevelopment: true,
-      claudeModels: ["opus"],
+      id: "sample", name: "Sample", path: "/repository", orcaReview: true,
     }],
+    harnesses: async () => ({ codex: {}, claude: { models: ["opus"] } }),
     client: {
-      registerRepositories: async (_device, repositories) => {
-        assert.equal(repositories[0]?.codexDevelopment, true);
-        assert.equal(repositories[0]?.claudeDevelopment, true);
-        assert.deepEqual(repositories[0]?.claudeModels, ["opus"]);
+      registerRepositories: async (_device, repositories, harnesses) => {
+        assert.deepEqual(repositories, [{ id: "sample", name: "Sample", orcaReview: true }]);
+        assert.deepEqual(harnesses, { codex: {}, claude: { models: ["opus"] } });
       },
       claimMission: async () => ({
         ...mission,
@@ -213,7 +236,8 @@ test("final mission report carries the latest activity even when live transmissi
     rootThreadId: "root", updatedAt: new Date().toISOString(), omittedItems: 0, items: [] };
   const worker = new RunnerMissionWorker({
     store: { load: async () => device, save: async () => {} },
-    repositories: async () => [{ id: "sample", name: "Sample", path: "/workspace", codexDevelopment: true }],
+    repositories: async () => [{ id: "sample", name: "Sample", path: "/workspace" }],
+    harnesses: async () => ({ codex: {} }),
     client: { registerRepositories: async () => {}, claimMission: async () => ({ ...mission, adapter: "codex-development",
       authorityExpiresAt: new Date(Date.now() + 60_000).toISOString() }),
       renewMission: async () => new Date(Date.now() + 60_000).toISOString(),

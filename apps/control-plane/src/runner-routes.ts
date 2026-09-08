@@ -29,14 +29,11 @@ const repository = z.object({
     owner: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,38})$/),
     name: z.string().regex(/^[a-z0-9._-]{1,100}$/),
   }).strict().optional(),
-}).strict().superRefine((value, context) => {
-  if (value.claudeModels !== undefined && value.claudeDevelopment !== true) context.addIssue({
-    code: "custom", path: ["claudeModels"], message: "Claude models require the Claude development capability.",
-  });
-  if (value.codexModels !== undefined && value.codexDevelopment !== true) context.addIssue({
-    code: "custom", path: ["codexModels"], message: "Codex models require the Codex development capability.",
-  });
-});
+}).strict();
+const executionHarnesses = z.object({
+  codex: z.object({ models: z.array(z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,99}$/)).min(1).max(20).optional() }).strict().optional(),
+  claude: z.object({ models: z.array(z.enum(claudeModelAliases)).min(1).max(claudeModelAliases.length) }).strict().optional(),
+}).strict();
 const lease = z.object({ owner: z.string().uuid(), token: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 const report = z.object({
   owner: z.string().uuid(), token: z.string().regex(/^[a-f0-9]{64}$/), eventId: z.string().uuid(),
@@ -139,11 +136,20 @@ export function registerRunnerRoutes(app: Express, verifier: TokenVerifier, runt
         const scope = { ...parsed, credentialHash: hashDeviceToken(token) };
         response.setHeader("cache-control", "no-store");
         if (operation === "repositories") {
-          const input = z.object({ repositories: z.array(repository).max(100) }).strict().parse(request.body);
+          const input = z.object({ repositories: z.array(repository).max(100), harnesses: executionHarnesses.optional() }).strict().parse(request.body);
           if (new Set(input.repositories.map(({ id }) => id)).size !== input.repositories.length) {
             return void response.status(400).json({ error: "duplicate_repository" });
           }
-          await runtime.runnerMissions.register(scope, input.repositories);
+          const legacyCodex = input.repositories.some(repository => repository.codexDevelopment);
+          const legacyClaudeModels = [...new Set(input.repositories.flatMap(repository => repository.claudeDevelopment ? repository.claudeModels ?? [] : []))];
+          const legacyCodexModels = [...new Set(input.repositories.flatMap(repository => repository.codexDevelopment ? repository.codexModels ?? [] : []))];
+          const harnesses = input.harnesses ?? {
+            ...(legacyCodex ? { codex: { ...(legacyCodexModels.length ? { models: legacyCodexModels } : {}) } } : {}),
+            ...(legacyClaudeModels.length ? { claude: { models: legacyClaudeModels } } : {}),
+          };
+          await runtime.runnerMissions.register(scope, input.repositories.map(({ id, name, orcaReview, github }) => ({
+            id, name, ...(orcaReview ? { orcaReview } : {}), ...(github ? { github } : {}),
+          })), harnesses);
           response.json({ status: "registered" });
         } else if (operation === "claim") {
           const input = z.object({ owner: z.string().uuid() }).strict().parse(request.body);

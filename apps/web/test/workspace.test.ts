@@ -9,8 +9,9 @@ test("mission harness choices reflect project runner subscriptions", () => {
       { id: "association", deviceId: "device", repositoryId: "repository" },
     ],
   } satisfies WorkspaceProject;
-  const devices = [{ id: "device", name: "Mac", repositories: [{ id: "repository", name: "Repository",
-    codexDevelopment: true, codexModels: ["gpt-codex"], claudeDevelopment: true, claudeModels: ["sonnet", "opus"] }] }] satisfies WorkspaceDevice[];
+  const devices = [{ id: "device", name: "Mac", executionHarnesses: {
+    codex: { models: ["gpt-codex"] }, claude: { models: ["sonnet", "opus"] },
+  }, repositories: [{ id: "repository", name: "Repository" }] }] satisfies WorkspaceDevice[];
 
   assert.deepEqual(missionHarnessOptions(project, devices), [
     { value: "codex:gpt-codex", label: "Codex · gpt-codex", provider: "codex", model: "gpt-codex",
@@ -25,7 +26,7 @@ test("mission harness choices reflect project runner subscriptions", () => {
 test("mission harness choices exclude capabilities outside the project", () => {
   const project = { id: "project", name: "Project", context: {}, ownerMemberId: "member", recipients: [], canManage: true,
     isOwner: true, createdAt: "", updatedAt: "", repositoryAssociations: [] } satisfies WorkspaceProject;
-  const devices = [{ id: "device", name: "Mac", repositories: [{ id: "repository", name: "Repository",
-    codexDevelopment: true }] }] satisfies WorkspaceDevice[];
+  const devices = [{ id: "device", name: "Mac", executionHarnesses: { codex: {} },
+    repositories: [{ id: "repository", name: "Repository" }] }] satisfies WorkspaceDevice[];
   assert.deepEqual(missionHarnessOptions(project, devices), []);
 });
