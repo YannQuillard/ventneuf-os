@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { promisify } from "node:util";
 import type { AgentExecutionSnapshot } from "@ventneuf/domain";
+import type { ReasoningEffort } from "@ventneuf/domain";
 
 const execute = promisify(execFile);
 
@@ -362,6 +363,7 @@ export interface RunnerMission {
   attempt?: number;
   authorityExpiresAt?: string;
   model?: ClaudeModel;
+  reasoningEffort?: ReasoningEffort;
   approvalDecision?: MissionApprovalDecision;
 }
 export interface MissionApprovalDecision {

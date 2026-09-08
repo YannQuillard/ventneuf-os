@@ -87,13 +87,14 @@ function lastAssistantRetry(messages: Message[], currentMemberId?: string) {
   return undefined;
 }
 
-export function HermesConversation({ conversationId, title = "Hermes", subtitle = "Private · personal knowledge", headerActions, onAccessRevoked, showSuggestions = true }: {
+export function HermesConversation({ conversationId, title = "Hermes", subtitle = "Private · personal knowledge", headerActions, onAccessRevoked, showSuggestions = true, collaborative = false }: {
   conversationId?: string;
   title?: string;
   subtitle?: string;
   headerActions?: React.ReactNode;
   onAccessRevoked?: () => void;
   showSuggestions?: boolean;
+  collaborative?: boolean;
 }) {
   const { isMobile, openNavigation, snapshot } = useWorkspaceNavigation();
   const currentMemberId = snapshot?.currentMember.id;
@@ -244,7 +245,7 @@ export function HermesConversation({ conversationId, title = "Hermes", subtitle 
       const response = await fetch(messageEndpoint, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ content: message }),
+        body: JSON.stringify({ content: message, ...(collaborative ? { delivery: "project_chat" } : {}) }),
       });
       if (!response.ok) throw new Error("Hermes could not accept the message.");
       const payload = await response.json() as {
@@ -254,13 +255,13 @@ export function HermesConversation({ conversationId, title = "Hermes", subtitle 
         timing: MissionTiming;
       };
       acceptedMessages.current = [...acceptedMessages.current, payload.message];
-      latestUserMessageAt.current = new Date(payload.message.createdAt).getTime();
+      latestUserMessageAt.current = collaborative ? undefined : new Date(payload.message.createdAt).getTime();
       setMessages((current) => current.some(({ id }) => id === payload.message.id)
         ? current
         : [...current, payload.message]);
       setPending((current) => current.filter(({ id }) => id !== pendingId));
-      setAwaitingReply(true);
-      setMission(payload.missionId
+      setAwaitingReply(!collaborative);
+      setMission(!collaborative && payload.missionId
         ? { id: payload.missionId, status: payload.status, timing: payload.timing }
         : null);
       setNow(Date.now());
@@ -269,7 +270,7 @@ export function HermesConversation({ conversationId, title = "Hermes", subtitle 
         ? { ...entry, hasFailed: true }
         : entry));
     }
-  }, [messageEndpoint]);
+  }, [collaborative, messageEndpoint]);
 
   const resend = useCallback((prompt: string, pendingId?: string) => {
     if (pendingId) setPending((current) => current.filter(({ id }) => id !== pendingId));
@@ -351,13 +352,16 @@ export function HermesConversation({ conversationId, title = "Hermes", subtitle 
       <HStack height="100%">
         <VStack style={chatColumn}>
           <ConversationSurface value={content} onChange={setContent} inputRef={composerInput} error={error}
-            scope={conversationId ? "Conversation knowledge" : "Personal knowledge"}
+            placeholder={collaborative ? "Message the project · use @name to notify someone" : "Message Hermes"}
+            scope={collaborative ? "Shared project conversation" : conversationId ? "Conversation knowledge" : "Personal knowledge"}
             onSubmit={(value) => { setContent(""); void submit(value); }}
             emptyState={isLoaded ? (
               <VStack gap={6} hAlign="center" width="100%" maxWidth={560} padding={4}>
                 <EmptyState
-                  title="Ask Hermes anything"
-                  description={conversationId
+                  title={collaborative ? "Start the project conversation" : "Ask Hermes anything"}
+                  description={collaborative
+                    ? "Messages are visible to everyone in the project. Mention a member with @name to notify them."
+                    : conversationId
                     ? "Send a message to get started. Access follows this conversation's sharing settings."
                     : "This conversation is private to you. Send a message to get started."}
                 />

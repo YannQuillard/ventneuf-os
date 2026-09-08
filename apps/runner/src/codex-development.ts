@@ -316,6 +316,7 @@ export class AgentDevelopmentAdapter implements MissionAdapter {
       repositoryId: repository.id,
       objective: mission.objective,
       ...(this.options.agent === "claude" ? { model: mission.model } : {}),
+      ...(mission.reasoningEffort ? { reasoningEffort: mission.reasoningEffort } : {}),
       ...(this.options.agent === "codex" ? { codexPath: this.options.agentPath } : { claudePath: this.options.agentPath }),
       gitPath,
       gitAuthorName,
@@ -420,6 +421,7 @@ export class AgentDevelopmentAdapter implements MissionAdapter {
       || job.objective !== mission.objective || job.worktree !== state.worktreePath
       || (job.agent ?? "codex") !== this.options.agent
       || job.model !== mission.model
+      || job.reasoningEffort !== mission.reasoningEffort
       || configuredAgentPath !== this.options.agentPath || job.gitPath !== gitPath
       || job.authorityExpiresAt !== authorityExpiresAt
       || await realpath(state.worktreePath) !== state.worktreePath) {

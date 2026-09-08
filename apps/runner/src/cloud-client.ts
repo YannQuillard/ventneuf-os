@@ -6,7 +6,7 @@ import {
   type RunnerApprovalResponse,
 } from "./mission-worker.js";
 import type { StoredDevice } from "./credential-store.js";
-import type { AgentExecutionSnapshot } from "@ventneuf/domain";
+import { reasoningEfforts, type AgentExecutionSnapshot, type ReasoningEffort } from "@ventneuf/domain";
 import { isClaudeModel, type ClaudeModel, type MissionStatus } from "./repositories.js";
 
 interface EnrollmentResponse {
@@ -57,6 +57,7 @@ export class RunnerCloudClient {
       || (["codex-development", "claude-development"].includes(mission.adapter)
         && (!mission.authorityExpiresAt || !Number.isFinite(Date.parse(mission.authorityExpiresAt))))
       || (mission.adapter === "claude-development" ? !isClaudeModel(mission.model) : mission.model !== undefined)
+      || (mission.reasoningEffort !== undefined && !reasoningEfforts.includes(mission.reasoningEffort as ReasoningEffort))
       || (mission.approvalDecision !== undefined && !this.isApprovalDecision(mission.approvalDecision))) {
       throw new Error("Invalid runner mission response.");
     }

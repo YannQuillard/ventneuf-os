@@ -1,10 +1,10 @@
-import { assertAuthorized, type AuthorizationContext } from "@ventneuf/domain";
+import { assertAuthorized, type AuthorizationContext, type MissionExecutionPreferences } from "@ventneuf/domain";
 import type { ConversationRuntime } from "./runtime.js";
 
 export async function submitPrivateMessage(
   context: AuthorizationContext,
   conversations: Pick<ConversationRuntime, "repository" | "queue">,
-  input: { content: string; contextId?: string; conversationId?: string },
+  input: { content: string; contextId?: string; conversationId?: string; execution?: MissionExecutionPreferences },
 ) {
   assertAuthorized(context, "hermes:ask");
   if (context.principalType !== "user") throw new Error("Private messages require a user principal.");
@@ -14,6 +14,7 @@ export async function submitPrivateMessage(
     content: input.content,
     contextId: input.contextId,
     ...(input.conversationId ? { conversationId: input.conversationId } : {}),
+    ...(input.execution ? { execution: input.execution } : {}),
   });
   const queuedAt = new Date();
   const missionContext = queued.mission.context ?? {};

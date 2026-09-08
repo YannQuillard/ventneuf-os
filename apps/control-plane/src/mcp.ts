@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   assertAuthorized,
   claudeModelAliases,
+  reasoningEfforts,
   publicIdentity,
   type AuthorizationContext,
 } from "@ventneuf/domain";
@@ -75,6 +76,7 @@ export function createRemoteMcpServer(
         projectId: z.string().uuid().optional().describe("Pass the projectId advertised by the selected target. New workspace missions belong to this project."),
         adapter: z.enum(["repository-check", "orca-review", "codex-development", "claude-development"]).default("orca-review"),
         model: z.enum(claudeModelAliases).optional().describe("Required for claude-development and forbidden for other adapters."),
+        reasoningEffort: z.enum(reasoningEfforts).optional().describe("Native reasoning effort for Codex or Claude development missions."),
         delegationToken: z.string().min(1).max(20_000).optional(),
         requestId: z.string().uuid().optional(),
       },

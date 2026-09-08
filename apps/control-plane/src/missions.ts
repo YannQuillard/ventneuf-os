@@ -1,4 +1,4 @@
-import { assertAuthorized, type AuthorizationContext, type ClaudeModel } from "@ventneuf/domain";
+import { assertAuthorized, type AuthorizationContext, type ClaudeModel, type ReasoningEffort } from "@ventneuf/domain";
 import type { ConversationRuntime } from "./runtime.js";
 import type { MissionDelegationVerifier } from "./mission-delegation.js";
 
@@ -10,6 +10,7 @@ export interface RunnerDispatch {
   projectId?: string;
   adapter: RunnerAdapter;
   model?: ClaudeModel;
+  reasoningEffort?: ReasoningEffort;
   objective: string;
   delegationToken?: string;
   requestId?: string;
@@ -21,7 +22,8 @@ export async function dispatchRunnerMission(
   input: RunnerDispatch,
   delegations?: MissionDelegationVerifier,
 ) {
-  if ((input.adapter === "claude-development") !== (input.model !== undefined)) {
+  if ((input.adapter === "claude-development") !== (input.model !== undefined)
+    || (!input.adapter.endsWith("development") && input.reasoningEffort !== undefined)) {
     throw new Error("Claude development missions require one explicit model; other adapters do not accept one.");
   }
   if (context.principalType === "user") {
@@ -36,6 +38,7 @@ export async function dispatchRunnerMission(
         repositoryId: input.repositoryId,
         adapter: input.adapter,
         model: input.model,
+        ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
       },
     });
     return {
@@ -76,6 +79,7 @@ export async function dispatchRunnerMission(
     ...(input.projectId ? { projectId: input.projectId } : {}),
     adapter: input.adapter,
     model: input.model,
+    ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
   });
   return {
     conversationId: queued.conversationId,

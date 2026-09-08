@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
-import type { ClaudeModel, MissionAuthority } from "@ventneuf/domain";
+import type { ClaudeModel, MissionAuthority, MissionExecutionPreferences, ReasoningEffort } from "@ventneuf/domain";
 import type { Database } from "./client.js";
 import { requireConversationAccess, requireProjectAccess, currentScopeForMission, requireCurrentMissionMemoryScope, WorkspaceAccessError } from "./workspace-access.js";
 import { publicApproval } from "./mission-approvals.js";
@@ -75,7 +75,8 @@ export class ConversationRuntimeRepository {
     content: string;
     contextId?: string;
     conversationId?: string;
-    runner?: { deviceId: string; repositoryId: string; adapter?: DelegatedRunnerAdapter; model?: ClaudeModel };
+    runner?: { deviceId: string; repositoryId: string; adapter?: DelegatedRunnerAdapter; model?: ClaudeModel; reasoningEffort?: ReasoningEffort };
+    execution?: MissionExecutionPreferences;
   }) {
     const acceptedAt = new Date();
     return this.database.withOrganization(input.organizationId, async (transaction) => {
@@ -199,13 +200,14 @@ export class ConversationRuntimeRepository {
             type: input.runner ? `runner.${input.runner.adapter ?? "repository-check"}` : "hermes.conversation",
             ...(input.runner ? { repositoryId: input.runner.repositoryId } : {}),
             ...(input.runner?.adapter === "codex-development" ? {
-              agent: { adapter: "codex" },
+              agent: { adapter: "codex", reasoningEffort: input.runner.reasoningEffort },
               authority: developmentAuthority(new Date(acceptedAt.getTime() + developmentAuthorityMs)),
             } : input.runner?.adapter === "claude-development" ? {
-              agent: { adapter: "claude", model: input.runner.model },
+              agent: { adapter: "claude", model: input.runner.model, reasoningEffort: input.runner.reasoningEffort },
               authority: developmentAuthority(new Date(acceptedAt.getTime() + developmentAuthorityMs)),
             } : {}),
             timing: { acceptedAt: acceptedAt.toISOString() },
+            ...(input.execution ? { execution: input.execution } : {}),
           },
           createdAt: acceptedAt,
           updatedAt: acceptedAt,
@@ -556,6 +558,7 @@ export class ConversationRuntimeRepository {
     projectId?: string;
     adapter: DelegatedRunnerAdapter;
     model?: ClaudeModel;
+    reasoningEffort?: ReasoningEffort;
   }) {
     const acceptedAt = new Date();
     return this.database.withOrganization(input.organizationId, async (transaction) => {
@@ -688,10 +691,10 @@ export class ConversationRuntimeRepository {
             expiresAt: input.expiresAt.toISOString(),
           },
           ...(input.adapter === "codex-development" ? {
-            agent: { adapter: "codex" },
+            agent: { adapter: "codex", reasoningEffort: input.reasoningEffort },
             authority: developmentAuthority(new Date(acceptedAt.getTime() + developmentAuthorityMs)),
           } : input.adapter === "claude-development" ? {
-            agent: { adapter: "claude", model: input.model },
+            agent: { adapter: "claude", model: input.model, reasoningEffort: input.reasoningEffort },
             authority: developmentAuthority(new Date(acceptedAt.getTime() + developmentAuthorityMs)),
           } : {}),
           timing: { acceptedAt: acceptedAt.toISOString() },

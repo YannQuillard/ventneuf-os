@@ -8,6 +8,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import type { AgentApprovalRequest, ClaudeModel } from "./repositories.js";
+import type { ReasoningEffort } from "@ventneuf/domain";
 import { writeReviewState } from "./review-supervisor.js";
 
 export interface DevelopmentJob {
@@ -17,6 +18,7 @@ export interface DevelopmentJob {
   repositoryId: string;
   objective: string;
   model?: ClaudeModel;
+  reasoningEffort?: ReasoningEffort;
   codexPath?: string;
   claudePath?: string;
   gitPath: string;
@@ -606,6 +608,7 @@ export async function superviseDevelopment(directory: string) {
         ephemeral: false,
         serviceName: "ventneuf.os",
         developerInstructions: "Work autonomously within the active mission. Never merge pull requests or deploy. Do not ask the user routine implementation questions.",
+        ...(job.reasoningEffort ? { reasoningEffort: job.reasoningEffort } : {}),
       }) as { thread?: { id?: string; sessionId?: string } };
       if (!started.thread?.id || !started.thread.sessionId) throw new Error("Codex App Server returned no durable thread.");
       threadId = started.thread.id;
@@ -623,6 +626,7 @@ export async function superviseDevelopment(directory: string) {
       runtimeWorkspaceRoots: [worktree],
       approvalPolicy: "on-request",
       approvalsReviewer: "user",
+      ...(job.reasoningEffort ? { reasoningEffort: job.reasoningEffort } : {}),
     }) as { turn?: { id?: string } };
     if (!turn.turn?.id) throw new Error("Codex App Server returned no turn.");
     const completed = await client.waitForTurn(turn.turn.id);

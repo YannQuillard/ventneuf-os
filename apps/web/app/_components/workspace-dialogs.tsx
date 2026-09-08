@@ -5,11 +5,12 @@ import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
 import { FormLayout } from "@astryxdesign/core/FormLayout";
 import { HStack, Layout, LayoutContent, LayoutFooter } from "@astryxdesign/core/Layout";
 import { MultiSelector } from "@astryxdesign/core/MultiSelector";
+import { Selector } from "@astryxdesign/core/Selector";
 import { Text } from "@astryxdesign/core/Text";
 import { TextArea } from "@astryxdesign/core/TextArea";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { useEffect, useMemo, useState } from "react";
-import type { WorkspaceDevice, WorkspaceMember } from "../../lib/workspace";
+import type { MissionExecutionPreferences, ReasoningEffort, WorkspaceDevice, WorkspaceMember } from "../../lib/workspace";
 
 function FormDialog({ isOpen, onOpenChange, title, subtitle, submitLabel, isSubmitting, error, onSubmit, children }: {
   isOpen: boolean;
@@ -185,21 +186,30 @@ export function NewThreadDialog({ isOpen, onOpenChange, parentTitle, onCreate }:
   </FormDialog>;
 }
 
-export function NewMissionDialog({ isOpen, onOpenChange, projectName, onCreate }: {
+export function NewMissionDialog({ isOpen, onOpenChange, projectName, initialObjective, initialTitle, onCreate }: {
   isOpen: boolean;
   onOpenChange: (isOpen: boolean) => void;
   projectName: string;
-  onCreate: (input: { title: string; objective: string }) => Promise<void>;
+  initialObjective?: string;
+  initialTitle?: string;
+  onCreate: (input: { title: string; objective: string; execution: MissionExecutionPreferences }) => Promise<void>;
 }) {
   const [title, setTitle] = useState("");
   const [objective, setObjective] = useState("");
+  const [orchestratorModel, setOrchestratorModel] = useState("fable");
+  const [agentModels, setAgentModels] = useState(["opus"]);
+  const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>("high");
   const [isSubmitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string>();
-  useEffect(() => { if (isOpen) { setTitle(""); setObjective(""); setError(undefined); } }, [isOpen]);
+  useEffect(() => { if (isOpen) { setTitle(initialTitle ?? ""); setObjective(initialObjective ?? ""); setOrchestratorModel("fable");
+    setAgentModels(["opus"]); setReasoningEffort("high"); setError(undefined); } }, [initialObjective, initialTitle, isOpen]);
   const submit = async () => {
-    if (!title.trim() || !objective.trim()) { setError("Enter a mission title and request."); return; }
+    if (!title.trim() || !objective.trim() || !agentModels.length) { setError("Enter a mission title, request, and at least one agent model."); return; }
     setSubmitting(true); setError(undefined);
-    try { await onCreate({ title: title.trim(), objective: objective.trim() }); onOpenChange(false); }
+    try { await onCreate({ title: title.trim(), objective: objective.trim(), execution: {
+      orchestrator: { model: orchestratorModel, reasoningEffort },
+      agents: agentModels.map(model => ({ provider: "claude" as const, model, reasoningEffort })),
+    } }); onOpenChange(false); }
     catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to start the mission."); }
     finally { setSubmitting(false); }
   };
@@ -208,6 +218,39 @@ export function NewMissionDialog({ isOpen, onOpenChange, projectName, onCreate }
     <TextInput label="Mission title" value={title} onChange={setTitle} isRequired hasAutoFocus />
     <TextArea label="Request" value={objective} onChange={setObjective} rows={6} isRequired
       description="Describe the outcome, constraints, and relevant repositories for Hermes." />
+    <Selector label="Orchestrator model" value={orchestratorModel} onChange={setOrchestratorModel} isRequired
+      options={[{ value: "fable", label: "Fable (latest)" }, { value: "opus", label: "Opus (latest)" }, { value: "sonnet", label: "Sonnet (latest)" }]}
+      description="Hermes uses this model to coordinate the mission and dispatch agent work." />
+    <MultiSelector label="Agent models" value={agentModels} onChange={setAgentModels} isRequired triggerDisplay="labels"
+      options={[{ value: "opus", label: "Opus (latest)" }, { value: "fable", label: "Fable (latest)" }, { value: "sonnet", label: "Sonnet (latest)" }]}
+      description="Select one or several models. Hermes may run them in parallel when the work can be split safely." />
+    <Selector label="Reasoning effort" value={reasoningEffort} onChange={value => setReasoningEffort(value as ReasoningEffort)} isRequired
+      options={[{ value: "low", label: "Low" }, { value: "medium", label: "Medium" }, { value: "high", label: "High" }, { value: "xhigh", label: "Extra high" }, { value: "max", label: "Maximum" }]}
+      description="Applied to the orchestrator and every selected agent." />
     <Text type="supporting">Project members cannot discover this mission unless you explicitly share its thread.</Text>
+  </FormDialog>;
+}
+
+export function AddProjectMemoryDialog({ isOpen, onOpenChange, projectName, onAdd }: {
+  isOpen: boolean;
+  onOpenChange: (isOpen: boolean) => void;
+  projectName: string;
+  onAdd: (entry: string) => Promise<void>;
+}) {
+  const [entry, setEntry] = useState("");
+  const [isSubmitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string>();
+  useEffect(() => { if (isOpen) { setEntry(""); setError(undefined); } }, [isOpen]);
+  const submit = async () => {
+    if (!entry.trim()) { setError("Enter something the project should remember."); return; }
+    setSubmitting(true); setError(undefined);
+    try { await onAdd(entry.trim()); onOpenChange(false); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to update project memory."); }
+    finally { setSubmitting(false); }
+  };
+  return <FormDialog isOpen={isOpen} onOpenChange={onOpenChange} title="Add to project memory"
+    subtitle={`Shared durable context for ${projectName}`} submitLabel="Add to memory" isSubmitting={isSubmitting} error={error} onSubmit={submit}>
+    <TextArea label="Memory" value={entry} onChange={setEntry} rows={5} maxLength={4_000} isRequired hasAutoFocus
+      description="Hermes and project missions receive this context. Everyone in the project can see it." />
   </FormDialog>;
 }

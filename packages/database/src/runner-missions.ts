@@ -1,6 +1,6 @@
 import { hasWorkspaceMissionAuthority } from "./workspace-access.js";
 import { and, asc, eq, gt, inArray, isNull, lte, or, sql } from "drizzle-orm";
-import { claudeModelAliases, evaluateApprovalPolicy, isAgentExecutionSnapshot, type AgentExecutionSnapshot, type ClaudeModel } from "@ventneuf/domain";
+import { claudeModelAliases, evaluateApprovalPolicy, isAgentExecutionSnapshot, reasoningEfforts, type AgentExecutionSnapshot, type ClaudeModel, type ReasoningEffort } from "@ventneuf/domain";
 import type { Database, DatabaseTransaction } from "./client.js";
 import { deviceCredentials, devices, messages, missionApprovals, missionEvents, missions } from "./schema.js";
 
@@ -195,9 +195,12 @@ export class RunnerMissionRepository {
             ...(resumeApproval.rationale ? { rationale: resumeApproval.rationale } : {}),
           }
           : undefined;
+        const reasoningEffort = (mission.context.agent as { reasoningEffort?: unknown } | undefined)?.reasoningEffort;
         return { id: mission.id, repositoryId: mission.context.repositoryId, objective: mission.goal,
           adapter, attempt: mission.attempts + 1, leaseExpiresAt: expiresAt.toISOString(),
           ...(adapter === "claude-development" ? { model: model as ClaudeModel } : {}),
+          ...(typeof reasoningEffort === "string" && reasoningEfforts.includes(reasoningEffort as ReasoningEffort)
+            ? { reasoningEffort: reasoningEffort as ReasoningEffort } : {}),
           ...(["codex-development", "claude-development"].includes(adapter) && typeof authority?.expiresAt === "string"
             ? { authorityExpiresAt: authority.expiresAt }
             : {}),

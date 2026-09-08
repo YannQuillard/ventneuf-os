@@ -293,6 +293,7 @@ export const conversations = pgTable(
     missionId: uuid("mission_id"),
     kind: workspaceConversationKind("kind").default("private").notNull(),
     isPrimary: boolean("is_primary").default(false).notNull(),
+    isProjectGeneral: boolean("is_project_general").default(false).notNull(),
     memoryEpoch: uuid("memory_epoch").defaultRandom().notNull(),
     hermesContextId: text("hermes_context_id"),
     title: text("title"),
@@ -333,6 +334,9 @@ export const conversations = pgTable(
     uniqueIndex("conversations_mission_unique")
       .on(table.organizationId, table.missionId)
       .where(sql`${table.missionId} is not null`),
+    uniqueIndex("conversations_project_general_unique")
+      .on(table.organizationId, table.projectId)
+      .where(sql`${table.isProjectGeneral}`),
   ],
 );
 
@@ -373,6 +377,7 @@ export const messages = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
+    uniqueIndex("messages_organization_id_unique").on(table.organizationId, table.id),
     foreignKey({
       columns: [table.organizationId, table.conversationId],
       foreignColumns: [conversations.organizationId, conversations.id],
@@ -384,6 +389,32 @@ export const messages = pgTable(
       name: "messages_organization_member_fk",
     }),
     index("messages_conversation_created_idx").on(table.conversationId, table.createdAt),
+  ],
+);
+
+export const memberNotifications = pgTable(
+  "member_notifications",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    memberId: uuid("member_id").notNull(),
+    actorMemberId: uuid("actor_member_id").notNull(),
+    projectId: uuid("project_id").notNull(),
+    conversationId: uuid("conversation_id").notNull(),
+    messageId: uuid("message_id").notNull(),
+    kind: text("kind").notNull(),
+    summary: text("summary").notNull(),
+    readAt: timestamp("read_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (table) => [
+    foreignKey({ columns: [table.organizationId, table.memberId], foreignColumns: [members.organizationId, members.id], name: "member_notifications_member_fk" }),
+    foreignKey({ columns: [table.organizationId, table.actorMemberId], foreignColumns: [members.organizationId, members.id], name: "member_notifications_actor_fk" }),
+    foreignKey({ columns: [table.organizationId, table.projectId], foreignColumns: [projects.organizationId, projects.id], name: "member_notifications_project_fk" }),
+    foreignKey({ columns: [table.organizationId, table.conversationId], foreignColumns: [conversations.organizationId, conversations.id], name: "member_notifications_conversation_fk" }),
+    foreignKey({ columns: [table.organizationId, table.messageId], foreignColumns: [messages.organizationId, messages.id], name: "member_notifications_message_fk" }),
+    uniqueIndex("member_notifications_message_member_unique").on(table.messageId, table.memberId),
+    index("member_notifications_inbox_idx").on(table.organizationId, table.memberId, table.createdAt),
   ],
 );
 

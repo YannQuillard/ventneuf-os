@@ -576,6 +576,7 @@ export function claudeArguments(job: DevelopmentJob, options: { directory: strin
     "--strict-mcp-config", "--mcp-config", JSON.stringify({ mcpServers: {} }),
     "--settings", JSON.stringify(settings), "--append-system-prompt", missionPrompt(job, options.resume),
     "--model", job.model,
+    ...(job.reasoningEffort ? ["--effort", job.reasoningEffort] : []),
     "--name", `ventneuf-${job.missionId.slice(0, 8)}`,
   ];
   if (options.resume) args.push("--resume", job.missionId);

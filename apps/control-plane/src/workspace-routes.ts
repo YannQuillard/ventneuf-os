@@ -1,7 +1,7 @@
 import type { HermesClient } from "./hermes.js";
 import type { Express, NextFunction, Request, Response } from "express";
 import { z } from "zod";
-import { assertAuthorized, type AuthorizationContext } from "@ventneuf/domain";
+import { assertAuthorized, reasoningEfforts, type AuthorizationContext } from "@ventneuf/domain";
 import { WorkspaceAccessError } from "@ventneuf/database";
 import type { ConversationRuntime } from "./runtime.js";
 import { submitPrivateMessage } from "./conversations.js";
@@ -18,6 +18,11 @@ const conversationInput = z.object({
   kind: z.enum(["private", "topic", "mission"]).default("private"),
   projectId: id.optional(),
   parentConversationId: id.optional(),
+}).strict();
+const executionInput = z.object({
+  orchestrator: z.object({ model: z.string().trim().min(1).max(100), reasoningEffort: z.enum(reasoningEfforts) }).strict(),
+  agents: z.array(z.object({ provider: z.enum(["codex", "claude"]), model: z.string().trim().min(1).max(100),
+    reasoningEffort: z.enum(reasoningEfforts) }).strict()).min(1).max(8),
 }).strict();
 
 type Authenticate = (request: Request, response: Response) => Promise<AuthorizationContext | undefined>;
@@ -45,11 +50,11 @@ export function registerWorkspaceRoutes(app: Express, authenticate: Authenticate
   app.get("/api/workspace", route(async (_request, response, context, services) => {
     const query = scope(context);
     const currentMember = await services.workspace!.getCurrentMember(query);
-    const [projects, conversations, members] = await Promise.all([
+    const [projects, conversations, members, notifications] = await Promise.all([
       services.workspace!.listProjects(query), services.workspace!.listConversations(query),
-      services.workspace!.listMembers(query),
+      services.workspace!.listMembers(query), services.workspace!.listNotifications(query),
     ]);
-    response.json({ projects, conversations, members, currentMember });
+    response.json({ projects, conversations, members, notifications, currentMember });
   }));
   app.get("/api/workspace/memory", route(async (request, response, context, services) => {
     if (!services.memory?.listMemory) return void response.status(503).json({ error: "memory_unavailable" });
@@ -120,10 +125,18 @@ export function registerWorkspaceRoutes(app: Express, authenticate: Authenticate
     response.json(await services.repository.getConversationSnapshot({ ...scope(context), conversationId: id.parse(request.params.conversationId) }));
   }));
   app.post("/api/workspace/conversations/:conversationId/messages", route(async (request, response, context, services) => {
-    const input = z.object({ content: z.string().trim().min(1).max(100_000) }).strict().parse(request.body);
+    const input = z.object({ content: z.string().trim().min(1).max(100_000), delivery: z.enum(["hermes", "project_chat"]).default("hermes"),
+      execution: executionInput.optional() }).strict().parse(request.body);
+    const conversationId = id.parse(request.params.conversationId);
+    if (input.delivery === "project_chat") {
+      return void response.status(201).json({ message: await services.workspace!.appendProjectMessage(scope(context), conversationId, input.content) });
+    }
     response.status(202).json(await submitPrivateMessage(context, services, {
-      ...input, conversationId: id.parse(request.params.conversationId),
+      content: input.content, conversationId, execution: input.execution,
     }));
+  }));
+  app.post("/api/workspace/notifications/:notificationId/read", route(async (request, response, context, services) => {
+    response.json({ notification: await services.workspace!.markNotificationRead(scope(context), id.parse(request.params.notificationId)) });
   }));
   app.post("/api/workspace/conversations/:conversationId/missions/:missionId/cancel", route(async (request, response, context, services) => {
     const mission = await services.repository.getOwnedConversationMission({ ...scope(context),

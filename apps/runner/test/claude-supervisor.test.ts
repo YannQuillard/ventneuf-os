@@ -246,9 +246,10 @@ test("uses Claude native autonomy with mission-scoped authority boundaries", asy
     assert.equal(environment.GIT_CONFIG_NOSYSTEM, "1");
     for (const name of ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "GH_TOKEN", "GITHUB_TOKEN", "NPM_TOKEN",
       "ANTHROPIC_API_KEY"]) assert.equal(name in environment, false);
-    const args = claudeArguments(state.job, { directory: state.directory, resume: false });
+    const args = claudeArguments({ ...state.job, reasoningEffort: "xhigh" }, { directory: state.directory, resume: false });
     assert.ok(!args.includes("--restricted"));
     assert.equal(args[args.indexOf("--model") + 1], "opus");
+    assert.equal(args[args.indexOf("--effort") + 1], "xhigh");
     assert.ok(args.includes("auto"));
     assert.ok(args.includes("none"));
     assert.ok(args.includes("--forward-subagent-text"));
