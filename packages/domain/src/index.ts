@@ -28,6 +28,14 @@ export const approvalActionCategories = [
 export const claudeModelAliases = ["opus", "sonnet", "fable"] as const;
 export type ClaudeModel = typeof claudeModelAliases[number];
 
+export const reasoningEfforts = ["low", "medium", "high", "xhigh", "max"] as const;
+export type ReasoningEffort = typeof reasoningEfforts[number];
+
+export interface MissionExecutionPreferences {
+  harness: { provider: "codex" | "claude"; model?: string; reasoningEffort: ReasoningEffort };
+  subagents: { models: string[]; reasoningEffort: ReasoningEffort };
+}
+
 export type ApprovalActionCategory = typeof approvalActionCategories[number];
 export type ApprovalPolicyDecision = "allow" | "hermes" | "human" | "deny";
 

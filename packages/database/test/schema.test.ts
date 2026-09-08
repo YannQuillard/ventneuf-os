@@ -11,6 +11,7 @@ import {
   messages,
   missionApprovals,
   missionEvents,
+  memberNotifications,
   missions,
   organizations,
   projectMembers,
@@ -32,6 +33,7 @@ test("exports the initial multi-tenant conversation schema", () => {
   assert.ok(projectRepositories);
   assert.ok(conversationGrants);
   assert.ok(messages);
+  assert.ok(memberNotifications);
   assert.ok(missions);
   assert.ok(missionApprovals);
   assert.ok(missionEvents);

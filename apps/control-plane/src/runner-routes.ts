@@ -21,6 +21,7 @@ const repository = z.object({
   name: z.string().trim().min(1).max(100),
   orcaReview: z.boolean().optional(),
   codexDevelopment: z.boolean().optional(),
+  codexModels: z.array(z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,99}$/)).min(1).max(20).optional(),
   claudeDevelopment: z.boolean().optional(),
   claudeModels: z.array(z.enum(claudeModelAliases)).min(1).max(claudeModelAliases.length).optional(),
   github: z.object({
@@ -28,9 +29,13 @@ const repository = z.object({
     owner: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,38})$/),
     name: z.string().regex(/^[a-z0-9._-]{1,100}$/),
   }).strict().optional(),
-}).strict().refine((value) => value.claudeModels === undefined || value.claudeDevelopment === true, {
-  path: ["claudeModels"],
-  message: "Claude models require the Claude development capability.",
+}).strict().superRefine((value, context) => {
+  if (value.claudeModels !== undefined && value.claudeDevelopment !== true) context.addIssue({
+    code: "custom", path: ["claudeModels"], message: "Claude models require the Claude development capability.",
+  });
+  if (value.codexModels !== undefined && value.codexDevelopment !== true) context.addIssue({
+    code: "custom", path: ["codexModels"], message: "Codex models require the Codex development capability.",
+  });
 });
 const lease = z.object({ owner: z.string().uuid(), token: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 const report = z.object({

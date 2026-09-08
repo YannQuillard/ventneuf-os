@@ -62,6 +62,8 @@ test("starts and polls an authenticated Hermes run", async () => {
 
   const result = await client.ask({
     message: "test",
+    model: "fable",
+    reasoningEffort: "high",
     contextId: "context-1",
     sessionKey: "organization:1:conversation:1",
     onRunStarted: async (runId) => { persistedRunId = runId; },
@@ -79,6 +81,8 @@ test("starts and polls an authenticated Hermes run", async () => {
   assert.deepEqual(JSON.parse(String(requests[0]?.init?.body)), {
     input: "test",
     session_id: "context-1",
+    model: "fable",
+    reasoning_effort: "high",
   });
 });
 

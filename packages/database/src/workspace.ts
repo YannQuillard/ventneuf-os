@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
-import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import type { DatabaseTransaction, Database } from "./client.js";
 import {
   conversationGrants,
   conversations,
   devices,
+  memberNotifications,
   members,
   messages,
   missions,
@@ -163,7 +164,7 @@ export async function requireConversationAccess(
   );
   if (!conversation) throw new WorkspaceAccessError("Conversation not found or access denied.");
 
-  let canManage = conversation.ownerMemberId === member.id;
+    let canManage = conversation.ownerMemberId === member.id && !conversation.isProjectGeneral;
   if (!canManage) {
     const grant = await selectOneForLock(
       transaction
@@ -454,6 +455,7 @@ export class WorkspaceRepository {
     return {
       id: member.id,
       name: member.displayName === "Member" ? member.handle : member.displayName,
+      handle: member.handle,
     };
   }
 
@@ -503,11 +505,17 @@ export class WorkspaceRepository {
     project: typeof projects.$inferSelect,
     actingMemberId: string,
   ) {
+    const [generalConversation] = await transaction.select({ id: conversations.id }).from(conversations).where(and(
+      eq(conversations.organizationId, project.organizationId),
+      eq(conversations.projectId, project.id),
+      eq(conversations.isProjectGeneral, true),
+    )).limit(1);
     return {
       id: project.id,
       name: project.name,
       context: project.context,
       ownerMemberId: project.ownerMemberId,
+      generalConversationId: generalConversation?.id,
       repositoryAssociations: await this.projectAssociations(transaction, project.organizationId, project.id),
       recipients: await this.projectRecipients(transaction, project.organizationId, project.id),
       isOwner: project.ownerMemberId === actingMemberId,
@@ -562,6 +570,7 @@ export class WorkspaceRepository {
       id: conversation.id,
       title: conversation.title,
       kind: conversation.kind,
+      isProjectGeneral: conversation.isProjectGeneral,
       projectId: conversation.projectId ?? undefined,
       parentConversationId: canSeeParent ? conversation.parentConversationId ?? undefined : undefined,
       missionId: conversation.missionId ?? linkedMission?.id,
@@ -645,7 +654,7 @@ export class WorkspaceRepository {
         .from(members)
         .where(eq(members.organizationId, scope.organizationId))
         .orderBy(asc(members.displayName), asc(members.id));
-      return organizationMembers.map(({ id, name, handle }) => ({ id, name: name === "Member" ? handle : name }));
+      return organizationMembers.map(({ id, name, handle }) => ({ id, name: name === "Member" ? handle : name, handle }));
     });
   }
 
@@ -736,6 +745,15 @@ export class WorkspaceRepository {
         context: input.context ?? {},
       }).returning();
       if (!project) throw new Error("Failed to create the project.");
+      const [generalConversation] = await transaction.insert(conversations).values({
+        organizationId: scope.organizationId,
+        ownerMemberId: member.id,
+        projectId: project.id,
+        kind: "topic",
+        isProjectGeneral: true,
+        title: "General",
+      }).returning({ id: conversations.id });
+      if (!generalConversation) throw new Error("Failed to create the project conversation.");
       if (associations.length > 0) {
         await this.validateAssociations(transaction, scope.organizationId, associations, member.id);
         await transaction.insert(projectRepositories).values(associations.map((association) => ({
@@ -788,6 +806,13 @@ export class WorkspaceRepository {
         memberId: recipient.id,
       }).onConflictDoNothing().returning({ memberId: projectMembers.memberId });
       if (added.length > 0) {
+        const [generalConversation] = await transaction.select({ id: conversations.id }).from(conversations).where(and(
+          eq(conversations.organizationId, scope.organizationId), eq(conversations.projectId, project.id),
+          eq(conversations.isProjectGeneral, true),
+        )).limit(1);
+        if (generalConversation) await transaction.insert(conversationGrants).values({
+          organizationId: scope.organizationId, conversationId: generalConversation.id, memberId: recipient.id,
+        }).onConflictDoNothing();
         await rotateProjectConversationAudiencesForMember(transaction, scope.organizationId, project.id, recipient.id);
       }
       return this.projectView(transaction, project, member.id);
@@ -804,6 +829,15 @@ export class WorkspaceRepository {
         eq(projectMembers.memberId, recipientMemberId),
       )).returning({ memberId: projectMembers.memberId });
       if (removed.length > 0) {
+        const generalConversations = await transaction.select({ id: conversations.id }).from(conversations).where(and(
+          eq(conversations.organizationId, scope.organizationId), eq(conversations.projectId, project.id),
+          eq(conversations.isProjectGeneral, true),
+        ));
+        if (generalConversations.length) await transaction.delete(conversationGrants).where(and(
+          eq(conversationGrants.organizationId, scope.organizationId),
+          inArray(conversationGrants.conversationId, generalConversations.map(({ id }) => id)),
+          eq(conversationGrants.memberId, recipientMemberId),
+        ));
         await rotateProjectConversationAudiencesForMember(transaction, scope.organizationId, project.id, recipientMemberId);
       }
       return this.projectView(transaction, project, member.id);
@@ -889,7 +923,7 @@ export class WorkspaceRepository {
   updateConversation(scope: WorkspaceScope, conversationId: string, input: { title?: string }) {
     return this.database.withOrganization(scope.organizationId, async (transaction) => {
       const { member, conversation, canManage } = await requireConversationAccess(transaction, scope, conversationId, { lock: "update" });
-      if (!canManage) throw new WorkspaceAccessError("Conversation not found or access denied.");
+      if (!canManage || conversation.isProjectGeneral) throw new WorkspaceAccessError("Conversation not found or access denied.");
       const [updated] = await transaction.update(conversations).set({
         ...(input.title === undefined ? {} : { title: input.title }),
         updatedAt: new Date(),
@@ -905,7 +939,7 @@ export class WorkspaceRepository {
   shareConversation(scope: WorkspaceScope, conversationId: string, recipientMemberId: string) {
     return this.database.withOrganization(scope.organizationId, async (transaction) => {
       const { member, conversation, canManage } = await requireConversationAccess(transaction, scope, conversationId, { lock: "update" });
-      if (!canManage) throw new WorkspaceAccessError("Conversation not found or access denied.");
+      if (!canManage || conversation.isProjectGeneral) throw new WorkspaceAccessError("Conversation not found or access denied.");
       const [recipient] = await transaction.select({ id: members.id }).from(members).where(and(
         eq(members.organizationId, scope.organizationId),
         eq(members.id, recipientMemberId),
@@ -929,7 +963,7 @@ export class WorkspaceRepository {
   revokeConversation(scope: WorkspaceScope, conversationId: string, recipientMemberId: string) {
     return this.database.withOrganization(scope.organizationId, async (transaction) => {
       const { member, conversation, canManage } = await requireConversationAccess(transaction, scope, conversationId, { lock: "update" });
-      if (!canManage || recipientMemberId === member.id) throw new WorkspaceAccessError("Conversation recipient not found or access denied.");
+      if (!canManage || conversation.isProjectGeneral || recipientMemberId === member.id) throw new WorkspaceAccessError("Conversation recipient not found or access denied.");
       const removed = await transaction.delete(conversationGrants).where(and(
         eq(conversationGrants.organizationId, scope.organizationId),
         eq(conversationGrants.conversationId, conversation.id),
@@ -953,6 +987,72 @@ export class WorkspaceRepository {
         eq(messages.organizationId, scope.organizationId),
         eq(messages.conversationId, conversationId),
       )).orderBy(asc(messages.createdAt), asc(messages.id));
+    });
+  }
+
+  appendProjectMessage(scope: WorkspaceScope, conversationId: string, content: string) {
+    return this.database.withOrganization(scope.organizationId, async (transaction) => {
+      const { member, conversation } = await requireConversationAccess(transaction, scope, conversationId, { lock: "update" });
+      if (!conversation.isProjectGeneral || !conversation.projectId) {
+        throw new WorkspaceAccessError("Project chat not found or access denied.");
+      }
+      const { project } = await requireProjectAccess(transaction, scope, conversation.projectId);
+      const [message] = await transaction.insert(messages).values({
+        organizationId: scope.organizationId, conversationId, memberId: member.id, role: "user", content,
+      }).returning();
+      if (!message) throw new Error("Failed to append the project message.");
+      await transaction.update(conversations).set({ updatedAt: new Date() }).where(and(
+        eq(conversations.organizationId, scope.organizationId), eq(conversations.id, conversationId),
+      ));
+
+      const projectMemberRows = await transaction.select({ member: members }).from(members).leftJoin(projectMembers, and(
+        eq(projectMembers.organizationId, members.organizationId), eq(projectMembers.memberId, members.id),
+        eq(projectMembers.projectId, project.id),
+      )).where(and(eq(members.organizationId, scope.organizationId), or(
+        eq(members.id, project.ownerMemberId), sql`${projectMembers.memberId} is not null`,
+      )));
+      const mentionedToken = (value: string) => {
+        const escaped = value.toLocaleLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        return new RegExp(`(^|\\s)@${escaped}(?=\\s|[.,!?;:]|$)`, "u").test(content.toLocaleLowerCase());
+      };
+      const mentioned = projectMemberRows.map(({ member: candidate }) => candidate).filter(candidate => candidate.id !== member.id
+        && [candidate.handle, candidate.displayName].some(value => value && mentionedToken(value)));
+      if (mentioned.length) await transaction.insert(memberNotifications).values(mentioned.map(recipient => ({
+        organizationId: scope.organizationId,
+        memberId: recipient.id,
+        actorMemberId: member.id,
+        projectId: project.id,
+        conversationId,
+        messageId: message.id,
+        kind: "project_mention",
+        summary: content.slice(0, 500),
+      }))).onConflictDoNothing();
+      return message;
+    });
+  }
+
+  listNotifications(scope: WorkspaceScope) {
+    return this.database.withOrganization(scope.organizationId, async transaction => {
+      const member = await requireWorkspaceMember(transaction, scope);
+      return transaction.select({ notification: memberNotifications, actorName: members.displayName, projectName: projects.name })
+        .from(memberNotifications)
+        .innerJoin(members, and(eq(members.organizationId, memberNotifications.organizationId), eq(members.id, memberNotifications.actorMemberId)))
+        .innerJoin(projects, and(eq(projects.organizationId, memberNotifications.organizationId), eq(projects.id, memberNotifications.projectId)))
+        .where(and(eq(memberNotifications.organizationId, scope.organizationId), eq(memberNotifications.memberId, member.id)))
+        .orderBy(desc(memberNotifications.createdAt)).limit(50)
+        .then(rows => rows.map(({ notification, actorName, projectName }) => ({ ...notification, actorName, projectName })));
+    });
+  }
+
+  markNotificationRead(scope: WorkspaceScope, notificationId: string) {
+    return this.database.withOrganization(scope.organizationId, async transaction => {
+      const member = await requireWorkspaceMember(transaction, scope);
+      const [notification] = await transaction.update(memberNotifications).set({ readAt: new Date(), updatedAt: new Date() }).where(and(
+        eq(memberNotifications.organizationId, scope.organizationId), eq(memberNotifications.id, notificationId),
+        eq(memberNotifications.memberId, member.id),
+      )).returning();
+      if (!notification) throw new WorkspaceAccessError("Notification not found or access denied.");
+      return notification;
     });
   }
 

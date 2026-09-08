@@ -1,4 +1,4 @@
-import { assertAuthorized, type AuthorizationContext, type ClaudeModel } from "@ventneuf/domain";
+import { assertAuthorized, claudeModelAliases, type AuthorizationContext, type MissionExecutionPreferences, type ReasoningEffort } from "@ventneuf/domain";
 import type { ConversationRuntime } from "./runtime.js";
 import type { MissionDelegationVerifier } from "./mission-delegation.js";
 
@@ -9,7 +9,9 @@ export interface RunnerDispatch {
   repositoryId: string;
   projectId?: string;
   adapter: RunnerAdapter;
-  model?: ClaudeModel;
+  model?: string;
+  reasoningEffort?: ReasoningEffort;
+  subagents?: MissionExecutionPreferences["subagents"];
   objective: string;
   delegationToken?: string;
   requestId?: string;
@@ -21,8 +23,9 @@ export async function dispatchRunnerMission(
   input: RunnerDispatch,
   delegations?: MissionDelegationVerifier,
 ) {
-  if ((input.adapter === "claude-development") !== (input.model !== undefined)) {
-    throw new Error("Claude development missions require one explicit model; other adapters do not accept one.");
+  if ((input.adapter === "claude-development" && (!input.model || !(claudeModelAliases as readonly string[]).includes(input.model)))
+    || (!input.adapter.endsWith("development") && (input.model !== undefined || input.reasoningEffort !== undefined || input.subagents !== undefined))) {
+    throw new Error("Development model and sub-agent settings must match the selected native harness.");
   }
   if (context.principalType === "user") {
     assertAuthorized(context, "mission:create");
@@ -36,6 +39,8 @@ export async function dispatchRunnerMission(
         repositoryId: input.repositoryId,
         adapter: input.adapter,
         model: input.model,
+        ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
+        ...(input.subagents ? { subagents: input.subagents } : {}),
       },
     });
     return {
@@ -57,8 +62,12 @@ export async function dispatchRunnerMission(
       && target.repositoryId === input.repositoryId
       && target.projectId === input.projectId
       && target.adapters.includes(input.adapter)
-      && (input.adapter !== "claude-development"
-        || (input.model !== undefined && target.claudeModels?.includes(input.model) === true)))) {
+      && (input.adapter !== "claude-development" || (target.claudeModels as readonly string[] | undefined)?.includes(input.model ?? "") === true)
+      && (input.adapter !== "codex-development" || (input.model === undefined
+        ? !target.codexModels?.length : target.codexModels?.includes(input.model) === true))
+      && (input.subagents === undefined || input.subagents.models.every(model => model === "inherit"
+        || (input.adapter === "claude-development" ? (target.claudeModels as readonly string[] | undefined)?.includes(model) === true
+          : target.codexModels?.includes(model) === true))))) {
     throw new Error("The requested runner target is outside the delegated mission scope.");
   }
   const queued = await runtime.repository.enqueueDelegatedRunnerMission({
@@ -76,6 +85,8 @@ export async function dispatchRunnerMission(
     ...(input.projectId ? { projectId: input.projectId } : {}),
     adapter: input.adapter,
     model: input.model,
+    ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
+    ...(input.subagents ? { subagents: input.subagents } : {}),
   });
   return {
     conversationId: queued.conversationId,

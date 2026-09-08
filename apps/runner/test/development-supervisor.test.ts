@@ -143,8 +143,8 @@ test("runs a durable App Server turn through a structured approval", { timeout: 
       + "const readline = require('node:readline').createInterface({ input: process.stdin });\n"
       + "readline.on('line', (line) => { const message = JSON.parse(line);\n"
       + "if (message.method === 'initialize') console.log(JSON.stringify({ id: message.id, result: { userAgent: 'fake', codexHome: '/fake', platformFamily: 'unix', platformOs: 'macos' } }));\n"
-      + "if (message.method === 'thread/start') { if (message.params.sandbox !== 'workspace-write' || message.params.permissions !== undefined || message.params.approvalPolicy !== 'on-request' || message.params.approvalsReviewer !== 'user') process.exit(20); console.log(JSON.stringify({ id: message.id, result: { thread: { id: 'thread-1', sessionId: '00000000-0000-4000-8000-000000000002' } } })); }\n"
-      + "if (message.method === 'turn/start') { if (message.params.permissions !== undefined || message.params.approvalPolicy !== 'on-request' || message.params.approvalsReviewer !== 'user') process.exit(21); console.log(JSON.stringify({ id: message.id, result: { turn: { id: 'turn-1' } } }));"
+      + "if (message.method === 'thread/start') { if (message.params.sandbox !== 'workspace-write' || message.params.permissions !== undefined || message.params.approvalPolicy !== 'on-request' || message.params.approvalsReviewer !== 'user' || message.params.model !== 'gpt-test' || message.params.reasoningEffort !== 'high') process.exit(20); console.log(JSON.stringify({ id: message.id, result: { thread: { id: 'thread-1', sessionId: '00000000-0000-4000-8000-000000000002' } } })); }\n"
+      + "if (message.method === 'turn/start') { if (message.params.permissions !== undefined || message.params.approvalPolicy !== 'on-request' || message.params.approvalsReviewer !== 'user' || message.params.model !== 'gpt-test' || message.params.reasoningEffort !== 'high' || !message.params.input[0].text.includes('Requested sub-agent models: inherit, gpt-worker; reasoning effort: medium')) process.exit(21); console.log(JSON.stringify({ id: message.id, result: { turn: { id: 'turn-1' } } }));"
       + ` console.log(JSON.stringify({ method: 'item/permissions/requestApproval', id: 99, params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1', cwd: ${JSON.stringify(worktree)}, startedAtMs: Date.now(), permissions: { network: { enabled: true } } } })); }\n`
       + "if (message.id === 99 && message.result?.permissions?.network?.enabled === true && message.result?.scope === 'turn') {"
       + " console.log(JSON.stringify({ method: 'item/completed', params: { threadId: 'thread-1', turnId: 'turn-1', item: { id: 'root-message', type: 'agentMessage', text: 'Opened https://github.com/example/repository/pull/1' } } }));"
@@ -155,6 +155,9 @@ test("runs a durable App Server turn through a structured approval", { timeout: 
       missionId: "00000000-0000-4000-8000-000000000001",
       repositoryId: "sample",
       objective: "Fix the sample and open a pull request.",
+      model: "gpt-test",
+      reasoningEffort: "high",
+      subagents: { models: ["inherit", "gpt-worker"], reasoningEffort: "medium" },
       codexPath: executable,
       gitPath: "/usr/bin/git",
       gitAuthorName: "Test Author",

@@ -1,6 +1,6 @@
 import { hasWorkspaceMissionAuthority } from "./workspace-access.js";
 import { and, asc, eq, gt, inArray, isNull, lte, or, sql } from "drizzle-orm";
-import { claudeModelAliases, evaluateApprovalPolicy, isAgentExecutionSnapshot, type AgentExecutionSnapshot, type ClaudeModel } from "@ventneuf/domain";
+import { claudeModelAliases, evaluateApprovalPolicy, isAgentExecutionSnapshot, reasoningEfforts, type AgentExecutionSnapshot, type ClaudeModel, type MissionExecutionPreferences, type ReasoningEffort } from "@ventneuf/domain";
 import type { Database, DatabaseTransaction } from "./client.js";
 import { deviceCredentials, devices, messages, missionApprovals, missionEvents, missions } from "./schema.js";
 
@@ -65,6 +65,7 @@ export class RunnerMissionRepository {
     name: string;
     orcaReview?: boolean;
     codexDevelopment?: boolean;
+    codexModels?: string[];
     claudeDevelopment?: boolean;
     claudeModels?: ClaudeModel[];
     github?: { id?: string; owner: string; name: string };
@@ -111,7 +112,7 @@ export class RunnerMissionRepository {
               ? "claude-development"
             : "repository-check";
         const authority = mission.context.authority as { expiresAt?: unknown } | undefined;
-        const agent = mission.context.agent as { model?: unknown } | undefined;
+        const agent = mission.context.agent as { model?: unknown; reasoningEffort?: unknown; subagents?: unknown } | undefined;
         const model = agent?.model;
         const authorityExpiresAt = typeof authority?.expiresAt === "string" ? Date.parse(authority.expiresAt) : Number.NaN;
         if (["codex-development", "claude-development"].includes(adapter)
@@ -195,9 +196,15 @@ export class RunnerMissionRepository {
             ...(resumeApproval.rationale ? { rationale: resumeApproval.rationale } : {}),
           }
           : undefined;
+        const reasoningEffort = agent?.reasoningEffort;
         return { id: mission.id, repositoryId: mission.context.repositoryId, objective: mission.goal,
           adapter, attempt: mission.attempts + 1, leaseExpiresAt: expiresAt.toISOString(),
-          ...(adapter === "claude-development" ? { model: model as ClaudeModel } : {}),
+          ...(["codex-development", "claude-development"].includes(adapter) && typeof agent?.model === "string"
+            ? { model: agent.model } : {}),
+          ...(typeof reasoningEffort === "string" && reasoningEfforts.includes(reasoningEffort as ReasoningEffort)
+            ? { reasoningEffort: reasoningEffort as ReasoningEffort } : {}),
+          ...(["codex-development", "claude-development"].includes(adapter) && agent?.subagents
+            ? { subagents: agent.subagents as MissionExecutionPreferences["subagents"] } : {}),
           ...(["codex-development", "claude-development"].includes(adapter) && typeof authority?.expiresAt === "string"
             ? { authorityExpiresAt: authority.expiresAt }
             : {}),

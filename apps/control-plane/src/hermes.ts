@@ -7,6 +7,8 @@ import { randomUUID } from "node:crypto";
 
 export interface AskHermesInput {
   message: string;
+  model?: string;
+  reasoningEffort?: "low" | "medium" | "high" | "xhigh" | "max";
   scopeId?: string;
   contextId?: string;
   runId?: string;
@@ -138,7 +140,10 @@ export class RunsHermesClient implements HermesClient {
       try {
         response = await this.request("/v1/runs", {
           method: "POST",
-          body: JSON.stringify({ input: input.message, session_id: contextId }),
+          body: JSON.stringify({ input: input.message, session_id: contextId,
+            ...(input.model ? { model: input.model } : {}),
+            ...(input.reasoningEffort ? { reasoning_effort: input.reasoningEffort } : {}),
+          }),
           signal: AbortSignal.timeout(10_000),
         }, input.sessionKey, input.idempotencyKey);
       } catch (error) {

@@ -3,9 +3,11 @@
 import { CommandPalette, CommandPaletteFooter } from "@astryxdesign/core/CommandPalette";
 import { useHotkeys, useMediaQuery } from "@astryxdesign/core/hooks";
 import { MoreMenu } from "@astryxdesign/core/MoreMenu";
+import { Button } from "@astryxdesign/core/Button";
+import { useToast } from "@astryxdesign/core/Toast";
 import { createStaticSource } from "@astryxdesign/core/Typeahead";
 import { usePathname, useRouter } from "next/navigation";
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { workspaceNavigation } from "../lib/workspace-navigation";
 import { conversationHref, workspaceRequest, type WorkspaceConversation, type WorkspaceDevice, type WorkspaceProject, type WorkspaceSnapshot } from "../lib/workspace";
 import { NavigationRows } from "./_components/navigation-rows";
@@ -46,6 +48,8 @@ export function Workspace({ email, children }: { email: string; children: ReactN
   const isMobile = useMediaQuery("(max-width: 768px)");
   const pathname = usePathname();
   const router = useRouter();
+  const toast = useToast();
+  const notifiedMention = useRef<string | undefined>(undefined);
 
   const refreshWorkspace = useCallback(async () => {
     try {
@@ -67,9 +71,18 @@ export function Workspace({ email, children }: { email: string; children: ReactN
 
   useEffect(() => { void refreshWorkspace(); void refreshDevices(); }, [refreshDevices, refreshWorkspace]);
   useEffect(() => {
-    const timer = window.setInterval(() => void refreshDevices(), 15_000);
+    const unread = snapshot?.notifications?.find(notification => !notification.readAt);
+    if (!unread || notifiedMention.current === unread.id) return;
+    notifiedMention.current = unread.id;
+    toast({ body: `${unread.actorName} mentioned you in ${unread.projectName}.`, isAutoHide: false,
+      uniqueID: `mention-${unread.id}`, collisionBehavior: "overwrite",
+      endContent: <Button label="Launch mission" size="sm" variant="secondary"
+        onClick={() => router.push(`/projects/${encodeURIComponent(unread.projectId)}?missionRequest=${encodeURIComponent(unread.id)}`)} /> });
+  }, [router, snapshot?.notifications, toast]);
+  useEffect(() => {
+    const timer = window.setInterval(() => { void refreshDevices(); void refreshWorkspace(); }, 15_000);
     return () => window.clearInterval(timer);
-  }, [refreshDevices]);
+  }, [refreshDevices, refreshWorkspace]);
 
   const online = (device: WorkspaceDevice) => Boolean(device.lastSeenAt && Date.now() - Date.parse(device.lastSeenAt) < 90_000);
   const device = devices.find(online) ?? devices[0];

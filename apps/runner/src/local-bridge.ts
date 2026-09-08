@@ -9,7 +9,9 @@ import {
   removeRepositorySearchFolder,
   replaceRepositorySearchFolder,
   repositorySettings,
+  updateRepositoryCapabilities,
 } from "./repositories.js";
+import type { ClaudeModel } from "./repositories.js";
 import type { RunnerUpdater } from "./runner-update.js";
 
 const maxRequestBytes = 8_192;
@@ -22,6 +24,7 @@ export interface LocalBridgeOptions {
   repositoriesFile?: string;
   selectFolder?: () => Promise<string | undefined>;
   updater?: Pick<RunnerUpdater, "status" | "install" | "confirmHealthy">;
+  harnesses?: { codex: boolean; claude: boolean };
   heartbeatIntervalMs?: number;
 }
 
@@ -124,6 +127,33 @@ export class LocalRunnerBridge {
         });
         return this.json(response, 201, { repository: { id: repository.id, name: repository.name, github: repository.github } });
       }
+      if (request.method === "PATCH" && request.url === "/repositories/capabilities") {
+        if (!this.device) return this.json(response, 409, { error: "runner_not_enrolled" });
+        if (!this.options.repositoriesFile) return this.json(response, 503, { error: "repository_configuration_unavailable" });
+        const body = await this.readJson(request) as Record<string, unknown>;
+        const codexModels = body.codexModels;
+        const claudeModels = body.claudeModels;
+        if (typeof body.id !== "string" || typeof body.codexDevelopment !== "boolean"
+          || typeof body.claudeDevelopment !== "boolean"
+          || (codexModels !== undefined && (!Array.isArray(codexModels) || codexModels.some(model => typeof model !== "string")))
+          || (claudeModels !== undefined && (!Array.isArray(claudeModels) || claudeModels.some(model => typeof model !== "string")))) {
+          return this.json(response, 400, { error: "invalid_request" });
+        }
+        if ((body.codexDevelopment && !this.options.harnesses?.codex)
+          || (body.claudeDevelopment && !this.options.harnesses?.claude)) {
+          return this.json(response, 409, { error: "harness_unavailable",
+            message: "Install and configure the selected coding agent on this runner first." });
+        }
+        const repository = await updateRepositoryCapabilities(this.options.repositoriesFile, {
+          id: body.id,
+          codexDevelopment: body.codexDevelopment,
+          ...(codexModels ? { codexModels: codexModels as string[] } : {}),
+          claudeDevelopment: body.claudeDevelopment,
+          ...(claudeModels ? { claudeModels: claudeModels as ClaudeModel[] } : {}),
+        });
+        await this.heartbeat();
+        return this.json(response, 200, { repository: { id: repository.id, name: repository.name } });
+      }
       if (request.method === "DELETE" && request.url === "/repositories") {
         if (!this.device) return this.json(response, 409, { error: "runner_not_enrolled" });
         if (!this.options.repositoriesFile) return this.json(response, 503, { error: "repository_configuration_unavailable" });
@@ -155,8 +185,14 @@ export class LocalRunnerBridge {
 
   private publicStatus() {
     return this.device
-      ? { status: "online", device: { id: this.device.deviceId, name: this.device.name, platform: this.device.platform } }
+      ? { status: "online", device: { id: this.device.deviceId, name: this.device.name, platform: this.device.platform },
+        harnesses: this.options.harnesses ?? { codex: false, claude: false } }
       : { status: "not_enrolled" };
+  }
+
+  private async heartbeat() {
+    if (!this.device) return;
+    await this.options.client.heartbeat(this.device);
   }
 
   private startHeartbeats() {
@@ -164,7 +200,7 @@ export class LocalRunnerBridge {
     const heartbeat = async () => {
       if (!this.device) return;
       try {
-        await this.options.client.heartbeat(this.device);
+        await this.heartbeat();
       } catch (error) {
         console.error(error instanceof Error ? error.message : "Heartbeat failed.");
       }

@@ -66,7 +66,7 @@ function logMission(event: string, fields: Record<string, unknown>) {
   console.info(JSON.stringify({ component: "mission-worker", event, ...fields }));
 }
 
-function messageWithDelegation(message: string, grant: MissionDelegationGrant): string {
+function messageWithDelegation(message: string, grant: MissionDelegationGrant, execution?: unknown): string {
   return [
     message,
     "",
@@ -75,7 +75,8 @@ function messageWithDelegation(message: string, grant: MissionDelegationGrant): 
     "You may dispatch bounded runner work only through the ventneuf MCP mission.dispatch tool.",
     "If a target advertises projectId, pass it unchanged. Explain or ask which project to use when several targets match; never silently choose another project. If there are no project targets, ask the member to create a project and associate an available repository before dispatching.",
     "The dispatch result identifies a dedicated mission conversation. Link it using /c/<conversationId> and continue mission-specific coordination there.",
-    "For claude-development, choose and pass one model from that target's claudeModels list. Never rely on the runner's local default model.",
+    "Dispatch the exact member-selected native harness: codex-development for Codex or claude-development for Claude Code. Pass its lead model when selected, its lead reasoning effort, and its native sub-agent plan. Do not apply these choices to Hermes itself.",
+    ...(execution ? ["Honor this member-selected native execution plan and do not silently substitute its harness, models, or reasoning levels:", JSON.stringify(execution)] : []),
     "Pass the delegation token below and a stable UUID requestId with every dispatch. Reuse the requestId when retrying the same dispatch.",
     `Available targets: ${JSON.stringify(grant.claims.targets)}`,
     `Delegation token: ${grant.token}`,
@@ -250,7 +251,7 @@ export class MissionWorker {
             serviceId: this.delegation.serviceId,
             ...scope,
           });
-          hermesMessage = messageWithDelegation(record.mission.goal, grant);
+          hermesMessage = messageWithDelegation(record.mission.goal, grant, record.mission.context.execution);
           await this.repository.appendMissionEvent({
             organizationId: envelope.organizationId,
             missionId: envelope.missionId,

@@ -87,6 +87,10 @@ if (command === "install") {
     allowedOrigins,
     repositoriesFile,
     selectFolder,
+    harnesses: {
+      codex: Boolean(process.env.VENTNEUF_ORCA_PATH && process.env.VENTNEUF_CODEX_PATH),
+      claude: Boolean(process.env.VENTNEUF_ORCA_PATH && process.env.VENTNEUF_CLAUDE_PATH),
+    },
     updater: new RunnerUpdater(dirname(fileURLToPath(import.meta.url))),
   });
   await bridge.start(port);
@@ -102,6 +106,9 @@ if (command === "install") {
         ...repository,
         orcaReview: Boolean(review && repository.orcaReview),
         codexDevelopment: Boolean(development && repository.codexDevelopment),
+        ...(development && repository.codexDevelopment && repository.codexModels
+          ? { codexModels: repository.codexModels }
+          : {}),
         claudeDevelopment: Boolean(claudeDevelopment && repository.claudeDevelopment),
         ...(claudeDevelopment && repository.claudeDevelopment && repository.claudeModels
           ? { claudeModels: repository.claudeModels }
