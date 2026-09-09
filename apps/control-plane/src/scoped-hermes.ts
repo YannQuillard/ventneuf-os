@@ -25,10 +25,18 @@ export class ScopedHermesClient implements HermesClient {
   }
 
   private async gateway(path: string, method: "GET" | "POST" = "GET", timeoutMs = 10_000) {
-    const response = await this.request(path, {
-      method, headers: { authorization: `Bearer ${await this.tokens.getToken()}` },
-      signal: AbortSignal.timeout(timeoutMs),
-    });
+    let response: Response;
+    try {
+      response = await this.request(path, {
+        method, headers: { authorization: `Bearer ${await this.tokens.getToken()}` },
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (error) {
+      if (error instanceof Error && error.name === "TimeoutError") {
+        throw new Error("The Hermes workspace did not respond in time. It may be overloaded; please try again shortly.", { cause: error });
+      }
+      throw error;
+    }
     // Upstream errors may contain private paths or configuration; expose a stable message.
     if (!response.ok) throw new Error("The scoped Hermes workspace is temporarily unavailable.");
     return response;

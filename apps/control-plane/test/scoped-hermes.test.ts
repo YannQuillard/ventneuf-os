@@ -65,3 +65,13 @@ test("native polling stops a scope whose audience was withdrawn before any resul
   assert.ok(paths.some(path => path.endsWith("/v1/runs/retired-run/stop")));
   assert.equal(paths.some(path => path.endsWith("/v1/runs/retired-run")), false);
 });
+
+test("scope provisioning timeouts explain workspace unavailability without submitting a run", async () => {
+  let requests = 0;
+  const client = new ScopedHermesClient("http://scope-gateway.invalid", new StaticTokenProvider("test-token"), async () => {
+    requests += 1;
+    throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+  });
+  await assert.rejects(client.ask({ message: "Hello", scopeId: shared }), /Hermes workspace did not respond in time/);
+  assert.equal(requests, 1);
+});
