@@ -27,6 +27,7 @@ import type {
   MissionDelegationGrant,
   MissionDelegationIssuer,
 } from "./mission-delegation.js";
+import { readStoredDispatchDelegation } from "./mission-delegation.js";
 
 interface DatabaseCredentials {
   username?: string;
@@ -78,13 +79,14 @@ function messageWithDelegation(message: string, grant: MissionDelegationGrant, e
     "Dispatch the exact member-selected native harness: codex-development for Codex or claude-development for Claude Code. Pass its lead model when selected, its lead reasoning effort, and its native sub-agent plan. Do not apply these choices to Hermes itself.",
     "Before launching development work, consult the supplied project context and memory and search the authorized memory available in this session for relevant project decisions. Never use personal memory in a shared project conversation.",
     "Clarify missing objectives, repository, constraints, or success criteria. Ask the initiating member to choose the lead harness/model and sub-agent models from the available target capabilities, including reasoning effort when unspecified. Reuse explicit choices already provided by that member in this conversation; do not silently invent choices or repeatedly ask for settled details.",
+    "When input is missing, use conversation.ask_questions to present a short prefilled form in the chat instead of a list of questions in prose. Offer selectable advertised models and reasoning levels, prefill the objective and any confirmed choices, and allow the member to edit them. After creating the form, wait for its submitted answers; those answers arrive as a new turn with current authority.",
     "Once the request and execution choices are sufficient, dispatch the dedicated project mission within the delegated authority. Do not ask for an extra launch confirmation unless authority is missing. Report a launch only after mission.dispatch succeeds and include the returned mission link.",
     ...(execution ? ["Honor this member-selected native execution plan and do not silently substitute its harness, models, or reasoning levels:", JSON.stringify(execution)] : []),
-    "Pass the delegation token below and a stable UUID requestId with every dispatch. Reuse the requestId when retrying the same dispatch.",
+    "Pass the current delegationId below and a stable UUID requestId with every dispatch. Reuse the requestId when retrying the same dispatch. Never copy a delegation token from conversation history or construct one yourself.",
     `Available targets: ${JSON.stringify(grant.claims.targets)}`,
-    `Delegation token: ${grant.token}`,
+    `Delegation ID: ${grant.claims.delegationId}`,
     `Delegation expires at: ${grant.claims.expiresAt}`,
-    "Do not quote or return the delegation token in your response.",
+    "Use only this turn's delegation ID. Delegation is managed by Ventneuf: never ask the member to supply, refresh, or debug credentials. Describe a launch failure in plain language and preserve their confirmed objective and execution choices.",
     "</ventneuf_mission_authority>",
   ].join("\n");
 }
@@ -250,11 +252,15 @@ export class MissionWorker {
       } else if (this.delegation) {
         const scope = await this.repository.getHermesDispatchScope(envelope.organizationId, envelope.missionId);
         if (scope) {
-          const grant = await this.delegation.issuer.issue({
+          const grant = resumeRunId && activeContext.dispatchDelegation
+            ? { claims: readStoredDispatchDelegation(activeContext.dispatchDelegation), token: "" }
+            : await this.delegation.issuer.issue({
             serviceId: this.delegation.serviceId,
             ...scope,
           });
           hermesMessage = messageWithDelegation(record.mission.goal, grant, record.mission.context.execution);
+          activeContext = { ...activeContext, dispatchDelegation: grant.claims };
+          if (!await this.repository.setMissionRunning(envelope.organizationId, envelope.missionId, activeContext)) return;
           await this.repository.appendMissionEvent({
             organizationId: envelope.organizationId,
             missionId: envelope.missionId,

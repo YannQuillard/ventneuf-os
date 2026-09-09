@@ -281,6 +281,25 @@ export function HermesConversation({ conversationId, title = "Hermes", subtitle 
     void submit(prompt);
   }, [submit]);
 
+  const answerQuestions = useCallback(async (messageId: string, answers: Record<string, string[]>) => {
+    const response = await fetch(messageEndpoint, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ content: "Answers to the conversation form", questionnaireReply: { messageId, answers } }),
+    });
+    if (!response.ok) {
+      void refresh().catch(() => undefined);
+      throw new Error("Unable to submit this form. It may have already been answered or your access may have changed.");
+    }
+    const payload = await response.json() as { message: Message; missionId: string; status: MissionState["status"]; timing: MissionTiming };
+    acceptedMessages.current = [...acceptedMessages.current, payload.message];
+    setMessages(current => current.some(message => message.id === payload.message.id) ? current : [...current, payload.message]);
+    latestUserMessageAt.current = new Date(payload.message.createdAt).getTime();
+    setAwaitingReply(true);
+    setMission({ id: payload.missionId, status: payload.status, timing: payload.timing });
+    setError(undefined);
+    void refresh().catch(() => undefined);
+  }, [messageEndpoint, refresh]);
+
   const dismiss = useCallback((pendingId: string) => {
     setPending((current) => current.filter(({ id }) => id !== pendingId));
   }, []);
@@ -306,6 +325,11 @@ export function HermesConversation({ conversationId, title = "Hermes", subtitle 
 
   const quote = useCallback((value: string) => {
     setContent(quoted(value));
+    composerInput.current?.focus();
+  }, []);
+
+  const replyToHermes = useCallback(() => {
+    setContent(current => /(^|\s)@hermes(?=\s|[.,!?;:]|$)/iu.test(current) ? current : `@hermes ${current}`);
     composerInput.current?.focus();
   }, []);
 
@@ -416,6 +440,8 @@ export function HermesConversation({ conversationId, title = "Hermes", subtitle 
                         isRevealing={message.id === revealingId}
                         onRevealed={completeReveal}
                         onQuote={quote}
+                        onReply={collaborative && message.role === "assistant" ? replyToHermes : undefined}
+                        onAnswerQuestions={answers => answerQuestions(message.id, answers)}
                         onEdit={edit}
                         onRetry={retryPrompt === undefined
                           ? undefined

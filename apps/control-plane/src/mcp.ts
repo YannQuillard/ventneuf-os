@@ -9,10 +9,24 @@ import {
 import type { ConversationRuntime } from "./runtime.js";
 import { submitPrivateMessage } from "./conversations.js";
 import { dispatchRunnerMission } from "./missions.js";
-import type { MissionDelegationVerifier } from "./mission-delegation.js";
+import { readStoredDispatchDelegation, type MissionDelegationVerifier } from "./mission-delegation.js";
 import { decideApprovalAsService } from "./approvals.js";
 
 const repositoryId = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/);
+const questionSchema = z.object({
+  id: z.string().regex(/^[a-z][a-z0-9_]{0,63}$/),
+  label: z.string().trim().min(1).max(300),
+  mode: z.enum(["single", "multiple", "text"]),
+  options: z.array(z.object({ value: z.string().trim().min(1).max(300).refine(value => value !== "__custom__"),
+    label: z.string().trim().min(1).max(300) }).strict()).max(8).default([]),
+  defaultValues: z.array(z.string().trim().min(1).max(2_000)).max(8).default([]),
+}).strict().superRefine((question, context) => {
+  if ((question.mode !== "text" && question.options.length < 2)
+    || (question.mode !== "multiple" && question.defaultValues.length > 1)
+    || new Set(question.options.map(option => option.value)).size !== question.options.length) {
+    context.addIssue({ code: "custom", message: "Provide distinct choices and defaults appropriate to the question type." });
+  }
+});
 
 function jsonResult(value: unknown) {
   return {
@@ -64,6 +78,35 @@ export function createRemoteMcpServer(
   );
 
   server.registerTool(
+    "conversation.ask_questions",
+    {
+      title: "Ask with an interactive form",
+      description: "Present one to four questions directly in the conversation as a prefilled form with selectable answers. Use for missing mission requirements and lead/sub-agent model choices. Reuse confirmed choices as defaults; derive model options from the advertised targets. The initiating member submits once to resume Hermes with fresh authority. Do not dispatch until the answers arrive.",
+      inputSchema: {
+        delegationId: z.string().uuid(), requestId: z.string().uuid(),
+        title: z.string().trim().min(1).max(200),
+        questions: z.array(questionSchema).min(1).max(4).refine(questions => new Set(questions.map(question => question.id)).size === questions.length),
+      },
+    },
+    async ({ delegationId, requestId, title, questions }) => {
+      assertAuthorized(context, "mission:dispatch");
+      if (context.principalType !== "service" || !services.conversations || !services.delegations) {
+        throw new Error("A current Hermes conversation delegation is required.");
+      }
+      const claims = readStoredDispatchDelegation(await services.conversations.repository.getMissionDispatchDelegation({
+        organizationId: context.organizationId, serviceId: context.principalId, delegationId,
+      }));
+      if (claims.organizationId !== context.organizationId || claims.serviceId !== context.principalId || claims.delegationId !== delegationId) {
+        throw new Error("The conversation form is outside the current authority.");
+      }
+      return jsonResult({ ...await services.conversations.repository.createConversationQuestionnaire({
+        organizationId: claims.organizationId, parentMissionId: claims.parentMissionId, conversationId: claims.conversationId,
+        memberId: claims.memberId, expiresAt: new Date(claims.expiresAt), requestId, questionnaire: { title, questions },
+      }), status: "awaiting_answers", instruction: "The form is visible in the chat. End this reply briefly and wait for the member's answers. Do not repeat the questions as prose or dispatch yet." });
+    },
+  );
+
+  server.registerTool(
     "mission.dispatch",
     {
       title: "Dispatch a runner mission",
@@ -79,7 +122,8 @@ export function createRemoteMcpServer(
         subagents: z.object({ models: z.array(z.string().trim().min(1).max(100)).min(1).max(8),
           reasoningEffort: z.enum(reasoningEfforts) }).strict().optional()
           .describe("Native sub-agent models and reasoning requested by the member."),
-        delegationToken: z.string().min(1).max(20_000).optional(),
+        delegationId: z.string().uuid().optional().describe("Use the Delegation ID supplied in the current turn. Ventneuf resolves its authority server-side."),
+        delegationToken: z.string().min(1).max(20_000).optional().describe("Legacy signed token. Prefer delegationId; never reconstruct a token."),
         requestId: z.string().uuid().optional(),
       },
     },

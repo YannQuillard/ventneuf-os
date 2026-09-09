@@ -1,10 +1,17 @@
 import { assertAuthorized, type AuthorizationContext, type MissionExecutionPreferences } from "@ventneuf/domain";
 import type { ConversationRuntime } from "./runtime.js";
+import { z } from "zod";
+
+export const questionnaireReplySchema = z.object({
+  messageId: z.string().uuid(),
+  answers: z.record(z.string().min(1).max(64), z.array(z.string().trim().min(1).max(2_000)).min(1).max(8)),
+}).strict();
 
 export async function submitPrivateMessage(
   context: AuthorizationContext,
   conversations: Pick<ConversationRuntime, "repository" | "queue">,
-  input: { content: string; contextId?: string; conversationId?: string; execution?: MissionExecutionPreferences },
+  input: { content: string; contextId?: string; conversationId?: string; execution?: MissionExecutionPreferences;
+    questionnaireReply?: { messageId: string; answers: Record<string, string[]> } },
 ) {
   assertAuthorized(context, "hermes:ask");
   if (context.principalType !== "user") throw new Error("Private messages require a user principal.");
@@ -15,6 +22,7 @@ export async function submitPrivateMessage(
     contextId: input.contextId,
     ...(input.conversationId ? { conversationId: input.conversationId } : {}),
     ...(input.execution ? { execution: input.execution } : {}),
+    ...(input.questionnaireReply ? { questionnaireReply: input.questionnaireReply } : {}),
   });
   const queuedAt = new Date();
   const missionContext = queued.mission.context ?? {};

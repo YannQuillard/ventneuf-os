@@ -200,6 +200,33 @@ test("MCP dispatches for Hermes only through a matching parent delegation", asyn
     model: args.model,
   });
 
+  const referenceArgs = { ...args, delegationToken: undefined, delegationId: claims.delegationId };
+  const referenceServices: RemoteMcpServices = {
+    delegations: { verify: async () => assert.fail("Reference dispatch must not copy or verify a model-supplied token") },
+    conversations: { repository: {
+      getMissionDispatchDelegation: async (lookup: unknown) => {
+        assert.deepEqual(lookup, { organizationId, serviceId: service.principalId, delegationId: claims.delegationId });
+        return claims;
+      },
+      enqueueDelegatedRunnerMission: async (input: unknown) => {
+        received = input;
+        return { conversationId: claims.conversationId, mission: { id: "reference-child", status: "queued" } };
+      },
+    } as never },
+  };
+  const referenced = await callTool(referenceServices, service, "mission.dispatch", referenceArgs);
+  assert.equal(referenced.isError, undefined);
+  assert.equal((referenced.structuredContent as { missionId: string }).missionId, "reference-child");
+  for (const stored of [undefined, { ...claims, expiresAt: new Date(Date.now() - 1).toISOString() },
+    { ...claims, serviceId: "foreign-service" }, { ...claims, organizationId: "00000000-0000-4000-8000-000000000099" },
+    { ...claims, delegationId: "00000000-0000-4000-8000-000000000099" }, { ...claims, targets: [] }]) {
+    const rejected = await callTool({ ...referenceServices, conversations: { repository: {
+      getMissionDispatchDelegation: async () => stored,
+      enqueueDelegatedRunnerMission: async () => assert.fail("Invalid references must not dispatch"),
+    } as never } }, service, "mission.dispatch", referenceArgs);
+    assert.equal(rejected.isError, true);
+  }
+
   for (const [context, input, delegated] of [
     [{ ...service, capabilities: [] }, args, services.delegations],
     [service, { ...args, delegationToken: undefined }, services.delegations],
@@ -307,5 +334,48 @@ test("MCP lets Hermes decide only the exact delegated approval", async () => {
       },
     }, context, "approval.decide", args);
     assert.equal(rejected.isError, true);
+  }
+});
+
+test("MCP presents bounded interactive questions only in the current delegated conversation", async () => {
+  const id = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, "0")}`;
+  const service: AuthorizationContext = { organizationId: id(1), principalId: "hermes-supervisor", principalType: "service",
+    capabilities: ["mission:dispatch"], projectIds: [], expiresAt: new Date(Date.now() + 60_000).toISOString() };
+  const claims = { version: 1, issuer: "ventneuf-control-plane", audience: "ventneuf-mcp", delegationId: id(2),
+    serviceId: service.principalId, organizationId: id(1), parentMissionId: id(3), conversationId: id(4), memberId: id(5),
+    capabilities: ["mission:dispatch"], targets: [], issuedAt: new Date().toISOString(), expiresAt: service.expiresAt };
+  const question = { id: "lead", label: "Lead model", mode: "single", options: [{ value: "opus", label: "Opus" },
+    { value: "sonnet", label: "Sonnet" }], defaultValues: ["opus"] };
+  const args = { delegationId: id(2), requestId: id(6), title: "Choose mission settings", questions: [question] };
+  let received: unknown;
+  const services: RemoteMcpServices = { delegations: { verify: async () => assert.fail("No model-copied token is used") },
+    conversations: { repository: {
+      getMissionDispatchDelegation: async (input: unknown) => {
+        assert.deepEqual(input, { organizationId: id(1), serviceId: service.principalId, delegationId: id(2) });
+        return claims;
+      },
+      createConversationQuestionnaire: async (input: unknown) => { received = input; return { messageId: id(7) }; },
+    } } as never };
+  const result = await callTool(services, service, "conversation.ask_questions", args);
+  assert.equal(result.isError, undefined);
+  assert.equal((result.structuredContent as { status: string }).status, "awaiting_answers");
+  assert.deepEqual(received, { organizationId: id(1), parentMissionId: id(3), conversationId: id(4), memberId: id(5),
+    expiresAt: new Date(claims.expiresAt), requestId: id(6), questionnaire: { title: args.title, questions: args.questions } });
+  for (const questions of [[], [question, question], [{ ...question, options: [] }],
+    [{ ...question, defaultValues: ["opus", "sonnet"] }], Array.from({ length: 5 }, (_, index) => ({ ...question, id: `q${index}` }))]) {
+    received = undefined;
+    assert.equal((await callTool(services, service, "conversation.ask_questions", { ...args, questions })).isError, true);
+    assert.equal(received, undefined);
+  }
+  for (const unauthorized of [{ ...service, principalType: "user" as const }, { ...service, capabilities: [] }]) {
+    assert.equal((await callTool(services, unauthorized, "conversation.ask_questions", args)).isError, true);
+  }
+  for (const invalid of [undefined, { ...claims, expiresAt: new Date(0).toISOString() }, { ...claims, serviceId: "other-service" }]) {
+    received = undefined;
+    const denied = { ...services, conversations: { repository: {
+      getMissionDispatchDelegation: async () => invalid,
+      createConversationQuestionnaire: async () => assert.fail("Invalid authority cannot create a form"),
+    } } as never };
+    assert.equal((await callTool(denied, service, "conversation.ask_questions", args)).isError, true);
   }
 });

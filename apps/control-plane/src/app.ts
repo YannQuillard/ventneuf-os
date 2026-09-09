@@ -1,5 +1,5 @@
 import { registerWorkspaceRoutes } from "./workspace-routes.js";
-import { submitPrivateMessage } from "./conversations.js";
+import { questionnaireReplySchema, submitPrivateMessage } from "./conversations.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { randomUUID } from "node:crypto";
@@ -328,8 +328,9 @@ export function createApp({ verifier, hermes, conversations, delegations, github
       if (!context) return;
       assertAuthorized(context, "hermes:ask");
       if (!conversations) return void response.status(503).json({ error: "conversation_runtime_unavailable" });
-      const { content } = z.object({ content: z.string().trim().min(1).max(100_000) }).parse(request.body);
-      response.status(202).json(await submitPrivateMessage(context, conversations, { content }));
+      const input = z.object({ content: z.string().trim().min(1).max(100_000),
+        questionnaireReply: questionnaireReplySchema.optional() }).strict().parse(request.body);
+      response.status(202).json(await submitPrivateMessage(context, conversations, input));
     } catch (error) {
       if (error instanceof z.ZodError) {
         response.status(400).json({ error: "invalid_request" });

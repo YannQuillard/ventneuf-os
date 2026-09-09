@@ -96,6 +96,17 @@ export class InvalidMissionDelegationError extends Error {
   }
 }
 
+export function readStoredDispatchDelegation(value: unknown, now = new Date()): MissionDispatchDelegationClaims {
+  const result = dispatchClaimsSchema.safeParse(value);
+  if (!result.success || Date.parse(result.data.expiresAt) <= now.getTime()
+    || Date.parse(result.data.issuedAt) > now.getTime() + 30_000
+    || Date.parse(result.data.expiresAt) - Date.parse(result.data.issuedAt) <= 0
+    || Date.parse(result.data.expiresAt) - Date.parse(result.data.issuedAt) > 20 * 60_000) {
+    throw new InvalidMissionDelegationError();
+  }
+  return result.data;
+}
+
 export interface MissionDelegationMac {
   sign(message: Uint8Array): Promise<Uint8Array>;
   verify(message: Uint8Array, mac: Uint8Array): Promise<boolean>;

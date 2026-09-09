@@ -1,6 +1,9 @@
 "use client";
 
 import { AssistantMessage } from "./_components/assistant-message";
+import { ConversationQuestionnaire } from "./_components/conversation-questionnaire";
+import type { ConversationQuestionnaireState } from "@ventneuf/domain";
+import { Button } from "@astryxdesign/core/Button";
 import {
   ChatMessage,
   ChatMessageBubble,
@@ -25,6 +28,8 @@ interface ConversationMessageProps {
   isRevealing?: boolean;
   onRevealed?: () => void;
   onQuote?: (content: string) => void;
+  onReply?: () => void;
+  onAnswerQuestions?: (answers: Record<string, string[]>) => Promise<void>;
   onEdit?: (content: string) => void;
   onRetry?: () => void;
   onDismiss?: () => void;
@@ -139,6 +144,8 @@ export function ConversationMessage({
   isRevealing = false,
   onRevealed,
   onQuote,
+  onReply,
+  onAnswerQuestions,
   onEdit,
   onRetry,
   onDismiss,
@@ -185,6 +192,7 @@ export function ConversationMessage({
   }
 
   const duration = formatDuration(timing(message)?.totalMs);
+  const questionnaire = message.metadata?.questionnaire as ConversationQuestionnaireState | undefined;
   const memoryChanges = Array.isArray(message.metadata?.memoryChanges)
     ? message.metadata.memoryChanges.filter((entry): entry is { title: string } => Boolean(entry && typeof entry === "object" && typeof (entry as { title?: unknown }).title === "string"))
     : [];
@@ -195,6 +203,7 @@ export function ConversationMessage({
         timestamp={<Timestamp value={message.createdAt} format="time" />}
         footer={(
           <div className="message-actions">
+            {onReply ? <Button label="Reply to Hermes" variant="ghost" size="sm" onClick={onReply} /> : null}
             {duration ? <span>{duration}</span> : null}
             <IconButton
               label="Copy message"
@@ -234,6 +243,8 @@ export function ConversationMessage({
         ) : (
           <Markdown contentWidth={760} headingLevelStart={3}>{message.content}</Markdown>
         )}
+        {questionnaire && onAnswerQuestions ? <ConversationQuestionnaire form={questionnaire}
+          currentMemberId={currentMemberId} onSubmit={onAnswerQuestions} /> : null}
         {memoryChanges.length ? <Text type="supporting"><Link href={memoryHref} isStandalone>
           {`Memory updated: ${memoryChanges.map(({ title }) => title).join(", ")}`}
         </Link></Text> : null}
