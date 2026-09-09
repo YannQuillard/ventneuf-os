@@ -254,3 +254,27 @@ test("stalled SSE headers and event callbacks cannot block a completed result", 
     assert.equal(signal?.aborted, true);
   }
 });
+
+test("a timed-out status read resumes polling the same native run", async () => {
+  let submissions = 0;
+  let reads = 0;
+  const client = new RunsHermesClient("http://hermes.internal", new StaticTokenProvider("test-token"), async (url, init) => {
+    if (init?.method === "POST") {
+      submissions += 1;
+      return Response.json({ run_id: "run-retained" });
+    }
+    assert.equal(String(url), "http://hermes.internal/v1/runs/run-retained");
+    if (++reads === 1) throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+    return Response.json({ status: "completed", output: "Recovered reply" });
+  }, 0, 1_000);
+  assert.equal((await client.ask({ message: "Hello" })).text, "Recovered reply");
+  assert.equal(submissions, 1);
+  assert.equal(reads, 2);
+});
+
+test("repeated status timeouts remain bounded by the polling window", async () => {
+  const client = new RunsHermesClient("http://hermes.internal", new StaticTokenProvider("test-token"), async () => {
+    throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+  }, 1, 20);
+  await assert.rejects(client.ask({ message: "Resume", runId: "run-existing" }), /still active after the polling window/);
+});

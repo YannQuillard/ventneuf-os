@@ -175,13 +175,22 @@ export class RunsHermesClient implements HermesClient {
           await this.stop(runId);
           throw new HermesRunCancelledError();
         }
-        const response = await this.request(
-          `/v1/runs/${encodeURIComponent(runId)}`,
-          { signal: AbortSignal.any([lifecycle.signal, AbortSignal.timeout(10_000)]) },
-          input.sessionKey,
-        );
-        await this.assertOk(response, "read");
-        const run = await response.json() as HermesRun;
+        let run: HermesRun;
+        try {
+          const response = await this.request(
+            `/v1/runs/${encodeURIComponent(runId)}`,
+            { signal: AbortSignal.any([lifecycle.signal, AbortSignal.timeout(10_000)]) },
+            input.sessionKey,
+          );
+          await this.assertOk(response, "read");
+          run = await response.json() as HermesRun;
+        } catch (error) {
+          if (lifecycle.signal.aborted) break;
+          if (!(error instanceof Error) || error.name !== "TimeoutError") throw error;
+          // A status request timing out does not mean the native run failed.
+          await new Promise(resolve => setTimeout(resolve, Math.max(0, Math.min(this.pollIntervalMs, deadline - Date.now()))));
+          continue;
+        }
         const status = run.status?.toLowerCase();
         if (status === "completed") {
           // Allow buffered events to drain, but never let SSE hold the queue worker.
