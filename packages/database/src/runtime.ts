@@ -3,6 +3,7 @@ import type { ClaudeModel, MissionAuthority, MissionExecutionPreferences, Reason
 import type { Database } from "./client.js";
 import { requireConversationAccess, requireProjectAccess, currentScopeForMission, requireCurrentMissionMemoryScope, WorkspaceAccessError } from "./workspace-access.js";
 import { publicApproval } from "./mission-approvals.js";
+import { notifyProjectMessageMentions } from "./workspace.js";
 import { repositoriesMatch } from "./repository-identity.js";
 import { conversations, devices, members, messages, missionApprovals, missionEvents, missions, organizations, projects, projectMembers, projectRepositories } from "./schema.js";
 
@@ -186,6 +187,12 @@ export class ConversationRuntimeRepository {
         })
         .returning();
       if (!message) throw new Error("Failed to persist the message.");
+      if (conversation.isProjectGeneral && conversation.projectId) {
+        await notifyProjectMessageMentions(transaction, conversation.projectId, message);
+      }
+      await transaction.update(conversations).set({ updatedAt: acceptedAt }).where(and(
+        eq(conversations.organizationId, input.organizationId), eq(conversations.id, conversation.id),
+      ));
 
       const [mission] = await transaction
         .insert(missions)

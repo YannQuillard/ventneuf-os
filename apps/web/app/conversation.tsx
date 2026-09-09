@@ -259,13 +259,13 @@ export function HermesConversation({ conversationId, title = "Hermes", subtitle 
         timing: MissionTiming;
       };
       acceptedMessages.current = [...acceptedMessages.current, payload.message];
-      latestUserMessageAt.current = collaborative ? undefined : new Date(payload.message.createdAt).getTime();
+      latestUserMessageAt.current = payload.missionId ? new Date(payload.message.createdAt).getTime() : undefined;
       setMessages((current) => current.some(({ id }) => id === payload.message.id)
         ? current
         : [...current, payload.message]);
       setPending((current) => current.filter(({ id }) => id !== pendingId));
-      setAwaitingReply(!collaborative);
-      setMission(!collaborative && payload.missionId
+      setAwaitingReply(Boolean(payload.missionId));
+      setMission(payload.missionId
         ? { id: payload.missionId, status: payload.status, timing: payload.timing }
         : null);
       setNow(Date.now());
@@ -357,7 +357,7 @@ export function HermesConversation({ conversationId, title = "Hermes", subtitle 
         <VStack style={chatColumn}>
           <ConversationSurface value={content} onChange={setContent} inputRef={composerInput} error={error}
             isDisabled={accessRevoked || !isLoaded}
-            placeholder={collaborative ? "Message the project · use @name to notify someone" : "Message Hermes"}
+            placeholder={collaborative ? "Message the project · mention @hermes for help" : "Message Hermes"}
             scope={collaborative ? "Shared project conversation" : conversationId ? "Conversation knowledge" : "Personal knowledge"}
             onSubmit={(value) => { setContent(""); void submit(value); }}
             emptyState={error ? <Text type="supporting">{accessRevoked
@@ -367,7 +367,7 @@ export function HermesConversation({ conversationId, title = "Hermes", subtitle 
                 <EmptyState
                   title={collaborative ? "Start the project conversation" : "Ask Hermes anything"}
                   description={collaborative
-                    ? "Messages are visible to everyone in the project. Mention a member with @name to notify them."
+                    ? "Messages are visible to everyone in the project. Mention @hermes for help or @name to notify a member."
                     : conversationId
                     ? "Send a message to get started. Access follows this conversation's sharing settings."
                     : "This conversation is private to you. Send a message to get started."}

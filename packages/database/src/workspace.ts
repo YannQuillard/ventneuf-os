@@ -14,6 +14,41 @@ import {
   projects,
 } from "./schema.js";
 
+export async function notifyProjectMessageMentions(
+  transaction: DatabaseTransaction,
+  projectId: string,
+  message: typeof messages.$inferSelect,
+) {
+  if (!message.memberId) throw new WorkspaceAccessError("Project messages require a member.");
+  const [project] = await transaction.select({ ownerMemberId: projects.ownerMemberId }).from(projects).where(and(
+    eq(projects.organizationId, message.organizationId), eq(projects.id, projectId),
+  )).limit(1);
+  if (!project) throw new WorkspaceAccessError("Project not found or access denied.");
+  const actorMemberId = message.memberId;
+  const projectMemberRows = await transaction.select({ member: members }).from(members).leftJoin(projectMembers, and(
+    eq(projectMembers.organizationId, members.organizationId), eq(projectMembers.memberId, members.id),
+    eq(projectMembers.projectId, projectId),
+  )).where(and(eq(members.organizationId, message.organizationId), or(
+    eq(members.id, project.ownerMemberId), sql`${projectMembers.memberId} is not null`,
+  )));
+  const mentionedToken = (value: string) => {
+    const escaped = value.toLocaleLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`(^|\\s)@${escaped}(?=\\s|[.,!?;:]|$)`, "u").test(message.content.toLocaleLowerCase());
+  };
+  const mentioned = projectMemberRows.map(({ member: candidate }) => candidate).filter(candidate => candidate.id !== message.memberId
+    && [candidate.handle, candidate.displayName].some(value => value && mentionedToken(value)));
+  if (mentioned.length) await transaction.insert(memberNotifications).values(mentioned.map(recipient => ({
+    organizationId: message.organizationId,
+    memberId: recipient.id,
+    actorMemberId,
+    projectId,
+    conversationId: message.conversationId,
+    messageId: message.id,
+    kind: "project_mention",
+    summary: message.content.slice(0, 500),
+  }))).onConflictDoNothing();
+}
+
 export interface WorkspaceScope {
   organizationId: string;
   externalSubject: string;
@@ -252,7 +287,7 @@ async function currentScopeForAccessibleConversation(
   lock: RowLock,
 ): Promise<HermesMemoryScope> {
   const audience = await effectiveConversationAudience(transaction, conversation, lock);
-  if (audience.length === 1 && audience[0] === conversation.ownerMemberId) {
+  if (!conversation.isProjectGeneral && audience.length === 1 && audience[0] === conversation.ownerMemberId) {
     return {
       scopeId: opaqueScopeId({ version: 1, kind: "personal", organizationId: conversation.organizationId, memberId: conversation.ownerMemberId }),
       kind: "personal",
@@ -1006,28 +1041,7 @@ export class WorkspaceRepository {
         eq(conversations.organizationId, scope.organizationId), eq(conversations.id, conversationId),
       ));
 
-      const projectMemberRows = await transaction.select({ member: members }).from(members).leftJoin(projectMembers, and(
-        eq(projectMembers.organizationId, members.organizationId), eq(projectMembers.memberId, members.id),
-        eq(projectMembers.projectId, project.id),
-      )).where(and(eq(members.organizationId, scope.organizationId), or(
-        eq(members.id, project.ownerMemberId), sql`${projectMembers.memberId} is not null`,
-      )));
-      const mentionedToken = (value: string) => {
-        const escaped = value.toLocaleLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        return new RegExp(`(^|\\s)@${escaped}(?=\\s|[.,!?;:]|$)`, "u").test(content.toLocaleLowerCase());
-      };
-      const mentioned = projectMemberRows.map(({ member: candidate }) => candidate).filter(candidate => candidate.id !== member.id
-        && [candidate.handle, candidate.displayName].some(value => value && mentionedToken(value)));
-      if (mentioned.length) await transaction.insert(memberNotifications).values(mentioned.map(recipient => ({
-        organizationId: scope.organizationId,
-        memberId: recipient.id,
-        actorMemberId: member.id,
-        projectId: project.id,
-        conversationId,
-        messageId: message.id,
-        kind: "project_mention",
-        summary: content.slice(0, 500),
-      }))).onConflictDoNothing();
+      await notifyProjectMessageMentions(transaction, project.id, message);
       return message;
     });
   }

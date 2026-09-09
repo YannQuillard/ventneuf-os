@@ -4,6 +4,7 @@ import test from "node:test";
 import postgres from "postgres";
 import { createDatabase } from "../src/client.js";
 import { migrate } from "../src/migrate.js";
+import { ConversationRuntimeRepository } from "../src/runtime.js";
 import {
   currentPersonalScope,
   currentScopeForConversation,
@@ -23,6 +24,7 @@ test("workspace projects and conversations require explicit tenant-scoped grants
   runtimeUrl.searchParams.set("options", "-c role=ventneuf_runtime");
   const database = createDatabase(runtimeUrl.toString());
   const workspace = new WorkspaceRepository(database);
+  const runtime = new ConversationRuntimeRepository(database);
   const organizationId = randomUUID();
   const otherOrganizationId = randomUUID();
   const ownerSubject = "workspace-owner";
@@ -75,6 +77,9 @@ test("workspace projects and conversations require explicit tenant-scoped grants
     });
     assert.equal(project.ownerMemberId, owner.id);
     assert.ok(project.generalConversationId);
+    const generalScope = await workspace.getMemoryScope(ownerScope, project.generalConversationId);
+    assert.equal(generalScope.kind, "conversation");
+    assert.notEqual(generalScope.scopeId, (await workspace.getMemoryScope(ownerScope)).scopeId);
     assert.equal((await workspace.getConversation(ownerScope, project.generalConversationId)).id, project.generalConversationId);
     const projectMessage = await workspace.appendProjectMessage(ownerScope, project.generalConversationId, "Project kickoff");
     assert.equal(projectMessage.content, "Project kickoff");
@@ -94,6 +99,22 @@ test("workspace projects and conversations require explicit tenant-scoped grants
     await workspace.shareProject(ownerScope, project.id, collaborator.id);
     assert.equal((await workspace.getConversation(collaboratorScope, project.generalConversationId)).id, project.generalConversationId);
     await workspace.appendProjectMessage(collaboratorScope, project.generalConversationId, "Ready to collaborate");
+    const queued = await runtime.enqueuePrivateMessage({ ...ownerScope, conversationId: project.generalConversationId,
+      content: "@hermes help plan the work with @collaborator" });
+    assert.equal(queued.mission.projectId, project.id);
+    assert.equal(queued.mission.context.type, "hermes.conversation");
+    assert.equal(queued.mission.requestedByMemberId, owner.id);
+    assert.equal((await workspace.listNotifications(collaboratorScope))[0]?.messageId, queued.message.id);
+    const context = await runtime.getMissionConversationContext(organizationId, queued.mission.id);
+    assert.equal(context.project?.id, project.id);
+    const memory = await runtime.getHermesMemoryScope(organizationId, queued.mission.id);
+    assert.equal(memory.kind, "conversation");
+    assert.equal(await runtime.completeMission({ organizationId, missionId: queued.mission.id,
+      conversationId: project.generalConversationId, contextId: "project-hermes-context", content: "Which lead and sub-agent models would you like?",
+      context: { ...queued.mission.context, hermesScopeId: memory.scopeId } }), true);
+    const chat = await runtime.getConversationSnapshot({ ...collaboratorScope, conversationId: project.generalConversationId });
+    assert.equal(chat.messages.filter(({ id }) => id === queued.message.id).length, 1);
+    assert.equal(chat.messages.at(-1)?.role, "assistant");
     const collaboratorProjects = await workspace.listProjects(collaboratorScope);
     assert.deepEqual(collaboratorProjects.map(({ id }) => id), [project.id]);
     assert.equal(JSON.stringify(collaboratorProjects).includes("Personal repository"), false);
@@ -289,6 +310,7 @@ test("workspace projects and conversations require explicit tenant-scoped grants
     await database.close();
     try {
       for (const table of [
+        "member_notifications",
         "conversation_grants",
         "messages",
         "missions",
