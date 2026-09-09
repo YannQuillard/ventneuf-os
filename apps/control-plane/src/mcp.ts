@@ -123,7 +123,7 @@ export function createRemoteMcpServer(
           reasoningEffort: z.enum(reasoningEfforts) }).strict().optional()
           .describe("Native sub-agent models and reasoning requested by the member."),
         delegationId: z.string().uuid().optional().describe("Use the Delegation ID supplied in the current turn. Ventneuf resolves its authority server-side."),
-        delegationToken: z.string().min(1).max(20_000).optional().describe("Legacy signed token. Prefer delegationId; never reconstruct a token."),
+        delegationToken: z.string().min(1).max(20_000).optional().describe("Compatibility field: accepts the current Delegation ID when a cached schema lacks delegationId. Also accepts legacy signed tokens; never reconstruct a token."),
         requestId: z.string().uuid().optional(),
       },
     },
@@ -145,7 +145,8 @@ export function createRemoteMcpServer(
       description: "Approve, reject, or escalate one exact coding-agent operation. A parent-scoped delegation and stable request ID are required.",
       inputSchema: {
         approvalId: z.string().uuid(),
-        delegationToken: z.string().min(1).max(20_000),
+        delegationId: z.string().uuid().optional().describe("Use the Approval Delegation ID supplied in this review turn."),
+        delegationToken: z.string().min(1).max(20_000).optional().describe("Compatibility field for the current Approval Delegation ID when the tool schema is cached; legacy signed tokens remain supported."),
         requestId: z.string().uuid(),
         decision: z.enum(["approved", "rejected", "escalated"]),
         rationale: z.string().trim().min(1).max(2_000),
@@ -155,7 +156,7 @@ export function createRemoteMcpServer(
       if (!services.conversations?.approvals) throw new Error("The approval runtime is unavailable.");
       return jsonResult(await decideApprovalAsService(
         context,
-        { approvals: services.conversations.approvals },
+        { approvals: services.conversations.approvals, repository: services.conversations.repository },
         input,
         services.delegations,
       ));

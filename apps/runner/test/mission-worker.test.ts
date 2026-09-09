@@ -253,3 +253,57 @@ test("final mission report carries the latest activity even when live transmissi
   assert.equal(reports.at(-1)?.kind, "completed");
   assert.deepEqual(reports.at(-1)?.snapshot, snapshot);
 });
+
+test("transient renewal failures recover within the confirmed lease without restarting execution", async () => {
+  let renewals = 0;
+  let executions = 0;
+  let recovered!: () => void;
+  const renewed = new Promise<void>(resolve => { recovered = resolve; });
+  const reports: MissionReport[] = [];
+  const worker = new RunnerMissionWorker({
+    store: { load: async () => device, save: async () => {} },
+    repositories: async () => [{ id: "sample", name: "Sample", path: "/repository", orcaReview: true }],
+    renewalIntervalMs: 10,
+    client: {
+      registerRepositories: async () => {},
+      claimMission: async () => ({ ...mission, adapter: "orca-review", leaseExpiresAt: new Date(Date.now() + 60_000).toISOString() }),
+      reportMission: async (_device, _id, report) => { reports.push(report); },
+      renewMission: async () => {
+        renewals += 1;
+        if (renewals < 3) throw new TypeError("fetch failed");
+        recovered();
+        return new Date(Date.now() + 60_000).toISOString();
+      },
+    },
+    adapter: { execute: async (_mission, _repository, signal) => {
+      executions += 1;
+      await renewed;
+      signal.throwIfAborted();
+      return "Review completed after network recovery.";
+    } },
+  });
+  await worker.tick();
+  assert.equal(executions, 1);
+  assert.equal(reports.at(-1)?.kind, "completed");
+});
+
+test("a continuous renewal outage stops execution when the confirmed lease expires", async () => {
+  const reports: MissionReport[] = [];
+  const worker = new RunnerMissionWorker({
+    store: { load: async () => device, save: async () => {} },
+    repositories: async () => [{ id: "sample", name: "Sample", path: "/repository", orcaReview: true }],
+    renewalIntervalMs: 10,
+    client: {
+      registerRepositories: async () => {},
+      claimMission: async () => ({ ...mission, adapter: "orca-review", leaseExpiresAt: new Date(Date.now() + 300).toISOString() }),
+      reportMission: async (_device, _id, report) => { reports.push(report); },
+      renewMission: async () => { throw new TypeError("fetch failed"); },
+    },
+    adapter: { execute: async (_mission, _repository, signal) => new Promise((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    }) },
+  });
+  await worker.tick();
+  assert.equal(reports.at(-1)?.kind, "failed");
+  assert.equal(reports.some(report => report.kind === "completed"), false);
+});

@@ -185,7 +185,8 @@ test("gives Hermes one approval grant and escalates when it returns without a de
     completeMission: async (input: unknown) => { persisted.push(input); return true; },
   }), unusedQueue, {
     ask: async ({ message }) => {
-      assert.match(message, /signed-approval-delegation/);
+      assert.doesNotMatch(message, /signed-approval-delegation/);
+      assert.match(message, /Approval Delegation ID: 00000000-0000-4000-8000-000000000006/);
       assert.match(message, new RegExp(approvalId));
       assert.match(message, /approval\.decide/);
       return { contextId: "context-after", text: "Escalating to the member." };
