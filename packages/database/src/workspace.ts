@@ -164,8 +164,9 @@ export async function requireConversationAccess(
   );
   if (!conversation) throw new WorkspaceAccessError("Conversation not found or access denied.");
 
-    let canManage = conversation.ownerMemberId === member.id && !conversation.isProjectGeneral;
-  if (!canManage) {
+  const isOwner = conversation.ownerMemberId === member.id;
+  const canManage = isOwner && !conversation.isProjectGeneral;
+  if (!isOwner) {
     const grant = await selectOneForLock(
       transaction
         .select({ memberId: conversationGrants.memberId })
