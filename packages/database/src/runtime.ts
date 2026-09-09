@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
-import type { ClaudeModel, MissionAuthority, MissionExecutionPreferences, ReasoningEffort, RunnerExecutionHarnesses } from "@ventneuf/domain";
+import type { ClaudeModel, ConversationQuestionnaire, ConversationQuestionnaireState, MissionAuthority, MissionExecutionPreferences, ReasoningEffort, RunnerExecutionHarnesses } from "@ventneuf/domain";
 import type { Database } from "./client.js";
 import { requireConversationAccess, requireProjectAccess, currentScopeForMission, requireCurrentMissionMemoryScope, WorkspaceAccessError } from "./workspace-access.js";
 import { publicApproval } from "./mission-approvals.js";
@@ -79,6 +79,7 @@ export class ConversationRuntimeRepository {
     runner?: { deviceId: string; repositoryId: string; adapter?: DelegatedRunnerAdapter; model?: string;
       reasoningEffort?: ReasoningEffort; subagents?: MissionExecutionPreferences["subagents"] };
     execution?: MissionExecutionPreferences;
+    questionnaireReply?: { messageId: string; answers: Record<string, string[]> };
   }) {
     const acceptedAt = new Date();
     return this.database.withOrganization(input.organizationId, async (transaction) => {
@@ -175,6 +176,33 @@ export class ConversationRuntimeRepository {
       }
       if (!conversation) throw new Error("Failed to resolve the private conversation.");
 
+      let content = input.content;
+      let questionMessage: typeof messages.$inferSelect | undefined;
+      let questionnaire: ConversationQuestionnaireState | undefined;
+      if (input.questionnaireReply) {
+        [questionMessage] = await transaction.select().from(messages).where(and(
+          eq(messages.organizationId, input.organizationId), eq(messages.conversationId, conversation.id),
+          eq(messages.id, input.questionnaireReply.messageId),
+        )).for("update").limit(1);
+        questionnaire = questionMessage?.metadata.questionnaire as ConversationQuestionnaireState | undefined;
+        if (!questionnaire || questionnaire.requestedByMemberId !== member.id || questionnaire.answerMissionId) {
+          throw new WorkspaceAccessError("This form is unavailable or has already been answered.");
+        }
+        const answers = input.questionnaireReply.answers;
+        if (Object.keys(answers).length !== questionnaire.questions.length || questionnaire.questions.some(question => {
+          const values = answers[question.id];
+          return !Array.isArray(values) || !values.length || values.length > (question.mode === "multiple" ? 8 : 1)
+            || values.some(value => typeof value !== "string" || !value.trim() || value.length > 2_000);
+        })) throw new WorkspaceAccessError("Answer every question before continuing.");
+        content = ["Confirmed choices from the conversation form:", questionnaire.title,
+          ...questionnaire.questions.map(question => `${question.label}: ${answers[question.id]!.map(value => {
+            const label = question.options.find(option => option.value === value)?.label;
+            return label && label !== value ? `${label} (${value})` : value;
+          }).join(", ")}`),
+          "Use these answers and the existing project context. If the mission is ready, launch it with these choices without asking me to repeat them.",
+        ].join("\n");
+      }
+
       const [message] = await transaction
         .insert(messages)
         .values({
@@ -182,7 +210,7 @@ export class ConversationRuntimeRepository {
           conversationId: conversation.id,
           memberId: member.id,
           role: "user",
-          content: input.content,
+          content,
           createdAt: acceptedAt,
         })
         .returning();
@@ -201,7 +229,7 @@ export class ConversationRuntimeRepository {
           conversationId: conversation.id,
           projectId: conversation.projectId,
           requestedByMemberId: member.id,
-          goal: input.content,
+          goal: content,
           assignedDeviceId: input.runner?.deviceId,
           context: {
             sourceMessageId: message.id,
@@ -225,6 +253,11 @@ export class ConversationRuntimeRepository {
         })
         .returning();
       if (!mission) throw new Error("Failed to create the Hermes mission.");
+      if (questionMessage && questionnaire && input.questionnaireReply) {
+        await transaction.update(messages).set({ metadata: { ...questionMessage.metadata,
+          questionnaire: { ...questionnaire, answers: input.questionnaireReply.answers, answerMissionId: mission.id },
+        } }).where(and(eq(messages.organizationId, input.organizationId), eq(messages.id, questionMessage.id)));
+      }
 
       return { conversationId: conversation.id, message, mission };
     });
@@ -555,6 +588,50 @@ export class ConversationRuntimeRepository {
         memberId: mission.requestedByMemberId,
         targets,
       } satisfies HermesDispatchScope;
+    });
+  }
+
+  createConversationQuestionnaire(input: { organizationId: string; parentMissionId: string; conversationId: string;
+    memberId: string; expiresAt: Date; requestId: string; questionnaire: ConversationQuestionnaire }) {
+    return this.database.withOrganization(input.organizationId, async transaction => {
+      const [parent] = await transaction.select().from(missions).where(and(
+        eq(missions.organizationId, input.organizationId), eq(missions.id, input.parentMissionId),
+      )).for("update").limit(1);
+      if (!parent || parent.context.type !== "hermes.conversation" || !["running", "waiting_for_approval"].includes(parent.status)
+        || parent.conversationId !== input.conversationId || parent.requestedByMemberId !== input.memberId
+        || input.expiresAt <= new Date()) throw new WorkspaceAccessError();
+      if (typeof parent.context.hermesScopeId !== "string") throw new WorkspaceAccessError();
+      await requireCurrentMissionMemoryScope(transaction, { organizationId: input.organizationId,
+        missionId: parent.id, expectedScopeId: parent.context.hermesScopeId });
+      const [existing] = await transaction.select({ id: messages.id }).from(messages).where(and(
+        eq(messages.organizationId, input.organizationId), eq(messages.conversationId, input.conversationId),
+        sql`${messages.metadata}->'questionnaire'->>'parentMissionId' = ${parent.id}`,
+        sql`${messages.metadata}->'questionnaire'->>'requestId' = ${input.requestId}`,
+      )).limit(1);
+      if (existing) return { messageId: existing.id };
+      const [message] = await transaction.insert(messages).values({ organizationId: input.organizationId,
+        conversationId: input.conversationId, role: "assistant", content: input.questionnaire.title,
+        metadata: { questionnaire: { ...input.questionnaire, requestedByMemberId: input.memberId,
+          parentMissionId: parent.id, requestId: input.requestId } satisfies ConversationQuestionnaireState },
+      }).returning({ id: messages.id });
+      if (!message) throw new Error("Unable to create the conversation form.");
+      return { messageId: message.id };
+    });
+  }
+
+  getMissionDispatchDelegation(input: { organizationId: string; serviceId: string; delegationId: string }) {
+    return this.database.withOrganization(input.organizationId, async transaction => {
+      const [record] = await transaction.select({ context: missions.context }).from(missions).where(and(
+        eq(missions.organizationId, input.organizationId),
+        inArray(missions.status, ["running", "waiting_for_approval"]),
+        sql`${missions.context}->>'type' = 'hermes.conversation'`,
+        sql`${missions.context}->'dispatchDelegation'->>'delegationId' = ${input.delegationId}`,
+        sql`${missions.context}->'dispatchDelegation'->>'serviceId' = ${input.serviceId}`,
+        sql`${missions.context}->'dispatchDelegation'->>'parentMissionId' = ${missions.id}::text`,
+        sql`${missions.context}->'dispatchDelegation'->>'conversationId' = ${missions.conversationId}::text`,
+        sql`${missions.context}->'dispatchDelegation'->>'memberId' = ${missions.requestedByMemberId}::text`,
+      )).limit(1);
+      return record?.context.dispatchDelegation;
     });
   }
 

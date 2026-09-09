@@ -1,6 +1,7 @@
 import { assertAuthorized, claudeModelAliases, type AuthorizationContext, type MissionExecutionPreferences, type ReasoningEffort } from "@ventneuf/domain";
 import type { ConversationRuntime } from "./runtime.js";
 import type { MissionDelegationVerifier } from "./mission-delegation.js";
+import { readStoredDispatchDelegation } from "./mission-delegation.js";
 
 export type RunnerAdapter = "repository-check" | "orca-review" | "codex-development" | "claude-development";
 
@@ -14,6 +15,7 @@ export interface RunnerDispatch {
   subagents?: MissionExecutionPreferences["subagents"];
   objective: string;
   delegationToken?: string;
+  delegationId?: string;
   requestId?: string;
 }
 
@@ -52,11 +54,16 @@ export async function dispatchRunnerMission(
 
   assertAuthorized(context, "mission:dispatch");
   if (context.principalType !== "service" || !delegations
-    || !input.delegationToken || !input.requestId) {
+    || (!input.delegationToken && !input.delegationId) || !input.requestId) {
     throw new Error("Delegated runner dispatch requires a service principal and mission delegation.");
   }
-  const claims = await delegations.verify(input.delegationToken);
+  const claims = input.delegationId
+    ? readStoredDispatchDelegation(await runtime.repository.getMissionDispatchDelegation({
+      organizationId: context.organizationId, serviceId: context.principalId, delegationId: input.delegationId,
+    }))
+    : await delegations.verify(input.delegationToken!);
   if (claims.organizationId !== context.organizationId || claims.serviceId !== context.principalId
+    || (input.delegationId !== undefined && claims.delegationId !== input.delegationId)
     || !("targets" in claims)
     || !claims.targets.some((target) => target.deviceId === input.deviceId
       && target.repositoryId === input.repositoryId

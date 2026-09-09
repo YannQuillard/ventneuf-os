@@ -36,6 +36,27 @@ export interface MissionExecutionPreferences {
   subagents: { models: string[]; reasoningEffort: ReasoningEffort };
 }
 
+export interface ConversationQuestion {
+  id: string;
+  label: string;
+  mode: "single" | "multiple" | "text";
+  options: Array<{ value: string; label: string }>;
+  defaultValues: string[];
+}
+
+export interface ConversationQuestionnaire {
+  title: string;
+  questions: ConversationQuestion[];
+}
+
+export interface ConversationQuestionnaireState extends ConversationQuestionnaire {
+  requestedByMemberId: string;
+  parentMissionId: string;
+  requestId: string;
+  answers?: Record<string, string[]>;
+  answerMissionId?: string;
+}
+
 export interface RunnerExecutionHarnesses {
   codex?: { models?: string[] };
   claude?: { models: ClaudeModel[] };

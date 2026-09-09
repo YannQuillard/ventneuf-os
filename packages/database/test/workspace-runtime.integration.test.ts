@@ -119,6 +119,71 @@ test("workspace runtime isolates private threads and dispatches delegated work i
       claudeModels: ["opus"],
     }]);
 
+    const formParent = await enqueue(ownerScope, "Prepare the model selection form.");
+    const formScope = await runtime.getHermesMemoryScope(organizationId, formParent.mission.id);
+    const formContext = { ...formParent.mission.context, hermesScopeId: formScope.scopeId };
+    await runtime.setMissionRunning(organizationId, formParent.mission.id, formContext);
+    const formInput = { organizationId, parentMissionId: formParent.mission.id, conversationId: sourceConversationId,
+      memberId: ownerId, expiresAt: new Date(Date.now() + 60_000), requestId: randomUUID(),
+      questionnaire: { title: "Confirm mission choices", questions: [
+        { id: "objective", label: "Objective", mode: "text" as const, options: [], defaultValues: ["Improve product listing performance"] },
+        { id: "lead", label: "Lead model", mode: "single" as const,
+          options: [{ value: "opus", label: "Opus" }, { value: "sonnet", label: "Sonnet" }], defaultValues: ["opus"] },
+      ] } };
+    const form = await runtime.createConversationQuestionnaire(formInput);
+    assert.deepEqual(await runtime.createConversationQuestionnaire(formInput), form);
+    await assert.rejects(runtime.createConversationQuestionnaire({ ...formInput, requestId: randomUUID(), memberId: collaboratorId }));
+    await assert.rejects(runtime.createConversationQuestionnaire({ ...formInput, requestId: randomUUID(), expiresAt: new Date(0) }));
+    const answerForm = (answers: Record<string, string[]>, scope = ownerScope) => runtime.enqueuePrivateMessage({
+      ...scope, conversationId: sourceConversationId, content: "Client text must not replace the saved questions.",
+      questionnaireReply: { messageId: form.messageId, answers },
+    });
+    await assert.rejects(answerForm({ objective: ["Optimize pagination"] }));
+    await assert.rejects(answerForm({ objective: ["Optimize pagination"], lead: ["opus", "sonnet"] }));
+    await admin`insert into conversation_grants (organization_id, conversation_id, member_id)
+      values (${organizationId}, ${sourceConversationId}, ${collaboratorId})`;
+    await assert.rejects(answerForm({ objective: ["Optimize pagination"], lead: ["opus"] }, collaboratorScope));
+    await admin`delete from conversation_grants where conversation_id = ${sourceConversationId} and member_id = ${collaboratorId}`;
+    // The member can answer after the original run ends; the next turn gets fresh authority.
+    await runtime.cancelMission(organizationId, formParent.mission.id, formContext);
+    const answers = { objective: ["Optimize pagination and images"], lead: ["opus"] };
+    const submissions = await Promise.allSettled([answerForm(answers), answerForm(answers)]);
+    assert.equal(submissions.filter(result => result.status === "fulfilled").length, 1);
+    assert.equal(submissions.filter(result => result.status === "rejected").length, 1);
+    const submitted = submissions.find(result => result.status === "fulfilled");
+    assert.ok(submitted?.status === "fulfilled");
+    assert.notEqual(submitted.value.mission.id, formParent.mission.id);
+    assert.equal(submitted.value.mission.context.dispatchDelegation, undefined);
+    assert.match(submitted.value.mission.goal, /Lead model: Opus \(opus\)/);
+    assert.match(submitted.value.mission.goal, /Optimize pagination and images/);
+    assert.doesNotMatch(submitted.value.mission.goal, /Client text/);
+    const answeredSnapshot = await runtime.getConversationSnapshot({ ...ownerScope, conversationId: sourceConversationId });
+    const savedForm = answeredSnapshot.messages.find(message => message.id === form.messageId)?.metadata.questionnaire as { answers: unknown; answerMissionId: string };
+    assert.deepEqual(savedForm.answers, answers);
+    assert.equal(savedForm.answerMissionId, submitted.value.mission.id);
+
+    const referenceParent = await enqueue(ownerScope, "Validate server-resolved dispatch authority.");
+    const delegationId = randomUUID();
+    const dispatchDelegation = { ...ownerDispatchScope, parentMissionId: referenceParent.mission.id,
+      delegationId, serviceId: "hermes-supervisor", issuedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString() };
+    await runtime.setMissionRunning(organizationId, referenceParent.mission.id,
+      { ...referenceParent.mission.context, dispatchDelegation });
+    const lookup = { organizationId, delegationId, serviceId: "hermes-supervisor" };
+    assert.deepEqual(await runtime.getMissionDispatchDelegation(lookup), dispatchDelegation);
+    assert.equal(await runtime.getMissionDispatchDelegation({ ...lookup, serviceId: "other-service" }), undefined);
+    assert.equal(await runtime.getMissionDispatchDelegation({ ...lookup, organizationId: randomUUID() }), undefined);
+    assert.equal(await runtime.getMissionDispatchDelegation({ ...lookup, delegationId: randomUUID() }), undefined);
+    for (const mismatch of [{ memberId: collaboratorId }, { conversationId: randomUUID() }, { parentMissionId: ownerParent.mission.id }]) {
+      await runtime.setMissionRunning(organizationId, referenceParent.mission.id,
+        { ...referenceParent.mission.context, dispatchDelegation: { ...dispatchDelegation, ...mismatch } });
+      assert.equal(await runtime.getMissionDispatchDelegation(lookup), undefined);
+    }
+    await runtime.setMissionRunning(organizationId, referenceParent.mission.id,
+      { ...referenceParent.mission.context, dispatchDelegation });
+    await runtime.cancelMission(organizationId, referenceParent.mission.id, {});
+    assert.equal(await runtime.getMissionDispatchDelegation(lookup), undefined);
+
     await admin`insert into conversation_grants (organization_id, conversation_id, member_id)
       values (${organizationId}, ${sourceConversationId}, ${collaboratorId})`;
     const collaboratorSnapshot = await runtime.getConversationSnapshot({ ...collaboratorScope, conversationId: sourceConversationId });

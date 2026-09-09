@@ -4,7 +4,7 @@ import { z } from "zod";
 import { assertAuthorized, reasoningEfforts, type AuthorizationContext } from "@ventneuf/domain";
 import { WorkspaceAccessError } from "@ventneuf/database";
 import type { ConversationRuntime } from "./runtime.js";
-import { submitPrivateMessage } from "./conversations.js";
+import { questionnaireReplySchema, submitPrivateMessage } from "./conversations.js";
 
 const id = z.string().uuid();
 const repository = z.object({ deviceId: id, repositoryId: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/) }).strict();
@@ -129,9 +129,10 @@ export function registerWorkspaceRoutes(app: Express, authenticate: Authenticate
   }));
   app.post("/api/workspace/conversations/:conversationId/messages", route(async (request, response, context, services) => {
     const input = z.object({ content: z.string().trim().min(1).max(100_000), delivery: z.enum(["hermes", "project_chat"]).default("hermes"),
+      questionnaireReply: questionnaireReplySchema.optional(),
       execution: executionInput.optional() }).strict().parse(request.body);
     const conversationId = id.parse(request.params.conversationId);
-    if (input.delivery === "project_chat") {
+    if (input.delivery === "project_chat" && !input.questionnaireReply) {
       if (!/(^|\s)@hermes(?=\s|[.,!?;:]|$)/iu.test(input.content)) {
         return void response.status(201).json({ message: await services.workspace!.appendProjectMessage(scope(context), conversationId, input.content) });
       }
@@ -139,7 +140,7 @@ export function registerWorkspaceRoutes(app: Express, authenticate: Authenticate
       if (!conversation.isProjectGeneral) throw new WorkspaceAccessError("Project chat not found or access denied.");
     }
     response.status(202).json(await submitPrivateMessage(context, services, {
-      content: input.content, conversationId, execution: input.execution,
+      content: input.content, conversationId, execution: input.execution, questionnaireReply: input.questionnaireReply,
     }));
   }));
   app.post("/api/workspace/notifications/:notificationId/read", route(async (request, response, context, services) => {

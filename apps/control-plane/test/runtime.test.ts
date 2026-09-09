@@ -88,6 +88,7 @@ test("gives Hermes a short parent-scoped dispatch grant without persisting the t
   const issuedAt = new Date().toISOString();
   const expiresAt = new Date(Date.now() + 60_000).toISOString();
   const persisted: unknown[] = [];
+  let registeredDelegation: unknown;
   const base = repository();
   const worker = new MissionWorker(repository({
     getMission: async () => ({
@@ -99,6 +100,10 @@ test("gives Hermes a short parent-scoped dispatch grant without persisting the t
         context: { workspaceVersion: 1 },
       },
     }),
+    setMissionRunning: async (_organizationId: string, _missionId: string, context: Record<string, unknown>) => {
+      registeredDelegation = context.dispatchDelegation ?? registeredDelegation;
+      return true;
+    },
     canProcessConversationMission: async () => true,
     getMissionConversationContext: async () => ({ project: { id: "project-1", context: { memory: ["Keep the product list fast"] } } }),
     getHermesDispatchScope: async () => ({
@@ -117,7 +122,9 @@ test("gives Hermes a short parent-scoped dispatch grant without persisting the t
       assert.match(message, /Ask the initiating member to choose the lead harness\/model and sub-agent models/);
       assert.match(message, /search the authorized memory/);
       assert.match(message, /Report a launch only after mission.dispatch succeeds/);
-      assert.match(message, /signed-delegation/);
+      assert.doesNotMatch(message, /signed-delegation/);
+      assert.match(message, /Delegation ID: 00000000-0000-4000-8000-000000000006/);
+      assert.ok(registeredDelegation, "Authority must be stored before Hermes can dispatch");
       assert.match(message, new RegExp(parentMissionId));
       assert.match(message, new RegExp(deviceId));
       return { contextId: "context-after", text: "Delegated" };
@@ -431,4 +438,42 @@ test("an upstream error after audience cutover is fenced before failure persiste
   });
   await worker.process({ organizationId: "organization-1", missionId: "mission-1" });
   assert.equal(cancelled && stopped, true);
+});
+
+test("resuming a native run retains the registered dispatch reference", async () => {
+  const parentMissionId = "00000000-0000-4000-8000-000000000001";
+  const conversationId = "00000000-0000-4000-8000-000000000002";
+  const claims = {
+    version: 1, issuer: "ventneuf-control-plane", audience: "ventneuf-mcp",
+    delegationId: "00000000-0000-4000-8000-000000000003", serviceId: "hermes-supervisor",
+    organizationId: "00000000-0000-4000-8000-000000000004", parentMissionId, conversationId,
+    memberId: "00000000-0000-4000-8000-000000000005", capabilities: ["mission:dispatch"], targets: [],
+    issuedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  };
+  const base = repository();
+  const worker = new MissionWorker(repository({
+    getMission: async () => ({
+      ...(await base.getMission(claims.organizationId, parentMissionId)),
+      mission: { ...(await base.getMission(claims.organizationId, parentMissionId))!.mission,
+        id: parentMissionId, conversationId,
+        context: { type: "hermes.conversation", hermesRunId: "existing-native-run", hermesScopeId: "a".repeat(64), dispatchDelegation: claims } },
+    }),
+    getHermesDispatchScope: async () => ({ ...claims }),
+    appendMissionEvent: async () => undefined,
+    setMissionRunning: async (_organizationId: string, _missionId: string, context: Record<string, unknown>) => {
+      assert.deepEqual(context.dispatchDelegation, claims);
+      return true;
+    },
+  }), unusedQueue, {
+    ask: async input => {
+      assert.equal(input.runId, "existing-native-run");
+      assert.match(input.message, new RegExp(claims.delegationId));
+      return { text: "Resumed", contextId: "existing-context" };
+    },
+  }, { serviceId: claims.serviceId, issuer: {
+    issue: async () => assert.fail("A resumed run must retain its existing authority reference"),
+    issueApproval: async () => assert.fail("Not an approval run"),
+    verify: async () => assert.fail("No model-supplied token"),
+  } });
+  await worker.process({ organizationId: claims.organizationId, missionId: parentMissionId });
 });
