@@ -132,7 +132,11 @@ export function registerWorkspaceRoutes(app: Express, authenticate: Authenticate
       execution: executionInput.optional() }).strict().parse(request.body);
     const conversationId = id.parse(request.params.conversationId);
     if (input.delivery === "project_chat") {
-      return void response.status(201).json({ message: await services.workspace!.appendProjectMessage(scope(context), conversationId, input.content) });
+      if (!/(^|\s)@hermes(?=\s|[.,!?;:]|$)/iu.test(input.content)) {
+        return void response.status(201).json({ message: await services.workspace!.appendProjectMessage(scope(context), conversationId, input.content) });
+      }
+      const conversation = await services.workspace!.getConversation(scope(context), conversationId);
+      if (!conversation.isProjectGeneral) throw new WorkspaceAccessError("Project chat not found or access denied.");
     }
     response.status(202).json(await submitPrivateMessage(context, services, {
       content: input.content, conversationId, execution: input.execution,

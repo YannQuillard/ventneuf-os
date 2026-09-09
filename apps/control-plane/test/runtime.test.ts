@@ -96,8 +96,11 @@ test("gives Hermes a short parent-scoped dispatch grant without persisting the t
         ...(await base.getMission("organization-1", parentMissionId))!.mission,
         id: parentMissionId,
         conversationId,
+        context: { workspaceVersion: 1 },
       },
     }),
+    canProcessConversationMission: async () => true,
+    getMissionConversationContext: async () => ({ project: { id: "project-1", context: { memory: ["Keep the product list fast"] } } }),
     getHermesDispatchScope: async () => ({
       organizationId: "00000000-0000-4000-8000-000000000005",
       parentMissionId,
@@ -110,6 +113,10 @@ test("gives Hermes a short parent-scoped dispatch grant without persisting the t
   }), unusedQueue, {
     ask: async ({ message }) => {
       assert.match(message, /Investigate the issue/);
+      assert.match(message, /Keep the product list fast/);
+      assert.match(message, /Ask the initiating member to choose the lead harness\/model and sub-agent models/);
+      assert.match(message, /search the authorized memory/);
+      assert.match(message, /Report a launch only after mission.dispatch succeeds/);
       assert.match(message, /signed-delegation/);
       assert.match(message, new RegExp(parentMissionId));
       assert.match(message, new RegExp(deviceId));

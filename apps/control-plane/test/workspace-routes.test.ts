@@ -76,6 +76,46 @@ test("workspace messages are queued in the specified conversation and cannot att
   } finally { await api.close(); }
 });
 
+test("project chat queues an asynchronous Hermes reply in the same conversation", async () => {
+  let accepted: Record<string, unknown> | undefined;
+  let group: string | undefined;
+  const api = await serve({
+    workspace: {
+      getConversation: async () => ({ isProjectGeneral: true }),
+      appendProjectMessage: async (_scope, _id, content) => ({ content }),
+    } as unknown as NonNullable<ConversationRuntime["workspace"]>,
+    repository: {
+      enqueuePrivateMessage: async input => {
+        accepted = input;
+        return { conversationId, message: { createdAt: new Date() }, mission: { id: "queued-mission", status: "queued", context: {} } };
+      },
+      setMissionQueued: async () => undefined,
+    } as unknown as ConversationRuntime["repository"],
+    queue: { publish: async (_envelope, conversation) => { group = conversation; } } as ConversationRuntime["queue"],
+  });
+  try {
+    for (const content of ["Help improve this project.", "@hermes-other hello", "person@hermes.com"]) {
+      const response = await api.request(`/api/workspace/conversations/${conversationId}/messages`, "alice", {
+        method: "POST", body: JSON.stringify({ content, delivery: "project_chat" }),
+      });
+      assert.equal(response.status, 201);
+      assert.equal(accepted, undefined);
+      assert.equal(group, undefined);
+    }
+
+    const response = await api.request(`/api/workspace/conversations/${conversationId}/messages`, "alice", {
+      method: "POST", body: JSON.stringify({ content: "@Hermes, help improve this project.", delivery: "project_chat" }),
+    });
+    assert.equal(response.status, 202);
+    assert.equal(accepted?.conversationId, conversationId);
+    assert.equal(accepted?.externalSubject, "alice");
+    assert.equal(group, conversationId);
+    assert.equal((await api.request(`/api/workspace/conversations/${conversationId}/messages`, "alice", {
+      method: "POST", body: JSON.stringify({ content: "Hello", missionId: conversationId }),
+    })).status, 400);
+  } finally { await api.close(); }
+});
+
 test("an open conversation stream stops disclosing snapshots after access is revoked", async () => {
   let reads = 0;
   const api = await serve({
