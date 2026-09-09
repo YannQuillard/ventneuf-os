@@ -96,14 +96,28 @@ export class InvalidMissionDelegationError extends Error {
   }
 }
 
+export function delegationReference(input: { delegationId?: string; delegationToken?: string }) {
+  return input.delegationId ?? (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.delegationToken ?? "")
+    ? input.delegationToken : undefined);
+}
+
+function validateStoredLifetime(claims: MissionDelegationClaims, now: Date) {
+  if (Date.parse(claims.expiresAt) <= now.getTime() || Date.parse(claims.issuedAt) > now.getTime() + 30_000
+    || Date.parse(claims.expiresAt) - Date.parse(claims.issuedAt) <= 0
+    || Date.parse(claims.expiresAt) - Date.parse(claims.issuedAt) > 20 * 60_000) throw new InvalidMissionDelegationError();
+}
+
 export function readStoredDispatchDelegation(value: unknown, now = new Date()): MissionDispatchDelegationClaims {
   const result = dispatchClaimsSchema.safeParse(value);
-  if (!result.success || Date.parse(result.data.expiresAt) <= now.getTime()
-    || Date.parse(result.data.issuedAt) > now.getTime() + 30_000
-    || Date.parse(result.data.expiresAt) - Date.parse(result.data.issuedAt) <= 0
-    || Date.parse(result.data.expiresAt) - Date.parse(result.data.issuedAt) > 20 * 60_000) {
-    throw new InvalidMissionDelegationError();
-  }
+  if (!result.success) throw new InvalidMissionDelegationError();
+  validateStoredLifetime(result.data, now);
+  return result.data;
+}
+
+export function readStoredApprovalDelegation(value: unknown, now = new Date()): MissionApprovalDelegationClaims {
+  const result = approvalClaimsSchema.safeParse(value);
+  if (!result.success) throw new InvalidMissionDelegationError();
+  validateStoredLifetime(result.data, now);
   return result.data;
 }
 

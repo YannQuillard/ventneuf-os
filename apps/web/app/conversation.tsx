@@ -323,15 +323,10 @@ export function HermesConversation({ conversationId, title = "Hermes", subtitle 
     }
   }, [conversationId, mission]);
 
-  const quote = useCallback((value: string) => {
-    setContent(quoted(value));
+  const quote = useCallback((value: string, replyToAssistant: boolean) => {
+    setContent(current => `${collaborative && replyToAssistant ? "@hermes\n\n" : ""}${quoted(value)}${current}`);
     composerInput.current?.focus();
-  }, []);
-
-  const replyToHermes = useCallback(() => {
-    setContent(current => /(^|\s)@hermes(?=\s|[.,!?;:]|$)/iu.test(current) ? current : `@hermes ${current}`);
-    composerInput.current?.focus();
-  }, []);
+  }, [collaborative]);
 
   const edit = useCallback((value: string) => {
     setContent(value);
@@ -439,8 +434,7 @@ export function HermesConversation({ conversationId, title = "Hermes", subtitle 
                         status={entry ? (entry.hasFailed ? "error" : "sending") : undefined}
                         isRevealing={message.id === revealingId}
                         onRevealed={completeReveal}
-                        onQuote={quote}
-                        onReply={collaborative && message.role === "assistant" ? replyToHermes : undefined}
+                        onQuote={value => quote(value, message.role === "assistant")}
                         onAnswerQuestions={answers => answerQuestions(message.id, answers)}
                         onEdit={edit}
                         onRetry={retryPrompt === undefined

@@ -214,17 +214,23 @@ test("MCP dispatches for Hermes only through a matching parent delegation", asyn
       },
     } as never },
   };
+  const cachedSchemaArgs = { ...args, delegationToken: claims.delegationId };
+  const compatible = await callTool(referenceServices, service, "mission.dispatch", cachedSchemaArgs);
+  assert.equal(compatible.isError, undefined);
+  assert.equal((compatible.structuredContent as { missionId: string }).missionId, "reference-child");
   const referenced = await callTool(referenceServices, service, "mission.dispatch", referenceArgs);
   assert.equal(referenced.isError, undefined);
   assert.equal((referenced.structuredContent as { missionId: string }).missionId, "reference-child");
   for (const stored of [undefined, { ...claims, expiresAt: new Date(Date.now() - 1).toISOString() },
     { ...claims, serviceId: "foreign-service" }, { ...claims, organizationId: "00000000-0000-4000-8000-000000000099" },
     { ...claims, delegationId: "00000000-0000-4000-8000-000000000099" }, { ...claims, targets: [] }]) {
-    const rejected = await callTool({ ...referenceServices, conversations: { repository: {
-      getMissionDispatchDelegation: async () => stored,
-      enqueueDelegatedRunnerMission: async () => assert.fail("Invalid references must not dispatch"),
-    } as never } }, service, "mission.dispatch", referenceArgs);
-    assert.equal(rejected.isError, true);
+    for (const input of [referenceArgs, cachedSchemaArgs]) {
+      const rejected = await callTool({ ...referenceServices, conversations: { repository: {
+        getMissionDispatchDelegation: async () => stored,
+        enqueueDelegatedRunnerMission: async () => assert.fail("Invalid references must not dispatch"),
+      } as never } }, service, "mission.dispatch", input);
+      assert.equal(rejected.isError, true);
+    }
   }
 
   for (const [context, input, delegated] of [
@@ -318,6 +324,25 @@ test("MCP lets Hermes decide only the exact delegated approval", async () => {
     decision: args.decision,
     rationale: args.rationale,
   });
+
+  const referenceServices: RemoteMcpServices = { ...services,
+    delegations: { verify: async () => assert.fail("Approval references must not copy signed tokens") },
+    conversations: { ...services.conversations!, repository: {
+      getMissionApprovalDelegation: async () => claims,
+    } as never },
+  };
+  for (const referenceInput of [{ ...args, delegationToken: claims.delegationId },
+    { ...args, delegationToken: undefined, delegationId: claims.delegationId }]) {
+    assert.equal((await callTool(referenceServices, service, "approval.decide", referenceInput)).isError, undefined);
+    for (const stored of [undefined, { ...claims, expiresAt: new Date(0).toISOString() },
+      { ...claims, delegationId: "00000000-0000-4000-8000-000000000099" },
+      { ...claims, approvalId: "00000000-0000-4000-8000-000000000099" }, { ...claims, serviceId: "other-service" }]) {
+      const denied = { ...referenceServices, conversations: { ...referenceServices.conversations!,
+        repository: { getMissionApprovalDelegation: async () => stored } as never,
+        approvals: { decideByService: async () => assert.fail("Invalid approval references cannot decide") } as never } };
+      assert.equal((await callTool(denied, service, "approval.decide", referenceInput)).isError, true);
+    }
+  }
 
   for (const [context, delegatedClaims] of [
     [{ ...service, capabilities: [] }, claims],

@@ -114,12 +114,21 @@ export class RunnerMissionWorker {
       const renew = async () => {
         if (stopped || paused || controller.signal.aborted) return;
         try {
-          if (!this.options.client.renewMission) throw new Error("Lease renewal unavailable.");
+          if (!this.options.client.renewMission) throw new LeaseRejectedError("Lease renewal unavailable.");
           const next = Date.parse(await this.options.client.renewMission(device, mission.id, { owner: this.owner, token: mission.leaseToken }));
           if (!Number.isFinite(next) || next <= Date.now()) throw new LeaseRejectedError("Lease expired.");
           leaseExpiresAt = next;
           if (!stopped) timer = setTimeout(() => { renewal = renew(); }, this.options.renewalIntervalMs ?? 15_000);
-        } catch (error) { if (!paused) controller.abort(error); }
+        } catch (error) {
+          if (stopped || paused || controller.signal.aborted) return;
+          if (error instanceof LeaseRejectedError || Date.now() >= Math.min(deadline, leaseExpiresAt)) {
+            controller.abort(error);
+          } else {
+            // A transport failure cannot extend authority, but need not cancel a still-valid lease.
+            timer = setTimeout(() => { renewal = renew(); }, Math.min(this.options.renewalIntervalMs ?? 1_000,
+              Math.max(1, Math.min(deadline, leaseExpiresAt) - Date.now())));
+          }
+        }
       };
       try {
         const repository = repositories.find(({ id }) => id === mission.repositoryId);

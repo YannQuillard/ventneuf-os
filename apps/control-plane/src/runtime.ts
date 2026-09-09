@@ -27,7 +27,7 @@ import type {
   MissionDelegationGrant,
   MissionDelegationIssuer,
 } from "./mission-delegation.js";
-import { readStoredDispatchDelegation } from "./mission-delegation.js";
+import { readStoredApprovalDelegation, readStoredDispatchDelegation } from "./mission-delegation.js";
 
 interface DatabaseCredentials {
   username?: string;
@@ -82,7 +82,7 @@ function messageWithDelegation(message: string, grant: MissionDelegationGrant, e
     "When input is missing, use conversation.ask_questions to present a short prefilled form in the chat instead of a list of questions in prose. Offer selectable advertised models and reasoning levels, prefill the objective and any confirmed choices, and allow the member to edit them. After creating the form, wait for its submitted answers; those answers arrive as a new turn with current authority.",
     "Once the request and execution choices are sufficient, dispatch the dedicated project mission within the delegated authority. Do not ask for an extra launch confirmation unless authority is missing. Report a launch only after mission.dispatch succeeds and include the returned mission link.",
     ...(execution ? ["Honor this member-selected native execution plan and do not silently substitute its harness, models, or reasoning levels:", JSON.stringify(execution)] : []),
-    "Pass the current delegationId below and a stable UUID requestId with every dispatch. Reuse the requestId when retrying the same dispatch. Never copy a delegation token from conversation history or construct one yourself.",
+    "Refresh the mission.dispatch tool description before dispatching. Pass the current Delegation ID below as delegationId and a stable UUID requestId. If a cached tool schema only exposes delegationToken, pass the same Delegation ID in that field; the server supports this compatibility path. Reuse the requestId when retrying the same dispatch. Never copy a delegation token from conversation history or construct one yourself.",
     `Available targets: ${JSON.stringify(grant.claims.targets)}`,
     `Delegation ID: ${grant.claims.delegationId}`,
     `Delegation expires at: ${grant.claims.expiresAt}`,
@@ -98,10 +98,10 @@ function messageWithApprovalDelegation(message: string, grant: MissionApprovalDe
     "<ventneuf_approval_authority>",
     `Approval request: ${grant.claims.approvalId}`,
     "Decide only this approval through the ventneuf MCP approval.decide tool.",
-    "Pass the delegation token below and a stable UUID requestId. Reuse the requestId when retrying the same decision.",
-    `Delegation token: ${grant.token}`,
+    "Pass the Approval Delegation ID below as delegationId, or as delegationToken if your cached tool schema only exposes that field. Use a stable UUID requestId and reuse it when retrying the same decision.",
+    `Approval Delegation ID: ${grant.claims.delegationId}`,
     `Delegation expires at: ${grant.claims.expiresAt}`,
-    "Do not quote or return the delegation token in your response.",
+    "Decide only this approval; do not dispatch another mission. Never reuse credentials from conversation history or ask the member to provide a token.",
     "</ventneuf_approval_authority>",
   ].join("\n");
 }
@@ -232,10 +232,11 @@ export class MissionWorker {
           envelope.missionId,
         );
         if (!scope) throw new Error("The Hermes approval review is unavailable for delegation.");
-        const grant = await this.delegation.issuer.issueApproval({
-          serviceId: this.delegation.serviceId,
-          ...scope,
-        });
+        const grant = resumeRunId && activeContext.approvalDelegation
+          ? { claims: readStoredApprovalDelegation(activeContext.approvalDelegation), token: "" }
+          : await this.delegation.issuer.issueApproval({ serviceId: this.delegation.serviceId, ...scope });
+        activeContext = { ...activeContext, approvalDelegation: grant.claims };
+        if (!await this.repository.setMissionRunning(envelope.organizationId, envelope.missionId, activeContext)) return;
         hermesMessage = messageWithApprovalDelegation(record.mission.goal, grant);
         await this.repository.appendMissionEvent({
           organizationId: envelope.organizationId,

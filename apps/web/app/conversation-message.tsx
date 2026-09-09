@@ -3,7 +3,6 @@
 import { AssistantMessage } from "./_components/assistant-message";
 import { ConversationQuestionnaire } from "./_components/conversation-questionnaire";
 import type { ConversationQuestionnaireState } from "@ventneuf/domain";
-import { Button } from "@astryxdesign/core/Button";
 import {
   ChatMessage,
   ChatMessageBubble,
@@ -28,7 +27,6 @@ interface ConversationMessageProps {
   isRevealing?: boolean;
   onRevealed?: () => void;
   onQuote?: (content: string) => void;
-  onReply?: () => void;
   onAnswerQuestions?: (answers: Record<string, string[]>) => Promise<void>;
   onEdit?: (content: string) => void;
   onRetry?: () => void;
@@ -125,8 +123,8 @@ function UserMessageActions({
       ) : null}
       {!isOwn && onQuote ? (
         <IconButton
-          label="Quote this participant's message in the composer"
-          tooltip="Quote"
+          label="Reply to this participant"
+          tooltip="Reply"
           variant="ghost"
           size="sm"
           icon={<Icon icon={ArrowUturnLeftIcon} size="sm" />}
@@ -144,7 +142,6 @@ export function ConversationMessage({
   isRevealing = false,
   onRevealed,
   onQuote,
-  onReply,
   onAnswerQuestions,
   onEdit,
   onRetry,
@@ -203,7 +200,6 @@ export function ConversationMessage({
         timestamp={<Timestamp value={message.createdAt} format="time" />}
         footer={(
           <div className="message-actions">
-            {onReply ? <Button label="Reply to Hermes" variant="ghost" size="sm" onClick={onReply} /> : null}
             {duration ? <span>{duration}</span> : null}
             <IconButton
               label="Copy message"
@@ -215,8 +211,8 @@ export function ConversationMessage({
             />
             {onQuote ? (
               <IconButton
-                label="Quote this reply in the composer"
-                tooltip="Quote"
+                label="Reply to this Hermes message"
+                tooltip="Reply"
                 variant="ghost"
                 size="sm"
                 icon={<Icon icon={ArrowUturnLeftIcon} size="sm" />}

@@ -1,10 +1,11 @@
 import { assertAuthorized, type AuthorizationContext } from "@ventneuf/domain";
 import type { ConversationRuntime } from "./runtime.js";
-import type { MissionDelegationVerifier } from "./mission-delegation.js";
+import { delegationReference, readStoredApprovalDelegation, type MissionDelegationVerifier } from "./mission-delegation.js";
 
 export interface ServiceApprovalDecision {
   approvalId: string;
-  delegationToken: string;
+  delegationToken?: string;
+  delegationId?: string;
   requestId: string;
   decision: "approved" | "rejected" | "escalated";
   rationale: string;
@@ -12,16 +13,22 @@ export interface ServiceApprovalDecision {
 
 export async function decideApprovalAsService(
   context: AuthorizationContext,
-  runtime: Pick<ConversationRuntime, "approvals">,
+  runtime: Pick<ConversationRuntime, "approvals" | "repository">,
   input: ServiceApprovalDecision,
   delegations?: MissionDelegationVerifier,
 ) {
   assertAuthorized(context, "approval:decide");
-  if (context.principalType !== "service" || !delegations) {
+  if (context.principalType !== "service" || !delegations || (!input.delegationId && !input.delegationToken)) {
     throw new Error("Approval decisions require a delegated service principal.");
   }
-  const claims = await delegations.verify(input.delegationToken);
-  if (!("approvalId" in claims)
+  const delegationId = delegationReference(input);
+  const claims = delegationId
+    ? readStoredApprovalDelegation(await runtime.repository.getMissionApprovalDelegation({
+      organizationId: context.organizationId, serviceId: context.principalId, delegationId,
+    }))
+    : await delegations.verify(input.delegationToken!);
+  if ((delegationId !== undefined && claims.delegationId !== delegationId)
+    || !("approvalId" in claims)
     || claims.organizationId !== context.organizationId
     || claims.serviceId !== context.principalId
     || claims.approvalId !== input.approvalId) {

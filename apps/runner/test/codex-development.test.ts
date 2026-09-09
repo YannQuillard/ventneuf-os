@@ -109,12 +109,13 @@ test("recovers a worktree that Orca finishes after its client times out", async 
       gitPath: "/usr/bin/git",
       stateDirectory,
     });
-    const result = await adapter.execute({
+    const authorityExpiresAt = new Date(Date.now() + 60_000).toISOString();
+    const runMission = (attempt = 1) => adapter.execute({
       id: missionId,
       repositoryId: "sample",
       adapter: "codex-development",
       objective: "Open a test pull request",
-      authorityExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+      authorityExpiresAt, attempt,
     }, {
       id: "sample",
       name: "Sample",
@@ -125,11 +126,21 @@ test("recovers a worktree that Orca finishes after its client times out", async 
       requestApproval: async () => { throw new Error("Unexpected approval request."); },
     });
 
+    const result = await runMission();
     assert.match(result, /https:\/\/github\.com\/example\/sample\/pull\/1/);
     assert.ok(delayedCreation);
     await delayedCreation;
     assert.equal(calls.some(([group, command]) => group === "worktree" && command === "show"), false);
     assert.ok(calls.some(([group, command]) => group === "terminal" && command === "create"));
+    assert.equal(calls.some(([group, command]) => group === "worktree" && command === "rm"), false);
+    assert.match(await readFile(join(missionDirectory, "result.txt"), "utf8"), /pull\/1/);
+    assert.equal(await runMission(2), result);
+    assert.equal(calls.filter(([group, command]) => group === "terminal" && command === "create").length, 1);
+    await adapter.maintain({ status: async () => "running" });
+    assert.equal(calls.some(([group, command]) => group === "worktree" && command === "rm"), false);
+    await adapter.maintain({ status: async () => "completed" });
+    assert.equal(calls.filter(([group, command]) => group === "worktree" && command === "rm").length, 1);
+    await assert.rejects(readFile(join(missionDirectory, "result.txt")), { code: "ENOENT" });
   } finally {
     await delayedCreation?.catch(() => undefined);
     await rm(temporary, { recursive: true, force: true });

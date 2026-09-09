@@ -1,7 +1,7 @@
 import { assertAuthorized, claudeModelAliases, type AuthorizationContext, type MissionExecutionPreferences, type ReasoningEffort } from "@ventneuf/domain";
 import type { ConversationRuntime } from "./runtime.js";
 import type { MissionDelegationVerifier } from "./mission-delegation.js";
-import { readStoredDispatchDelegation } from "./mission-delegation.js";
+import { delegationReference, InvalidMissionDelegationError, readStoredDispatchDelegation } from "./mission-delegation.js";
 
 export type RunnerAdapter = "repository-check" | "orca-review" | "codex-development" | "claude-development";
 
@@ -57,13 +57,21 @@ export async function dispatchRunnerMission(
     || (!input.delegationToken && !input.delegationId) || !input.requestId) {
     throw new Error("Delegated runner dispatch requires a service principal and mission delegation.");
   }
-  const claims = input.delegationId
-    ? readStoredDispatchDelegation(await runtime.repository.getMissionDispatchDelegation({
-      organizationId: context.organizationId, serviceId: context.principalId, delegationId: input.delegationId,
-    }))
-    : await delegations.verify(input.delegationToken!);
+  // Existing Hermes sessions may still expose the old tool schema's field name.
+  const delegationId = delegationReference(input);
+  let claims;
+  try {
+    claims = delegationId
+      ? readStoredDispatchDelegation(await runtime.repository.getMissionDispatchDelegation({
+        organizationId: context.organizationId, serviceId: context.principalId, delegationId,
+      }))
+      : await delegations.verify(input.delegationToken!);
+  } catch (error) {
+    if (!(error instanceof InvalidMissionDelegationError)) throw error;
+    throw new Error("The supplied mission authority is unavailable. Use the Delegation ID from the current turn as delegationId, or as delegationToken if your cached tool schema only exposes that field. Keep the same requestId and confirmed mission choices. Never reuse a token from history or ask the member for credentials.");
+  }
   if (claims.organizationId !== context.organizationId || claims.serviceId !== context.principalId
-    || (input.delegationId !== undefined && claims.delegationId !== input.delegationId)
+    || (delegationId !== undefined && claims.delegationId !== delegationId)
     || !("targets" in claims)
     || !claims.targets.some((target) => target.deviceId === input.deviceId
       && target.repositoryId === input.repositoryId

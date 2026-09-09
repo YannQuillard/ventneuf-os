@@ -635,6 +635,23 @@ export class ConversationRuntimeRepository {
     });
   }
 
+  getMissionApprovalDelegation(input: { organizationId: string; serviceId: string; delegationId: string }) {
+    return this.database.withOrganization(input.organizationId, async transaction => {
+      const [record] = await transaction.select({ context: missions.context }).from(missions).where(and(
+        eq(missions.organizationId, input.organizationId),
+        sql`${missions.context}->'approvalDelegation'->>'approvalId' = ${missions.context}->>'approvalId'`,
+        inArray(missions.status, ["running", "waiting_for_approval"]),
+        sql`${missions.context}->>'type' = 'hermes.approval'`,
+        sql`${missions.context}->'approvalDelegation'->>'delegationId' = ${input.delegationId}`,
+        sql`${missions.context}->'approvalDelegation'->>'serviceId' = ${input.serviceId}`,
+        sql`${missions.context}->'approvalDelegation'->>'parentMissionId' = ${missions.id}::text`,
+        sql`${missions.context}->'approvalDelegation'->>'conversationId' = ${missions.conversationId}::text`,
+        sql`${missions.context}->'approvalDelegation'->>'memberId' = ${missions.requestedByMemberId}::text`,
+      )).limit(1);
+      return record?.context.approvalDelegation;
+    });
+  }
+
   enqueueDelegatedRunnerMission(input: {
     organizationId: string;
     parentMissionId: string;

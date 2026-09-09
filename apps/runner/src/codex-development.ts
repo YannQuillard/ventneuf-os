@@ -336,21 +336,24 @@ export class AgentDevelopmentAdapter implements MissionAdapter {
     return this.launch(directory, state);
   }
 
-  private async clean(directory: string, state: DevelopmentOrcaState, requireClean: boolean) {
-    if (state.terminalHandle) {
-      await this.orca(["terminal", "close", "--terminal", state.terminalHandle, "--tab"]).catch(() => undefined);
-    }
-    await rm(join(state.worktreePath, ".ventneuf-tmp"), { recursive: true, force: true }).catch(() => undefined);
+  private async worktreeIsClean(state: DevelopmentOrcaState) {
     const gitPath = await this.gitExecutable();
-    let clean = false;
     try {
       const { stdout } = await execute(gitPath, ["-C", state.worktreePath, "status", "--porcelain=v1", "-z"], {
         timeout: 10_000,
         maxBuffer: 64_000,
         env: { HOME: homedir(), PATH: `${dirname(gitPath)}:/usr/bin:/bin`, LANG: "en_US.UTF-8" },
       });
-      clean = stdout.length === 0;
-    } catch { /* Retain an unavailable or ambiguous worktree. */ }
+      return stdout.length === 0;
+    } catch { return false; }
+  }
+
+  private async clean(directory: string, state: DevelopmentOrcaState, requireClean: boolean) {
+    if (state.terminalHandle) {
+      await this.orca(["terminal", "close", "--terminal", state.terminalHandle, "--tab"]).catch(() => undefined);
+    }
+    await rm(join(state.worktreePath, ".ventneuf-tmp"), { recursive: true, force: true }).catch(() => undefined);
+    const clean = await this.worktreeIsClean(state);
     if (!clean) {
       if (requireClean) throw new Error("The mission worktree contains uncommitted changes and was retained.");
       return false;
@@ -506,12 +509,11 @@ export class AgentDevelopmentAdapter implements MissionAdapter {
           if (resolve(job.gitCommonDirectory, currentBranchRef.trim()) !== job.gitBranchRef) {
             throw new Error(`${this.options.agent === "codex" ? "Codex" : "Claude"} left the isolated mission branch.`);
           }
-          try {
-            await this.clean(directory, state, true);
-          } catch (error) {
-            await writeReviewState(join(directory, "status.json"), { status: "failed", failedAt: new Date().toISOString() });
-            throw error;
+          await rm(join(state.worktreePath, ".ventneuf-tmp"), { recursive: true, force: true });
+          if (!await this.worktreeIsClean(state)) {
+            throw new Error("The mission worktree contains uncommitted changes and was retained.");
           }
+          // Keep the result and workspace until maintenance observes durable cloud completion.
           return `${this.options.agent === "codex" ? "Codex" : "Claude"} development mission completed for ${repository.id}.\n\n${result.slice(0, 14_000)}`;
         }
         if (status?.status === "failed") {
