@@ -44,10 +44,12 @@ export function workspaceNavigation(pathname: string, runnerOnline: boolean, sna
     kind: "project",
     label: project.name,
     href: `/projects/${encodeURIComponent(project.id)}`,
-    isSelected: pathname === `/projects/${encodeURIComponent(project.id)}`,
-    children: conversations.filter((conversation) => conversation.projectId === project.id).map((conversation) => ({
+    isSelected: !project.generalConversationId && pathname === `/projects/${encodeURIComponent(project.id)}`,
+    children: conversations.filter((conversation) => conversation.projectId === project.id)
+      .sort((left, right) => Number(Boolean(right.isProjectGeneral)) - Number(Boolean(left.isProjectGeneral)))
+      .map((conversation) => ({
       id: conversation.id,
-      kind: conversation.kind === "mission" ? "mission" : "thread",
+      kind: conversation.isProjectGeneral ? "channel" : conversation.kind === "mission" ? "mission" : "thread",
       label: conversation.title || (conversation.kind === "mission" ? "Untitled mission" : "Untitled thread"),
       href: conversationHref(conversation),
       isSelected: pathname === conversationHref(conversation),

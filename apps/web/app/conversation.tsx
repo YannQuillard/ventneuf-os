@@ -102,6 +102,7 @@ export function HermesConversation({ conversationId, title = "Hermes", subtitle 
   const [pending, setPending] = useState<PendingMessage[]>([]);
   const [content, setContent] = useState("");
   const [isLoaded, setIsLoaded] = useState(false);
+  const [accessRevoked, setAccessRevoked] = useState(false);
   const [awaitingReply, setAwaitingReply] = useState(false);
   const [revealingId, setRevealingId] = useState<string>();
   const [mission, setMission] = useState<MissionState | null>(null);
@@ -130,6 +131,7 @@ export function HermesConversation({ conversationId, title = "Hermes", subtitle 
     : "/api/hermes/events";
 
   const revokeAccess = useCallback(() => {
+    setAccessRevoked(true);
     acceptedMessages.current = [];
     setMessages([]);
     setPending([]);
@@ -165,6 +167,8 @@ export function HermesConversation({ conversationId, title = "Hermes", subtitle 
     setMission(payload.mission ?? null);
     setMissionEvents(payload.events ?? []);
     setApprovals(payload.approvals ?? []);
+    setAccessRevoked(false);
+    setError(undefined);
     setIsLoaded(true);
     if (payload.mission) {
       setAwaitingReply(payload.mission.status === "queued" || payload.mission.status === "running");
@@ -233,7 +237,7 @@ export function HermesConversation({ conversationId, title = "Hermes", subtitle 
 
   const submit = useCallback(async (value: string) => {
     const message = value.trim();
-    if (!message) return;
+    if (!message || accessRevoked) return;
     pendingCount.current += 1;
     const pendingId = `pending-${pendingCount.current}`;
     setPending((current) => [
@@ -270,7 +274,7 @@ export function HermesConversation({ conversationId, title = "Hermes", subtitle 
         ? { ...entry, hasFailed: true }
         : entry));
     }
-  }, [collaborative, messageEndpoint]);
+  }, [accessRevoked, collaborative, messageEndpoint]);
 
   const resend = useCallback((prompt: string, pendingId?: string) => {
     if (pendingId) setPending((current) => current.filter(({ id }) => id !== pendingId));
@@ -352,10 +356,13 @@ export function HermesConversation({ conversationId, title = "Hermes", subtitle 
       <HStack height="100%">
         <VStack style={chatColumn}>
           <ConversationSurface value={content} onChange={setContent} inputRef={composerInput} error={error}
+            isDisabled={accessRevoked || !isLoaded}
             placeholder={collaborative ? "Message the project · use @name to notify someone" : "Message Hermes"}
             scope={collaborative ? "Shared project conversation" : conversationId ? "Conversation knowledge" : "Personal knowledge"}
             onSubmit={(value) => { setContent(""); void submit(value); }}
-            emptyState={isLoaded ? (
+            emptyState={error ? <Text type="supporting">{accessRevoked
+              ? "Ask the project or conversation owner to restore your access."
+              : "The conversation could not load. Retrying automatically…"}</Text> : isLoaded ? (
               <VStack gap={6} hAlign="center" width="100%" maxWidth={560} padding={4}>
                 <EmptyState
                   title={collaborative ? "Start the project conversation" : "Ask Hermes anything"}

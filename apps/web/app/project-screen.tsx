@@ -108,7 +108,7 @@ export function ProjectScreen({ projectId }: { projectId: string }) {
   };
 
   if (view === "chat" && project.generalConversationId) return <>
-    <HermesConversation conversationId={project.generalConversationId} collaborative showSuggestions={false}
+    <HermesConversation key={project.generalConversationId} conversationId={project.generalConversationId} collaborative showSuggestions={false}
       title={`${project.name} · General`} subtitle={`${visibility} · project conversation`}
       headerActions={<HStack gap={2}>
         <Button label="Project details" variant="ghost" size="sm" onClick={() => router.push(`/projects/${encodeURIComponent(project.id)}?view=overview`)} />

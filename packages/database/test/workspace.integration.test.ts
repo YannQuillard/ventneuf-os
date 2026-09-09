@@ -74,6 +74,13 @@ test("workspace projects and conversations require explicit tenant-scoped grants
       repositoryAssociations: [{ deviceId, repositoryId: "repository-a" }],
     });
     assert.equal(project.ownerMemberId, owner.id);
+    assert.ok(project.generalConversationId);
+    assert.equal((await workspace.getConversation(ownerScope, project.generalConversationId)).id, project.generalConversationId);
+    const projectMessage = await workspace.appendProjectMessage(ownerScope, project.generalConversationId, "Project kickoff");
+    assert.equal(projectMessage.content, "Project kickoff");
+    await assert.rejects(workspace.getConversation(collaboratorScope, project.generalConversationId), WorkspaceAccessError);
+    await assert.rejects(workspace.getConversation(otherScope, project.generalConversationId), WorkspaceAccessError);
+    await assert.rejects(workspace.shareConversation(ownerScope, project.generalConversationId, collaborator.id), WorkspaceAccessError);
     assert.deepEqual(project.repositoryAssociations.map(({ deviceId: id, repositoryId }) => ({ id, repositoryId })), [{
       id: deviceId,
       repositoryId: "repository-a",
@@ -85,6 +92,8 @@ test("workspace projects and conversations require explicit tenant-scoped grants
     );
 
     await workspace.shareProject(ownerScope, project.id, collaborator.id);
+    assert.equal((await workspace.getConversation(collaboratorScope, project.generalConversationId)).id, project.generalConversationId);
+    await workspace.appendProjectMessage(collaboratorScope, project.generalConversationId, "Ready to collaborate");
     const collaboratorProjects = await workspace.listProjects(collaboratorScope);
     assert.deepEqual(collaboratorProjects.map(({ id }) => id), [project.id]);
     assert.equal(JSON.stringify(collaboratorProjects).includes("Personal repository"), false);
@@ -237,6 +246,8 @@ test("workspace projects and conversations require explicit tenant-scoped grants
 
     await admin`update conversations set hermes_context_id = 'shared-context' where id = ${ownerThread.id}`;
     await workspace.revokeProjectMember(ownerScope, project.id, collaborator.id);
+    await assert.rejects(workspace.appendProjectMessage(collaboratorScope, project.generalConversationId, "No longer authorized"), WorkspaceAccessError);
+    assert.equal((await workspace.getConversation(ownerScope, project.generalConversationId)).id, project.generalConversationId);
     assert.deepEqual(await workspace.listProjects(collaboratorScope), []);
     assert.deepEqual(
       (await workspace.listConversations(collaboratorScope)).map(({ id }) => id),
