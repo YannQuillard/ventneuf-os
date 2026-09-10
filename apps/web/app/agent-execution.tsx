@@ -1,5 +1,7 @@
 "use client";
 
+import { MissionHistory } from "./_components/mission-history";
+
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
 import { CodeBlock } from "@astryxdesign/core/CodeBlock";
@@ -15,10 +17,10 @@ import { MissionStatusLabel } from "./_components/mission-status";
 import { executionItemStatus, executionTree, type AgentExecution, type ExecutionNode } from "../lib/agent-execution";
 import styles from "./agent-execution.module.css";
 
-const views = ["Overview", "Session", "Changes", "Technical"] as const;
+const views = ["Overview", "Session", "Changes", "History", "Technical"] as const;
 
-export function AgentExecutionPanel({ execution, onStop, isStopping, onClose, presentation }: {
-  execution: AgentExecution; onStop(): void; isStopping: boolean; onClose(): void; presentation: "panel" | "sheet";
+export function AgentExecutionPanel({ execution, conversationId, onStop, isStopping, onClose, presentation }: {
+  conversationId?: string; execution: AgentExecution; onStop(): void; isStopping: boolean; onClose(): void; presentation: "panel" | "sheet";
 }) {
   const [view, setView] = useState<typeof views[number]>("Session");
   const [selectedId, setSelectedId] = useState<string>();
@@ -49,8 +51,8 @@ export function AgentExecutionPanel({ execution, onStop, isStopping, onClose, pr
 
   const overview = <VStack gap={4}>
     <VStack gap={2}><Text type="label" weight="semibold">Original request</Text><Text>{execution.title}</Text></VStack>
-    {execution.status === "waiting_for_approval" ? <Banner status="warning" title="Hermes is waiting for your decision"
-      description="Review the concrete request and reply in the mission conversation. This native session remains read-only." /> : null}
+    {execution.status === "waiting_for_approval" ? <Banner status="warning" title="Waiting for an approval decision"
+      description="The request in the conversation shows whether Hermes is reviewing it or your decision is required." /> : null}
     {current ? <VStack gap={2}><Text type="label" weight="semibold">Current action</Text>
       <HStack gap={2} vAlign="center"><StatusDot variant="accent" label="Running" isPulsing /><Text>{current.label}</Text></HStack>
       {current.text ? <Text type="supporting" color="secondary">{current.text.split("\n")[0]}</Text> : null}</VStack> : null}
@@ -94,7 +96,7 @@ export function AgentExecutionPanel({ execution, onStop, isStopping, onClose, pr
     status={<MissionStatusLabel status={execution.status} detail={stale ? "No recent activity" : undefined} />}
     presentation={presentation} onClose={onClose} tab={view}
     onTabChange={(value) => { setView(value as typeof view); setSelectedId(undefined); }}
-    tabs={views.map((name) => ({ id: name, label: name,
+    tabs={views.filter(name => name !== "History" || conversationId).map((name) => ({ id: name, label: name,
       endContent: name === "Session" && items.length ? <Text type="supporting">{items.length}</Text> : undefined,
     }))}
     actions={<>
@@ -102,7 +104,7 @@ export function AgentExecutionPanel({ execution, onStop, isStopping, onClose, pr
       {pullRequest ? <Button label="Pull request" variant="secondary" size="sm" href={pullRequest} target="_blank" /> : null}
     </>}>
     <VStack gap={3} padding={4}>
-      {view === "Overview" ? overview : view === "Session" ? session : view === "Changes" ? changeView : technical}
+      {view === "Overview" ? overview : view === "Session" ? session : view === "Changes" ? changeView : view === "History" && conversationId ? <MissionHistory key={execution.missionId} conversationId={conversationId} missionId={execution.missionId} /> : technical}
       {snapshot ? <Text type="supporting" color="secondary">{snapshot.omittedItems ? `${snapshot.omittedItems} earlier entries are outside this recent view. ` : ""}
         {`Updated ${new Date(snapshot.updatedAt).toLocaleTimeString()}.`}</Text> : null}
     </VStack>

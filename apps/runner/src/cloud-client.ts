@@ -6,7 +6,7 @@ import {
   type RunnerApprovalResponse,
 } from "./mission-worker.js";
 import type { StoredDevice } from "./credential-store.js";
-import type { AgentExecutionSnapshot, ReasoningEffort, RunnerExecutionHarnesses } from "@ventneuf/domain";
+import type { MissionHistoryEntry, AgentExecutionSnapshot, ReasoningEffort, RunnerExecutionHarnesses } from "@ventneuf/domain";
 import { isClaudeModel, type MissionStatus } from "./repositories.js";
 
 const reasoningEfforts: readonly ReasoningEffort[] = ["low", "medium", "high", "xhigh", "max"];
@@ -90,6 +90,13 @@ export class RunnerCloudClient {
   async reportMission(device: StoredDevice, missionId: string, report: MissionReport) {
     const result = await this.missionRequest(device, `/api/runner/missions/${encodeURIComponent(missionId)}/report`, report) as { status?: string };
     if (report.kind === "progress" && result.status !== "running") throw new LeaseRejectedError("The mission stopped.");
+  }
+
+  async reportHistory(device: StoredDevice, missionId: string, entries: MissionHistoryEntry[]) {
+    const result = await this.missionRequest(device, `/api/runner/missions/${encodeURIComponent(missionId)}/history`, { entries }) as { accepted?: string[] };
+    if (!Array.isArray(result.accepted) || entries.some(entry => !result.accepted!.includes(entry.id))) {
+      throw new Error("Mission history was not acknowledged.");
+    }
   }
 
   async reportExecution(device: StoredDevice, missionId: string, report: {

@@ -518,14 +518,14 @@ export function HermesConversation({ conversationId, title = "Hermes", subtitle 
           </ConversationSurface>
         </VStack>
         {agentExecution && isAgentOpen && !isCompact ? <aside className={executionStyles.panel}>
-          <AgentExecutionPanel key={agentExecution.missionId} execution={agentExecution} presentation="panel"
+          <AgentExecutionPanel key={agentExecution.missionId} conversationId={conversationId} execution={agentExecution} presentation="panel"
             onClose={() => setIsAgentOpen(false)} onStop={() => void stopMission(agentExecution.missionId)} isStopping={isStopping} />
         </aside> : null}
         {selected ? <MessageDetailsPanel message={selected} onClose={closeDetails} /> : null}
       </HStack>
       </LayoutContent>} />
       {agentExecution && isCompact ? <BottomSheet isOpen={isAgentOpen} onOpenChange={setIsAgentOpen} label="Mission details" height="tall">
-        <AgentExecutionPanel key={agentExecution.missionId} execution={agentExecution} presentation="sheet"
+        <AgentExecutionPanel key={agentExecution.missionId} conversationId={conversationId} execution={agentExecution} presentation="sheet"
           onClose={() => setIsAgentOpen(false)} onStop={() => void stopMission(agentExecution.missionId)} isStopping={isStopping} />
       </BottomSheet> : null}
     </>

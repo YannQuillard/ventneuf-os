@@ -1,3 +1,4 @@
+import { hasPendingHistory, uploadHistory } from "./mission-history.js";
 import { archiveMissionWorkspace, pruneMissionArchives } from "./mission-archive.js";
 import { ensureOrcaRuntime, OrcaRequestError, prepareOrcaRepository, requestOrca } from "./orca-runtime.js";
 import { execFile } from "node:child_process";
@@ -349,6 +350,8 @@ export class AgentDevelopmentAdapter implements MissionAdapter {
   }
 
   private async clean(directory: string, state: DevelopmentOrcaState, requireClean: boolean) {
+    // Never remove the only surviving copy of unacknowledged diagnostics.
+    if (await hasPendingHistory(directory)) return false;
     if (state.terminalHandle) {
       try { await this.orca(["terminal", "close", "--terminal", state.terminalHandle, "--tab"]); }
       catch (error) {
@@ -385,10 +388,15 @@ export class AgentDevelopmentAdapter implements MissionAdapter {
     const count = Math.min(20, available.length);
     const entries = Array.from({ length: count }, (_, index) => available[(this.maintenanceOffset + index) % available.length]!);
     this.maintenanceOffset = available.length ? (this.maintenanceOffset + count) % available.length : 0;
+    let uploadedHistory = false;
     const statuses = await Promise.all(entries.map((entry) => maintenance.status(entry.name).catch(() => undefined)));
     let runtimeReady = false;
     for (const [index, entry] of entries.entries()) {
       const cloud = statuses[index];
+      if (maintenance.history && !uploadedHistory && await hasPendingHistory(this.directory(entry.name))) {
+        uploadedHistory = true;
+        await uploadHistory(this.directory(entry.name), entries => maintenance.history!(entry.name, entries), 1).catch(() => undefined);
+      }
       if (!["cancelled", "completed", "failed"].includes(cloud ?? "")) continue;
       const directory = this.directory(entry.name);
       let state = await readJsonIfPresent<DevelopmentOrcaState>(join(directory, "orca.json"));
@@ -476,7 +484,7 @@ export class AgentDevelopmentAdapter implements MissionAdapter {
     leaseWriter = setInterval(updateLease, 500);
     const abort = () => updateLease();
     signal.addEventListener("abort", abort, { once: true });
-    const executionPublisher = publishExecution(directory, execution.execution);
+    const executionPublisher = publishExecution(directory, execution.execution, execution.history);
     try {
       const local = await readJsonIfPresent<DevelopmentStatus>(join(directory, "status.json"));
       const heartbeat = await readJsonIfPresent<SupervisorHeartbeat>(join(directory, "supervisor.json"));

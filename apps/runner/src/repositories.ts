@@ -1,3 +1,4 @@
+import type { MissionHistoryEntry } from "@ventneuf/domain";
 import { createHash, randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { lstat, mkdir, opendir, readFile, realpath, rename, stat, writeFile } from "node:fs/promises";
@@ -415,6 +416,7 @@ export interface AgentApprovalResponse {
   };
 }
 export interface MissionExecution {
+  history?(entries: MissionHistoryEntry[]): Promise<void>;
   leaseExpiresAt(): number;
   progress(content: string): Promise<void>;
   execution?(snapshot: AgentExecutionSnapshot): Promise<void>;
@@ -422,6 +424,7 @@ export interface MissionExecution {
 }
 export type MissionStatus = "queued" | "running" | "waiting_for_approval" | "completed" | "failed" | "cancelled";
 export interface MissionMaintenance {
+  history?(missionId: string, entries: MissionHistoryEntry[]): Promise<void>;
   status(missionId: string): Promise<MissionStatus | undefined>;
 }
 export interface MissionAdapter {

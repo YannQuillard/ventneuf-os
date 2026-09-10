@@ -33,8 +33,19 @@ export function MissionApprovalRequest({ approval, onDecided, onAskHermes }: {
   const pending = approval.status === "pending";
   const actionable = pending && approval.canDecide === true;
   const command = typeof approval.evidence.command === "string" ? approval.evidence.command : undefined;
+  if (!actionable && !error) return <details>
+    <summary><Text>{pending ? approval.route === "hermes" ? "Hermes is reviewing" : approval.route === "automatic" ? "Automatic review pending" : "Waiting for the mission initiator" : `Decision: ${approval.status}`}</Text>{" · "}
+      <Text type="supporting">{approval.action.summary || "Authority request"}</Text></summary>
+    <VStack gap={2} padding={3}>
+      <Text>{approval.reason}</Text>
+      <Text type="supporting">{pending ? "No action is required from you." : "This is the authority decision, not confirmation that the action succeeded."}</Text>
+      {command ? <CodeBlock code={command} language="shell" size="sm" isWrapped width="100%" /> : null}
+      {approval.rationale ? <Text type="supporting">{approval.rationale}</Text> : null}
+      <Text type="supporting">{approval.action.expectedEffect}</Text>
+    </VStack>
+  </details>;
   return <Banner status={error ? "error" : pending ? "warning" : "info"} container="card"
-    title={approval.action.summary || "Authority request"}
+    title={`Your decision is required · ${approval.action.summary || "Authority request"}`}
     description={`${approval.action.expectedEffect} · ${approval.status}`}
     endContent={actionable ? <HStack gap={2}><Button label="Reject" size="sm" variant="secondary" isLoading={isDeciding} clickAction={() => decide("rejected")} />
       <Button label="Approve" size="sm" variant="primary" isLoading={isDeciding} clickAction={() => decide("approved")} /></HStack> : undefined}

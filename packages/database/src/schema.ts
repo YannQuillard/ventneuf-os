@@ -1,5 +1,6 @@
 import {
   boolean,
+  bigserial,
   check,
   foreignKey,
   index,
@@ -537,3 +538,17 @@ export const missionEvents = pgTable(
     index("mission_events_mission_created_idx").on(table.missionId, table.createdAt, table.id),
   ],
 );
+
+export const missionHistory = pgTable("mission_history", {
+  cursor: bigserial("cursor", { mode: "number" }).primaryKey(),
+  organizationId: uuid("organization_id").notNull(),
+  missionId: uuid("mission_id").notNull(),
+  eventId: uuid("event_id").notNull(),
+  entry: jsonb("entry").$type<import("@ventneuf/domain").MissionHistoryEntry>().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, table => [
+  uniqueIndex("mission_history_event_unique").on(table.organizationId, table.missionId, table.eventId),
+  index("mission_history_cursor_idx").on(table.organizationId, table.missionId, table.cursor),
+  foreignKey({ columns: [table.organizationId, table.missionId],
+    foreignColumns: [missions.organizationId, missions.id] }).onDelete("cascade"),
+]);
