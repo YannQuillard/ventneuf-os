@@ -62,3 +62,19 @@ test("history marks oversized Unicode output and excludes provider reasoning", a
     });
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
+
+test("streamed output keeps its observed position and later checkpoints carry the accumulated text", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "mission-history-order-"));
+  const activity = new ExecutionActivity("codex", "thread", "/workspace");
+  const recorder = await executionRecorder(directory, activity);
+  try {
+    activity.codex({ method: "item/agentMessage/delta", params: { threadId: "thread", itemId: "message", delta: "Reading" } });
+    activity.codex({ method: "item/started", params: { threadId: "thread", item: { id: "tool", type: "commandExecution", command: "npm test" } } });
+    activity.codex({ method: "item/agentMessage/delta", params: { threadId: "thread", itemId: "message", delta: " the tests" } });
+    await recorder.close();
+    const saved: Array<[string, string]> = [];
+    await uploadHistory(directory, async entries => { saved.push(...entries.map(entry => [entry.item.id, entry.item.text] as [string, string])); });
+    assert.deepEqual(saved.map(([id]) => id), ["thread:message", "thread:tool", "thread:message"]);
+    assert.equal(saved.at(-1)?.[1], "Reading the tests");
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});

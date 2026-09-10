@@ -143,11 +143,14 @@ export class ExecutionActivity {
       ...((text.length > 4_000 || (append && previous?.truncated)) ? { truncated: true } : {}),
     });
     if (append) {
-      this.dirtyHistory.add(item.id);
       const previousStream = this.streamedHistory.get(item.id);
       const accumulated = (previousStream?.text ?? "") + item.text;
-      this.streamedHistory.set(item.id, { ...item, text: accumulated.slice(0, historyTextLimit),
-        ...(accumulated.length > historyTextLimit || previousStream?.truncated ? { truncated: true } : {}) });
+      const streamed = { ...item, text: accumulated.slice(0, historyTextLimit),
+        ...(accumulated.length > historyTextLimit || previousStream?.truncated ? { truncated: true } : {}) };
+      this.streamedHistory.set(item.id, streamed);
+      // The first chunk is saved at once so streamed items keep their observed position in the history.
+      if (previousStream) this.dirtyHistory.add(item.id);
+      else this.saveHistory(streamed);
     } else {
       this.streamedHistory.delete(item.id);
       this.dirtyHistory.delete(item.id);

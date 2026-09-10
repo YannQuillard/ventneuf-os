@@ -122,6 +122,7 @@ export function HermesConversation({ conversationId, title = "Hermes", subtitle 
   const pendingCount = useRef(0);
   const activities = missionActivities(missionEvents);
   const visibleActivities = activities.slice(-6);
+  const missionApprovals = approvals.filter((approval) => approval.missionId === (agentExecution?.missionId ?? mission?.id));
 
   const messageEndpoint = conversationId
     ? `/api/workspace/conversations/${encodeURIComponent(conversationId)}/messages`
@@ -507,7 +508,7 @@ export function HermesConversation({ conversationId, title = "Hermes", subtitle 
                   </AssistantMessage>
                 ) : null}
               </ChatMessageList>
-              {approvals.filter((approval) => approval.missionId === (agentExecution?.missionId ?? mission?.id)).map((approval) => (
+              {missionApprovals.map((approval) => (
                 <VStack key={approval.id} padding={4} paddingBlockStart={0}>
                   <MissionApprovalRequest approval={approval} onDecided={refresh}
                     onAskHermes={() => void submit(`Please explain approval request ${approval.id}, including why it is needed, its exact target, effect, and safer alternatives.`)} />
@@ -519,6 +520,7 @@ export function HermesConversation({ conversationId, title = "Hermes", subtitle 
         </VStack>
         {agentExecution && isAgentOpen && !isCompact ? <aside className={executionStyles.panel}>
           <AgentExecutionPanel key={agentExecution.missionId} conversationId={conversationId} execution={agentExecution} presentation="panel"
+            approvals={missionApprovals}
             onClose={() => setIsAgentOpen(false)} onStop={() => void stopMission(agentExecution.missionId)} isStopping={isStopping} />
         </aside> : null}
         {selected ? <MessageDetailsPanel message={selected} onClose={closeDetails} /> : null}
@@ -526,6 +528,7 @@ export function HermesConversation({ conversationId, title = "Hermes", subtitle 
       </LayoutContent>} />
       {agentExecution && isCompact ? <BottomSheet isOpen={isAgentOpen} onOpenChange={setIsAgentOpen} label="Mission details" height="tall">
         <AgentExecutionPanel key={agentExecution.missionId} conversationId={conversationId} execution={agentExecution} presentation="sheet"
+          approvals={missionApprovals}
           onClose={() => setIsAgentOpen(false)} onStop={() => void stopMission(agentExecution.missionId)} isStopping={isStopping} />
       </BottomSheet> : null}
     </>
