@@ -1,2 +1,7 @@
+.panel { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; }
+.panel .body { flex: 1; min-height: 0; overflow: auto; }
+.sheet { min-width: 0; }
+.header { padding: var(--spacing-3) var(--spacing-4) var(--spacing-1); }
+.sheet .header { position: sticky; top: 0; z-index: 1; background: var(--color-background-surface); }
 .tree { min-width: 0; }
 .label { overflow-wrap: anywhere; }

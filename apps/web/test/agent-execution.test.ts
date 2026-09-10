@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { AgentExecutionItem, AgentExecutionSnapshot, MissionHistoryEntry } from "@ventneuf/domain";
-import { countNodes, executionItemStatus, executionTree, hasFailure, interleaveApprovals, mergeExecutionTimeline } from "../lib/agent-execution";
+import { actionTitle, countNodes, executionItemStatus, executionTree, hasFailure, interleaveApprovals, mergeExecutionTimeline, summarizeActions } from "../lib/agent-execution";
 import { approvalPresentation, missionNow } from "../lib/mission-presentation";
 import type { MissionApproval } from "../lib/conversations";
 
@@ -92,4 +92,14 @@ test("approvals slot into the timeline by time and live-only activity stays last
   ]);
   const entries = interleaveApprovals(nodes, [approval({ id: "late", createdAt: "2026-09-10T10:09:00.000Z" }), approval({ id: "early", createdAt: "2026-09-10T10:02:00.000Z" })]);
   assert.deepEqual(entries.map((entry) => entry.kind === "node" ? entry.node.item.id : entry.approval.id), ["a", "early", "b", "late", "live"]);
+});
+
+test("action runs fold into one readable line and bare tool names carry their argument", () => {
+  const run = [item("r1", undefined, { label: "Read", text: "apps/web/app/page.tsx\n\nexport default …" }), item("r2", undefined, { label: "Read", text: "lib/a.ts" }),
+    item("g", undefined, { label: "Grep", text: "revalidate" }), item("e", undefined, { label: "Edit", text: "lib/a.ts" }),
+    item("b", undefined, { label: "Run the unit tests", text: "npm test" }), item("c", undefined, { label: "npm run build", text: "npm run build\n\nexit 1" }),
+    item("a", undefined, { kind: "agent", label: "Review agent" })];
+  assert.equal(summarizeActions(run), "Read 2 files, searched the code, edited 1 file, ran 2 commands, delegated 1 task");
+  assert.equal(actionTitle(run[0]!), "Read apps/web/app/page.tsx");
+  assert.equal(actionTitle(run[5]!), "npm run build");
 });

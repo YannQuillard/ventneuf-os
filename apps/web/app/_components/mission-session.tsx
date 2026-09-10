@@ -2,36 +2,26 @@
 
 import { Button } from "@astryxdesign/core/Button";
 import { CodeBlock } from "@astryxdesign/core/CodeBlock";
+import { Collapsible } from "@astryxdesign/core/Collapsible";
 import { HStack, VStack } from "@astryxdesign/core/Layout";
 import { List, ListItem } from "@astryxdesign/core/List";
 import { Markdown } from "@astryxdesign/core/Markdown";
-import { SegmentedControl, SegmentedControlItem } from "@astryxdesign/core/SegmentedControl";
 import { Spinner } from "@astryxdesign/core/Spinner";
 import { StatusDot } from "@astryxdesign/core/StatusDot";
 import { Text } from "@astryxdesign/core/Text";
 import { Timestamp } from "@astryxdesign/core/Timestamp";
 import { Fragment, useState, type ReactNode } from "react";
-import { countNodes, executionItemStatus, executionTree, hasFailure, interleaveApprovals, type ExecutionNode, type TimelineEntry, type TimelineItem } from "../../lib/agent-execution";
+import { actionTitle, countNodes, executionItemStatus, executionTree, hasFailure, interleaveApprovals, summarizeActions,
+  type ExecutionNode, type TimelineEntry, type TimelineItem } from "../../lib/agent-execution";
 import type { MissionApproval, MissionState } from "../../lib/conversations";
 import styles from "./mission-session.module.css";
 import type { MissionHistoryState } from "./use-mission-history";
 
 type Node = ExecutionNode<TimelineItem>;
-type Filter = "all" | "issues";
 type Status = MissionState["status"];
 
-const kindLabel: Record<TimelineItem["kind"], string> = {
-  message: "Message", tool: "Tool", agent: "Subagent", plan: "Plan", diff: "Changes", status: "Hook",
-};
-
-function dotVariant(status: TimelineItem["status"]) {
-  if (status === "failed") return "error";
-  if (status === "running") return "accent";
-  return status === "unknown" ? "neutral" : "success";
-}
-
 function Occurred({ item }: { item: TimelineItem }) {
-  return item.occurredAt ? <>{" · "}<Timestamp value={item.occurredAt} format="time" /></> : null;
+  return item.occurredAt ? <Timestamp value={item.occurredAt} format="time" /> : null;
 }
 
 function Output({ item }: { item: TimelineItem }) {
@@ -46,19 +36,20 @@ function Output({ item }: { item: TimelineItem }) {
 function Row({ node, missionStatus, onToggle, isSelected }: { node: Node; missionStatus: Status; onToggle?(id: string): void; isSelected?: boolean }) {
   const { item } = node;
   const steps = countNodes(node);
-  const note = item.status === "failed" && missionStatus !== "failed" ? "Attempt failed · mission continued" : undefined;
-  const summary = [kindLabel[item.kind], steps ? `${steps} ${steps === 1 ? "step" : "steps"}` : undefined, note].filter(Boolean).join(" · ");
   const status = executionItemStatus(item, missionStatus);
-  return <ListItem label={item.label || kindLabel[item.kind]}
-    description={<Text type="supporting">{summary}<Occurred item={item} /></Text>}
-    startContent={<StatusDot variant={dotVariant(item.status)} label={status} isPulsing={item.status === "running"} />}
+  const highlighted = item.status === "failed" || item.status === "running";
+  const description = [steps ? `${steps} ${steps === 1 ? "step" : "steps"}` : undefined,
+    item.status === "failed" && missionStatus !== "failed" ? "the mission continued" : undefined].filter(Boolean).join(" · ");
+  return <ListItem label={actionTitle(item)}
+    description={description || item.occurredAt ? <Text type="supporting">{description}{description && item.occurredAt ? " · " : ""}<Occurred item={item} /></Text> : undefined}
+    startContent={highlighted ? <StatusDot variant={item.status === "failed" ? "error" : "accent"} label={status} isPulsing={item.status === "running"} /> : undefined}
     endContent={<Text type="supporting" hasTabularNumbers>{status}</Text>}
     onClick={onToggle ? () => onToggle(item.id) : undefined} isSelected={isSelected} />;
 }
 
 interface Segment { key: string; rows: Node[]; detail?: ReactNode }
 
-/** Details render after their row rather than inside it, so the status dot and status text stay on the row's line. */
+/** Details render after their row rather than inside it, so the row itself stays one line. */
 function Rows({ nodes, missionStatus, detail, expandedId, onToggle }: {
   nodes: Node[]; missionStatus: Status; detail(node: Node): ReactNode; expandedId?: string; onToggle?(id: string): void;
 }) {
@@ -86,19 +77,34 @@ function NestedSteps({ nodes, missionStatus }: { nodes: Node[]; missionStatus: S
     : node.children.length ? <NestedSteps nodes={node.children} missionStatus={missionStatus} /> : null} />;
 }
 
-function MessageBlock({ item, provider }: { item: TimelineItem; provider: string }) {
-  return <VStack gap={1} paddingBlock={2}>
-    <HStack gap={2} vAlign="center">
-      {item.status === "running" ? <StatusDot variant="accent" label="Writing" isPulsing /> : null}
-      <Text type="supporting">{provider}<Occurred item={item} /></Text>
-    </HStack>
-    <Markdown contentWidth={640} headingLevelStart={3} isStreaming={item.status === "running"}>{item.text}</Markdown>
+/** Failed and running steps stay visible; everything else folds into one summary line. */
+function ActionGroup({ nodes, missionStatus }: { nodes: Node[]; missionStatus: Status }) {
+  const [expandedId, setExpandedId] = useState<string>();
+  const toggle = (id: string) => setExpandedId((current) => current === id ? undefined : id);
+  const detail = (node: Node) => expandedId !== node.item.id ? null : <VStack gap={3}>
+    {node.item.text || !node.children.length ? <Output item={node.item} /> : null}
+    {node.children.length ? <NestedSteps nodes={node.children} missionStatus={missionStatus} /> : null}
+  </VStack>;
+  const highlights = nodes.filter((node) => hasFailure(node) || node.item.status === "running");
+  const folded = nodes.filter((node) => !highlights.includes(node));
+  return <div className={styles.group}>
+    {highlights.length ? <Rows nodes={highlights} missionStatus={missionStatus} detail={detail} expandedId={expandedId} onToggle={toggle} /> : null}
+    {folded.length ? <Collapsible defaultIsOpen={false} trigger={<Text type="supporting" color="secondary">{summarizeActions(folded.map((node) => node.item))}</Text>}>
+      <Rows nodes={folded} missionStatus={missionStatus} detail={detail} expandedId={expandedId} onToggle={toggle} />
+    </Collapsible> : null}
+  </div>;
+}
+
+function MessageBlock({ item }: { item: TimelineItem }) {
+  return <VStack gap={1}>
+    <Markdown contentWidth={720} headingLevelStart={3} isStreaming={item.status === "running"}>{item.text}</Markdown>
+    {item.occurredAt ? <Text type="supporting"><Occurred item={item} /></Text> : null}
   </VStack>;
 }
 
 interface Group { id: string; message?: Node; approval?: MissionApproval; actions: Node[] }
 
-/** Consecutive actions form one dense list; messages and approvals break it so the narrative stays readable. */
+/** Consecutive actions form one group; messages and approvals break it so the narrative stays readable. */
 function groupTimeline(entries: TimelineEntry[]): Group[] {
   return entries.reduce<Group[]>((groups, entry) => {
     if (entry.kind === "approval") return [...groups, { id: entry.approval.id, approval: entry.approval, actions: [] }];
@@ -109,51 +115,31 @@ function groupTimeline(entries: TimelineEntry[]): Group[] {
   }, []);
 }
 
-function isIssue(entry: TimelineEntry) {
-  if (entry.kind === "approval") return ["rejected", "expired"].includes(entry.approval.status);
-  return entry.node.item.kind !== "message" && hasFailure(entry.node);
-}
-
 function HistoryNotice({ history }: { history: MissionHistoryState }) {
-  if (history.status === "loading") return <HStack gap={2} vAlign="center"><Spinner size="sm" aria-label="Loading saved activity" /><Text type="supporting">Loading saved activity…</Text></HStack>;
+  if (history.status === "loading") return <HStack gap={2} vAlign="center"><Spinner size="sm" aria-label="Loading earlier activity" /><Text type="supporting">Loading earlier activity…</Text></HStack>;
   if (history.status === "error") return <HStack gap={2} vAlign="center" wrap="wrap">
-    <Text type="supporting">Saved activity could not be loaded.</Text>
+    <Text type="supporting">Earlier activity could not be loaded.</Text>
     <Button label="Retry" size="sm" variant="ghost" onClick={history.retry} />
   </HStack>;
-  if (history.status === "partial") return <Text type="supporting">Only the first part of the saved activity is shown. Reopen the panel to continue loading.</Text>;
+  if (history.status === "partial") return <Text type="supporting">Only the first part of the earlier activity is shown.</Text>;
   return null;
 }
 
 /** On a phone the timeline scrolls like a chat, so pending decisions sit at its end, where the agent is blocked. */
-export function MissionSession({ items, approvals, renderApproval, missionStatus, provider, history, trailing, footer }: {
+export function MissionSession({ items, approvals, renderApproval, missionStatus, history, trailing, footer }: {
   items: TimelineItem[]; approvals: MissionApproval[]; renderApproval(approval: MissionApproval): ReactNode;
-  missionStatus: Status; provider: string; history: MissionHistoryState; trailing?: ReactNode; footer?: ReactNode;
+  missionStatus: Status; history: MissionHistoryState; trailing?: ReactNode; footer?: ReactNode;
 }) {
-  const [filter, setFilter] = useState<Filter>("all");
-  const [expandedId, setExpandedId] = useState<string>();
-  const toggle = (id: string) => setExpandedId((current) => current === id ? undefined : id);
-  const roots = executionTree(items.filter((item) => item.kind !== "diff"));
-  const entries = interleaveApprovals(roots, approvals);
-  const issues = entries.filter(isIssue);
-  const groups = groupTimeline(filter === "issues" ? issues : entries);
-  const detail = (node: Node) => expandedId !== node.item.id ? null : <VStack gap={3}>
-    {node.item.text || !node.children.length ? <Output item={node.item} /> : null}
-    {node.children.length ? <NestedSteps nodes={node.children} missionStatus={missionStatus} /> : null}
-  </VStack>;
-
-  return <VStack gap={4}>
+  const entries = interleaveApprovals(executionTree(items), approvals);
+  const groups = groupTimeline(entries);
+  return <VStack gap={5}>
     <HistoryNotice history={history} />
-    {entries.length ? <SegmentedControl value={filter} onChange={(value) => setFilter(value as Filter)} label="Filter the session" size="sm">
-      <SegmentedControlItem value="all" label="All activity" />
-      <SegmentedControlItem value="issues" label={issues.length ? `Issues · ${issues.length}` : "Issues"} />
-    </SegmentedControl> : null}
     {groups.map((group) => <Fragment key={group.id}>
       {group.approval ? renderApproval(group.approval) : null}
-      {group.message ? <MessageBlock item={group.message.item} provider={provider} /> : null}
-      {group.actions.length ? <Rows nodes={group.actions} missionStatus={missionStatus} detail={detail} expandedId={expandedId} onToggle={toggle} /> : null}
+      {group.message ? <MessageBlock item={group.message.item} /> : null}
+      {group.actions.length ? <ActionGroup nodes={group.actions} missionStatus={missionStatus} /> : null}
     </Fragment>)}
     {!entries.length && history.status !== "loading" ? <Text type="supporting" color="secondary">Waiting for readable agent activity.</Text> : null}
-    {entries.length && filter === "issues" && !issues.length ? <Text type="supporting" color="secondary">No failed step in this session.</Text> : null}
     {trailing}
     {footer}
   </VStack>;

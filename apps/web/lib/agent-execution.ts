@@ -105,3 +105,45 @@ export function interleaveApprovals(nodes: ExecutionNode<TimelineItem>[], approv
     ...live.map((node): TimelineEntry => ({ kind: "node", node })),
   ];
 }
+
+export type ActionCategory = "read" | "searched" | "edited" | "ran" | "fetched" | "delegated" | "planned" | "changed" | "hooked";
+
+const toolCategories: Record<string, ActionCategory> = {
+  read: "read", glob: "searched", grep: "searched", ls: "searched", edit: "edited", write: "edited", multiedit: "edited",
+  notebookedit: "edited", bash: "ran", skill: "ran", webfetch: "fetched", websearch: "fetched", task: "delegated", agent: "delegated", todowrite: "planned",
+};
+
+const phrases: Record<ActionCategory, [one: string, many: string]> = {
+  read: ["Read 1 file", "Read N files"], searched: ["Searched the code", "Searched the code N times"],
+  edited: ["Edited 1 file", "Edited N files"], ran: ["Ran 1 command", "Ran N commands"], fetched: ["Fetched 1 page", "Fetched N pages"],
+  delegated: ["Delegated 1 task", "Delegated N tasks"], planned: ["Updated the plan", "Updated the plan N times"],
+  changed: ["Changed files", "Changed files N times"], hooked: ["Ran 1 hook", "Ran N hooks"],
+};
+
+export function actionCategory(item: AgentExecutionItem): ActionCategory {
+  if (item.kind === "agent") return "delegated";
+  if (item.kind === "plan") return "planned";
+  if (item.kind === "diff") return "changed";
+  if (item.kind === "status") return "hooked";
+  return toolCategories[item.label.split(/\s/)[0]?.toLowerCase() ?? ""] ?? "ran";
+}
+
+/** One readable line for a run of actions, in the spirit of "Read 3 files, ran 2 commands". */
+export function summarizeActions(items: AgentExecutionItem[]): string {
+  const counts = items.reduce<Partial<Record<ActionCategory, number>>>((totals, item) => {
+    const category = actionCategory(item);
+    return { ...totals, [category]: (totals[category] ?? 0) + 1 };
+  }, {});
+  return (Object.keys(phrases) as ActionCategory[]).filter((category) => counts[category])
+    .map((category) => counts[category] === 1 ? phrases[category][0] : phrases[category][1].replace("N", String(counts[category])))
+    .map((part, index) => index ? `${part[0]?.toLowerCase()}${part.slice(1)}` : part)
+    .join(", ");
+}
+
+/** Bare tool names read better with their argument: "Read" becomes "Read apps/web/app/page.tsx". */
+export function actionTitle(item: AgentExecutionItem): string {
+  const label = item.label || item.kind;
+  if (/\s/.test(label)) return label;
+  const argument = item.text.split("\n")[0]?.trim() ?? "";
+  return argument && argument.length <= 120 ? `${label} ${argument}` : label;
+}
