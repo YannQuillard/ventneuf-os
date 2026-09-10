@@ -9,6 +9,13 @@ const starting = new Map<string, Promise<void>>();
 
 type RuntimeStatus = { app?: { running?: boolean; pid?: number; desktopWindowStatus?: string }; runtime?: { reachable?: boolean }; graph?: { state?: string } };
 
+export async function orcaRuntimeIsReady(path: string, signal?: AbortSignal) {
+  const status = await requestOrca(path, ["status"], 5_000, signal) as RuntimeStatus;
+  return status.runtime?.reachable === true
+    && status.graph?.state === "ready"
+    && status.app?.desktopWindowStatus !== "blocked";
+}
+
 export async function ensureOrcaRuntime(path: string, signal: AbortSignal) {
   signal.throwIfAborted();
   let pending = starting.get(path);

@@ -12,7 +12,7 @@ test("review cleanup waits for cloud completion and closes only the owned termin
   const directory = join(root, `${id}-sample`);
   const calls: string[][] = [];
   class Adapter extends OrcaReviewAdapter {
-    protected override async ready(_signal: AbortSignal) {}
+    protected override async runtimeIsReady(_signal: AbortSignal) { return true; }
     protected override async orca(args: string[]) { calls.push(args); return {}; }
   }
   try {
@@ -28,5 +28,31 @@ test("review cleanup waits for cloud completion and closes only the owned termin
     await adapter.maintain({ status: async () => "completed" });
     assert.deepEqual(calls.at(-1), ["worktree", "rm", "--worktree", "id:owned-worktree"]);
     await assert.rejects(readFile(join(root, `${id}.claimed`)), { code: "ENOENT" });
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("review cleanup does not start Orca while it is stopped", async () => {
+  const root = await mkdtemp(join(tmpdir(), "review-maintenance-stopped-"));
+  const id = "00000000-0000-4000-8000-000000000099";
+  const directory = join(root, `${id}-sample`);
+  let starts = 0;
+  let requests = 0;
+  class Adapter extends OrcaReviewAdapter {
+    protected override async ready(_signal: AbortSignal) { starts++; }
+    protected override async runtimeIsReady(_signal: AbortSignal) { return false; }
+    protected override async orca(_args: string[]) { requests++; return {}; }
+  }
+  try {
+    await mkdir(directory);
+    await writeReviewState(join(directory, "orca.json"), {
+      missionId: id,
+      worktreeId: "owned-worktree",
+      terminalHandle: "owned-terminal",
+    });
+    const adapter = new Adapter({ orcaPath: "/unused", codexPath: "/unused", stateDirectory: root });
+    await adapter.maintain({ status: async () => "completed" });
+    assert.equal(starts, 0);
+    assert.equal(requests, 0);
+    assert.deepEqual(JSON.parse(await readFile(join(directory, "lease.json"), "utf8")), { expiresAt: 0 });
   } finally { await rm(root, { recursive: true, force: true }); }
 });

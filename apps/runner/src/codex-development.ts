@@ -1,5 +1,5 @@
 import { archiveMissionWorkspace, pruneMissionArchives } from "./mission-archive.js";
-import { ensureOrcaRuntime, OrcaRequestError, prepareOrcaRepository, requestOrca } from "./orca-runtime.js";
+import { ensureOrcaRuntime, orcaRuntimeIsReady, OrcaRequestError, prepareOrcaRepository, requestOrca } from "./orca-runtime.js";
 import { execFile } from "node:child_process";
 import { publishExecution } from "./execution-activity.js";
 import { mkdir, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
@@ -135,6 +135,10 @@ export class AgentDevelopmentAdapter implements MissionAdapter {
 
   protected ready(signal: AbortSignal) {
     return ensureOrcaRuntime(this.options.orcaPath, signal);
+  }
+
+  protected runtimeIsReady(signal: AbortSignal) {
+    return orcaRuntimeIsReady(this.options.orcaPath, signal);
   }
 
   private async recoverCreatedWorktree(
@@ -393,7 +397,11 @@ export class AgentDevelopmentAdapter implements MissionAdapter {
       const directory = this.directory(entry.name);
       let state = await readJsonIfPresent<DevelopmentOrcaState>(join(directory, "orca.json"));
       if (!runtimeReady) {
-        try { await this.ready(AbortSignal.timeout(60_000)); runtimeReady = true; }
+        try {
+          // Idle cleanup waits for the member to open Orca instead of relaunching it in the background.
+          if (!await this.runtimeIsReady(AbortSignal.timeout(5_000))) return;
+          runtimeReady = true;
+        }
         catch { return; }
       }
       if (!state) {

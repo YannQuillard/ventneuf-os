@@ -1,4 +1,4 @@
-import { ensureOrcaRuntime, OrcaRequestError, prepareOrcaRepository, requestOrca } from "./orca-runtime.js";
+import { ensureOrcaRuntime, orcaRuntimeIsReady, OrcaRequestError, prepareOrcaRepository, requestOrca } from "./orca-runtime.js";
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
@@ -21,6 +21,7 @@ export class OrcaReviewAdapter implements MissionAdapter {
 
   protected orca(args: string[]) { return requestOrca(this.options.orcaPath, args); }
   protected ready(signal: AbortSignal) { return ensureOrcaRuntime(this.options.orcaPath, signal); }
+  protected runtimeIsReady(signal: AbortSignal) { return orcaRuntimeIsReady(this.options.orcaPath, signal); }
 
   async maintain(maintenance: MissionMaintenance) {
     await mkdir(this.root, { recursive: true, mode: 0o700 });
@@ -43,7 +44,8 @@ export class OrcaReviewAdapter implements MissionAdapter {
       if (state && state.missionId !== missionId) continue;
       try {
         if (state?.worktreeId && !runtimeReady) {
-          await this.ready(AbortSignal.timeout(60_000));
+          // Idle cleanup must respect a member quitting Orca; an active mission may start it again.
+          if (!await this.runtimeIsReady(AbortSignal.timeout(5_000))) continue;
           runtimeReady = true;
         }
         if (state?.terminalHandle) {
