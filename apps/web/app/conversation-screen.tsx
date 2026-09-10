@@ -5,15 +5,17 @@ import { Button } from "@astryxdesign/core/Button";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { HStack, Layout, LayoutContent, VStack } from "@astryxdesign/core/Layout";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { conversationHref, workspaceRequest, type WorkspaceConversation } from "../lib/workspace";
-import { NewThreadDialog, ShareResourceDialog } from "./_components/workspace-dialogs";
+import { DeleteMissionDialog, NewThreadDialog, ShareResourceDialog } from "./_components/workspace-dialogs";
 import { HermesConversation } from "./conversation";
 import { useWorkspaceNavigation } from "./workspace";
 
 export function WorkspaceConversationScreen({ conversationId, expectedProjectId }: { conversationId: string; expectedProjectId?: string }) {
   const { snapshot, isLoading, error, refreshWorkspace, openNewConversation, isMobile } = useWorkspaceNavigation();
   const router = useRouter();
+  const [isDeleteOpen, setDeleteOpen] = useState(false);
+  const deleting = useRef(false);
   const [isShareOpen, setShareOpen] = useState(false);
   const [isThreadOpen, setThreadOpen] = useState(false);
   const conversation = snapshot?.conversations.find((entry) => entry.id === conversationId);
@@ -53,8 +55,18 @@ export function WorkspaceConversationScreen({ conversationId, expectedProjectId 
     router.push(conversationHref(thread));
   };
 
+  const deleteMission = async () => {
+    deleting.current = true;
+    try {
+      await workspaceRequest(`/conversations/${encodeURIComponent(conversation.id)}`, { method: "DELETE" });
+      await refreshWorkspace();
+      router.replace(conversation.projectId ? `/projects/${encodeURIComponent(conversation.projectId)}` : "/");
+    } catch (error) { deleting.current = false; throw error; }
+  };
+
   const headerActions = <>
     {conversation.kind !== "mission" ? <Button label={isMobile ? "Thread" : "Start thread"} size="sm" variant="ghost" onClick={() => setThreadOpen(true)} /> : null}
+    {conversation.kind === "mission" && conversation.canManage && conversation.canDelete ? <Button label="Delete mission" size="sm" variant="ghost" onClick={() => setDeleteOpen(true)} /> : null}
     {conversation.canManage ? <Button label="Share" size="sm" variant="secondary" onClick={() => setShareOpen(true)} /> : null}
   </>;
 
@@ -62,7 +74,8 @@ export function WorkspaceConversationScreen({ conversationId, expectedProjectId 
     <HermesConversation conversationId={conversation.id} title={conversation.title || "Untitled conversation"}
       subtitle={`${context} · ${visibility}`} headerActions={headerActions}
       showSuggestions={conversation.kind === "private"}
-      onAccessRevoked={() => { void refreshWorkspace(); router.replace("/"); }} />
+      onAccessRevoked={() => { if (!deleting.current) { void refreshWorkspace(); router.replace("/"); } }} />
+    <DeleteMissionDialog isOpen={isDeleteOpen} onOpenChange={setDeleteOpen} title={conversation.title} onDelete={deleteMission} />
     <NewThreadDialog isOpen={isThreadOpen} onOpenChange={setThreadOpen} parentTitle={conversation.title} onCreate={createThread} />
     <ShareResourceDialog isOpen={isShareOpen} onOpenChange={setShareOpen}
       resourceLabel={conversation.kind === "mission" ? "mission thread" : conversation.kind === "topic" ? "topic thread" : "conversation"}

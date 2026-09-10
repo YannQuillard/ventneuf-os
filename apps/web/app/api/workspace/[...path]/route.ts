@@ -18,6 +18,7 @@ const allowedRoutes: Array<{ method: Method; pattern: RegExp }> = [
   { method: "GET", pattern: /^conversations\/[^/]+$/ },
   { method: "POST", pattern: /^conversations$/ },
   { method: "PATCH", pattern: /^conversations\/[^/]+$/ },
+  { method: "DELETE", pattern: /^conversations\/[^/]+$/ },
   { method: "PUT", pattern: /^conversations\/[^/]+\/members\/[^/]+$/ },
   { method: "DELETE", pattern: /^conversations\/[^/]+\/members\/[^/]+$/ },
   { method: "GET", pattern: /^conversations\/[^/]+\/messages$/ },

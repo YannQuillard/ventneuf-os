@@ -1,3 +1,4 @@
+import { cancelMissionInTransaction } from "./mission-cancellation.js";
 import { createHash } from "node:crypto";
 import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import type { DatabaseTransaction, Database } from "./client.js";
@@ -9,6 +10,7 @@ import {
   members,
   messages,
   missions,
+  missionApprovals,
   projectMembers,
   projectRepositories,
   projects,
@@ -182,7 +184,7 @@ export async function requireConversationAccess(
   transaction: DatabaseTransaction,
   scope: WorkspaceScope,
   conversationId: string,
-  options: { lock?: RowLock; requireProjectAccess?: boolean } = {},
+  options: { lock?: RowLock; requireProjectAccess?: boolean; includeDeleted?: boolean } = {},
 ) {
   const lock = options.lock ?? "share";
   const member = await requireWorkspaceMember(transaction, scope);
@@ -197,7 +199,7 @@ export async function requireConversationAccess(
       .limit(1),
     lock,
   );
-  if (!conversation) throw new WorkspaceAccessError("Conversation not found or access denied.");
+  if (!conversation || (conversation.deletedAt && !options.includeDeleted)) throw new WorkspaceAccessError("Conversation not found or access denied.");
 
   const isOwner = conversation.ownerMemberId === member.id;
   const canManage = isOwner && !conversation.isProjectGeneral;
@@ -379,7 +381,7 @@ export async function requireCurrentConversationMemoryFence(
       .limit(1),
     "update",
   );
-  if (!conversation || conversation.memoryEpoch !== fence.memoryEpoch) {
+  if (!conversation || conversation.deletedAt || conversation.memoryEpoch !== fence.memoryEpoch) {
     throw new WorkspaceMemoryFenceError();
   }
   return conversation;
@@ -614,6 +616,7 @@ export class WorkspaceRepository {
       recipients: await this.conversationRecipients(transaction, conversation.organizationId, conversation.id),
       isOwner: conversation.ownerMemberId === actingMemberId,
       canManage: conversation.ownerMemberId === actingMemberId,
+      canDelete: conversation.kind === "mission" && conversation.ownerMemberId === actingMemberId,
       createdAt: conversation.createdAt,
       updatedAt: conversation.updatedAt,
     };
@@ -903,6 +906,7 @@ export class WorkspaceRepository {
       const candidates = [...owned, ...granted.map(({ conversation }) => conversation)];
       const visible: typeof conversations.$inferSelect[] = [];
       for (const conversation of candidates) {
+        if (conversation.deletedAt) continue;
         if (input.projectId && conversation.projectId !== input.projectId) continue;
         if (conversation.projectId) {
           try {
@@ -916,6 +920,35 @@ export class WorkspaceRepository {
       }
       visible.sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime());
       return Promise.all(visible.map((conversation) => this.conversationView(transaction, conversation, member.id)));
+    });
+  }
+
+  deleteMissionConversation(scope: WorkspaceScope, conversationId: string) {
+    return this.database.withOrganization(scope.organizationId, async (transaction) => {
+      const { conversation, canManage } = await requireConversationAccess(transaction, scope, conversationId, { lock: "update", includeDeleted: true });
+      if (!canManage || conversation.kind !== "mission" || conversation.isPrimary || conversation.isProjectGeneral) {
+        throw new WorkspaceAccessError("Mission not found or access denied.");
+      }
+      if (conversation.deletedAt) return { id: conversationId, hermesRuns: [] };
+      const ownedMissions = await transaction.select().from(missions).where(and(
+        eq(missions.organizationId, scope.organizationId), eq(missions.conversationId, conversationId),
+      )).orderBy(asc(missions.id)).for("update");
+      const reviewIds = ownedMissions.length ? await transaction.select({ id: missionApprovals.reviewMissionId }).from(missionApprovals).where(and(
+        eq(missionApprovals.organizationId, scope.organizationId), inArray(missionApprovals.missionId, ownedMissions.map(({ id }) => id)),
+      )) : [];
+      const hermesRuns: Array<{ runId: string; scopeId?: string }> = [];
+      for (const mission of ownedMissions) {
+        const cancelled = await cancelMissionInTransaction(transaction, scope.organizationId, mission.id, {});
+        if (cancelled.length && !mission.assignedDeviceId && typeof mission.context.hermesRunId === "string") {
+          hermesRuns.push({ runId: mission.context.hermesRunId,
+            scopeId: typeof mission.context.hermesScopeId === "string" ? mission.context.hermesScopeId : undefined });
+        }
+      }
+      for (const { id } of reviewIds) if (id) await cancelMissionInTransaction(transaction, scope.organizationId, id, {});
+      await transaction.update(conversations).set({ deletedAt: new Date(), updatedAt: new Date(), memoryEpoch: sql`gen_random_uuid()`, hermesContextId: null }).where(and(
+        eq(conversations.organizationId, scope.organizationId), eq(conversations.id, conversationId),
+      ));
+      return { id: conversationId, hermesRuns };
     });
   }
 

@@ -294,6 +294,7 @@ export const conversations = pgTable(
     isProjectGeneral: boolean("is_project_general").default(false).notNull(),
     memoryEpoch: uuid("memory_epoch").defaultRandom().notNull(),
     hermesContextId: text("hermes_context_id"),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
     title: text("title"),
     ...timestamps,
   },

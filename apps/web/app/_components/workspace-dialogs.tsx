@@ -36,6 +36,32 @@ function FormDialog({ isOpen, onOpenChange, title, subtitle, submitLabel, isSubm
   </Dialog>;
 }
 
+export function DeleteMissionDialog({ isOpen, onOpenChange, title, onDelete }: {
+  isOpen: boolean; onOpenChange: (open: boolean) => void; title: string; onDelete: () => Promise<void>;
+}) {
+  const [isDeleting, setDeleting] = useState(false);
+  const [error, setError] = useState<string>();
+  useEffect(() => { if (isOpen) setError(undefined); }, [isOpen]);
+  const close = (open: boolean) => { if (!isDeleting) onOpenChange(open); };
+  const remove = async () => {
+    setDeleting(true); setError(undefined);
+    try { await onDelete(); onOpenChange(false); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to delete the mission."); }
+    finally { setDeleting(false); }
+  };
+  return <Dialog isOpen={isOpen} onOpenChange={close} purpose="required">
+    <Layout height="auto" defaultHasDividers
+      header={<DialogHeader title="Delete mission?" onOpenChange={close} />}
+      content={<LayoutContent padding={4}><Text>
+        {`“${title}” and its conversation will be removed from the workspace for everyone with access. Active work will be stopped. Local cleanup will run when the runner is connected.`}
+      </Text>{error ? <Text role="alert">{error}</Text> : null}</LayoutContent>}
+      footer={<LayoutFooter><HStack gap={2} hAlign="end">
+        <Button label="Cancel" variant="secondary" isDisabled={isDeleting} onClick={() => close(false)} />
+        <Button label="Delete mission" variant="destructive" isLoading={isDeleting} clickAction={remove} />
+      </HStack></LayoutFooter>} />
+  </Dialog>;
+}
+
 export function NewConversationDialog({ isOpen, onOpenChange, onCreate }: {
   isOpen: boolean;
   onOpenChange: (isOpen: boolean) => void;
