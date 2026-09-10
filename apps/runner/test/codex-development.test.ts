@@ -31,7 +31,8 @@ test("maintenance rotates through retained missions and stops cloud failures", a
       });
     }));
     const inspected = new Set<string>();
-    const adapter = new CodexDevelopmentAdapter({
+    class MaintenanceAdapter extends CodexDevelopmentAdapter { protected override async ready(_signal: AbortSignal) {} }
+    const adapter = new MaintenanceAdapter({
       orcaPath: "/usr/bin/false",
       codexPath: "/usr/bin/false",
       stateDirectory: root,
@@ -75,8 +76,10 @@ test("recovers a worktree that Orca finishes after its client times out", async 
   const runGit = (...args: string[]) => execute("/usr/bin/git", args, { timeout: 5_000 });
 
   class RecoveringAdapter extends AgentDevelopmentAdapter {
+    protected override async ready(_signal: AbortSignal) {}
     protected override async orca(args: string[], _timeout?: number): Promise<Record<string, unknown>> {
       calls.push(args);
+      if (args[0] === "open") return {};
       if (args[0] === "repo") return { repo: { id: "orca-repository", path: repository } };
       if (args[0] === "worktree" && args[1] === "create") {
         delayedCreation = new Promise((resolveDelay) => setTimeout(resolveDelay, 100))
@@ -110,6 +113,7 @@ test("recovers a worktree that Orca finishes after its client times out", async 
       stateDirectory,
     });
     const authorityExpiresAt = new Date(Date.now() + 60_000).toISOString();
+    let interrupted: AbortController | undefined;
     const runMission = (attempt = 1) => adapter.execute({
       id: missionId,
       repositoryId: "sample",
@@ -120,9 +124,9 @@ test("recovers a worktree that Orca finishes after its client times out", async 
       id: "sample",
       name: "Sample",
       path: repository,
-    }, new AbortController().signal, {
+    }, interrupted?.signal ?? new AbortController().signal, {
       leaseExpiresAt: () => Date.now() + 60_000,
-      progress: async () => {},
+      progress: async () => { interrupted?.abort(); },
       requestApproval: async () => { throw new Error("Unexpected approval request."); },
     });
 
@@ -134,7 +138,12 @@ test("recovers a worktree that Orca finishes after its client times out", async 
     assert.ok(calls.some(([group, command]) => group === "terminal" && command === "create"));
     assert.equal(calls.some(([group, command]) => group === "worktree" && command === "rm"), false);
     assert.match(await readFile(join(missionDirectory, "result.txt"), "utf8"), /pull\/1/);
-    assert.equal(await runMission(2), result);
+    interrupted = new AbortController();
+    await assert.rejects(runMission(2), { name: "AbortError" });
+    assert.equal(calls.some(([group, command]) => group === "worktree" && command === "rm"), false);
+    assert.match(await readFile(join(missionDirectory, "result.txt"), "utf8"), /pull\/1/);
+    interrupted = undefined;
+    assert.equal(await runMission(3), result);
     assert.equal(calls.filter(([group, command]) => group === "terminal" && command === "create").length, 1);
     await adapter.maintain({ status: async () => "running" });
     assert.equal(calls.some(([group, command]) => group === "worktree" && command === "rm"), false);

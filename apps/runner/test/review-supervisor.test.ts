@@ -23,8 +23,18 @@ test("independent supervisor kills its owned process when confirmed lease update
       deadline: Date.now() + 30_000,
       objective: "Review the arithmetic behavior",
     });
-    await writeReviewState(join(directory, "lease.json"), { expiresAt: Date.now() + 1_000 });
-    await superviseReview(directory);
+    await writeReviewState(join(directory, "lease.json"), { expiresAt: Date.now() + 5_000 });
+    const supervised = superviseReview(directory);
+    const deadline = Date.now() + 5_000;
+    while (true) {
+      try { await readFile(started); break; }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT" || Date.now() >= deadline) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    }
+    await writeReviewState(join(directory, "lease.json"), { expiresAt: Date.now() + 100 });
+    await supervised;
     const status = JSON.parse(await readFile(join(directory, "status.json"), "utf8"));
     const child = JSON.parse(await readFile(started, "utf8")) as { pid: number; environment: string[]; prompt: string };
     assert.equal(status.status, "failed");

@@ -7,6 +7,7 @@ export class ClaudeDevelopmentAdapter extends AgentDevelopmentAdapter {
     gitPath?: string;
     stateDirectory?: string;
     diagnosticRetentionMs?: number;
+    archiveRetentionMs?: number;
   }) {
     super({ ...options, agent: "claude", agentPath: options.claudePath });
   }

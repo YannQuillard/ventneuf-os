@@ -1,3 +1,4 @@
+import { MissionPreparationError } from "./orca-runtime.js";
 import { randomUUID } from "node:crypto";
 import type { AgentExecutionSnapshot, RunnerExecutionHarnesses } from "@ventneuf/domain";
 import type { CredentialStore, StoredDevice } from "./credential-store.js";
@@ -180,7 +181,7 @@ export class RunnerMissionWorker {
         const detail = error instanceof Error ? error.message : "Unknown error.";
         console.error(`Runner mission ${mission.id} (${mission.adapter}) failed: ${detail
           .replace(/[\u0000-\u001f\u007f]+/g, " ").slice(0, 1_000)}`);
-        await report("failed", ["codex-development", "claude-development"].includes(mission.adapter)
+        await report("failed", error instanceof MissionPreparationError ? error.message : ["codex-development", "claude-development"].includes(mission.adapter)
           ? `The ${mission.adapter === "codex-development" ? "Codex" : "Claude"} development mission could not complete. Inspect the retained Orca mission workspace for diagnostics.`
           : "The read-only mission could not complete. Verify the local runner and repository configuration.");
         return;

@@ -1,20 +1,67 @@
-import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { ensureOrcaRuntime, OrcaRequestError, prepareOrcaRepository, requestOrca } from "./orca-runtime.js";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import { CodexDevelopmentAdapter } from "./codex-development.js";
 import { ClaudeDevelopmentAdapter } from "./claude-development.js";
 import { RepositoryCheckAdapter, type MissionAdapter, type MissionExecution, type MissionMaintenance, type RunnerMission, type RegisteredRepository } from "./repositories.js";
 import { createReviewSnapshot } from "./review-snapshot.js";
 import { writeReviewState } from "./review-supervisor.js";
 
-const execute = promisify(execFile);
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
 export class OrcaReviewAdapter implements MissionAdapter {
+  private maintenanceOffset = 0;
+
+  private get root() {
+    return this.options.stateDirectory ?? join(homedir(), "Library", "Application Support", "ventneuf.os", "reviews");
+  }
+
+  protected orca(args: string[]) { return requestOrca(this.options.orcaPath, args); }
+
+  async maintain(maintenance: MissionMaintenance) {
+    await mkdir(this.root, { recursive: true, mode: 0o700 });
+    const available = (await readdir(this.root, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory() && /^[a-f0-9-]{36}-/.test(entry.name))
+      .sort((left, right) => left.name.localeCompare(right.name));
+    const count = Math.min(20, available.length);
+    const entries = Array.from({ length: count }, (_, index) => available[(this.maintenanceOffset + index) % available.length]!);
+    this.maintenanceOffset = available.length ? (this.maintenanceOffset + count) % available.length : 0;
+    for (const entry of entries) {
+      const missionId = entry.name.slice(0, 36);
+      const cloud = await maintenance.status(missionId).catch(() => undefined);
+      if (!["completed", "failed", "cancelled"].includes(cloud ?? "")) continue;
+      const directory = join(this.root, entry.name);
+      await writeReviewState(join(directory, "lease.json"), { expiresAt: 0 });
+      let state: { missionId?: string; worktreeId?: string; terminalHandle?: string } | undefined;
+      try { state = JSON.parse(await readFile(join(directory, "orca.json"), "utf8")); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") continue; }
+      if (state && state.missionId !== missionId) continue;
+      try {
+        if (state?.terminalHandle) {
+          try { await this.orca(["terminal", "close", "--terminal", state.terminalHandle, "--tab"]); }
+          catch (error) {
+            if (!(error instanceof OrcaRequestError) || !["selector_not_found", "terminal_not_found"].includes(error.code)) continue;
+          }
+        }
+        const marker = join(directory, "cleanup.json");
+        let observedAt: number;
+        try { observedAt = (JSON.parse(await readFile(marker, "utf8")) as { observedAt: number }).observedAt; }
+        catch {
+          await writeReviewState(marker, { observedAt: Date.now() });
+          continue;
+        }
+        // Allow the independent watchdog to stop before touching retained files.
+        if (!Number.isFinite(observedAt) || Date.now() - observedAt < (cloud === "failed" ? 24 * 60 * 60_000 : 2_000)) continue;
+        if (state?.worktreeId) await this.orca(["worktree", "rm", "--worktree", `id:${state.worktreeId}`]);
+        await rm(directory, { recursive: true, force: true });
+        await rm(join(this.root, `${missionId}.claimed`), { force: true });
+      } catch { /* Retry failed cleanup without blocking unrelated missions. */ }
+    }
+  }
+
   constructor(private readonly options: { orcaPath: string; codexPath: string; stateDirectory?: string }) {
     if (!isAbsolute(options.orcaPath) || !isAbsolute(options.codexPath)) throw new Error("Orca and Codex executable paths must be absolute.");
   }
@@ -34,22 +81,13 @@ export class OrcaReviewAdapter implements MissionAdapter {
     let abortListener: (() => void) | undefined;
     let launched = false;
     let stopped = false;
-    const orca = async (args: string[]) => {
-      const { stdout } = await execute(this.options.orcaPath, [...args, "--json"], {
-        timeout: 20_000, maxBuffer: 256_000,
-        env: { HOME: homedir(), PATH: "/usr/bin:/bin", LANG: "en_US.UTF-8" },
-      });
-      const envelope = JSON.parse(stdout) as { ok?: boolean; result?: Record<string, unknown> };
-      if (!envelope.ok || !envelope.result) throw new Error("Orca request failed.");
-      return envelope.result;
-    };
+    const orca = (args: string[], timeout?: number, requestSignal?: AbortSignal) =>
+      requestOrca(this.options.orcaPath, args, timeout, requestSignal ?? signal);
     try {
       const snapshot = await createReviewSnapshot(repository.path, snapshotPath, signal);
       await execution.progress(`Prepared ${snapshot.files} tracked source files at commit ${snapshot.commit.slice(0, 12)} for a read-only review.`);
       signal.throwIfAborted();
-      // Registration is an explicit prerequisite; the runner never imports unrelated projects.
-      const registration = (await orca(["repo", "show", "--repo", `path:${repository.path}`])).repo as { id?: string; path?: string } | undefined;
-      if (!registration?.id || registration.path !== repository.path) throw new Error("Unexpected Orca repository response.");
+      const registration = await prepareOrcaRepository(orca, repository.path, signal, () => ensureOrcaRuntime(this.options.orcaPath, signal));
       signal.throwIfAborted();
       const worktreeName = `ventneuf-review-${mission.id}`;
       const created = await orca(["worktree", "create", "--repo", `path:${repository.path}`,
@@ -139,6 +177,7 @@ export class RunnerAdapters implements MissionAdapter {
     return this.claudeDevelopment.execute(mission, repository, signal, execution);
   }
   async maintain(maintenance: MissionMaintenance) {
+    await this.review?.maintain(maintenance);
     await this.development?.maintain(maintenance);
     await this.claudeDevelopment?.maintain(maintenance);
   }
