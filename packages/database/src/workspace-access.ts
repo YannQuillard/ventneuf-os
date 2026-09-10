@@ -28,7 +28,7 @@ export async function hasWorkspaceMissionAuthority(transaction: DatabaseTransact
     .innerJoin(projects, and(eq(projects.organizationId, conversations.organizationId), eq(projects.id, conversations.projectId)))
     .leftJoin(projectMembers, and(eq(projectMembers.organizationId, projects.organizationId), eq(projectMembers.projectId, projects.id), eq(projectMembers.memberId, mission.requestedByMemberId)))
     .leftJoin(conversationGrants, and(eq(conversationGrants.organizationId, conversations.organizationId), eq(conversationGrants.conversationId, conversations.id), eq(conversationGrants.memberId, mission.requestedByMemberId)))
-    .where(and(eq(conversations.organizationId, mission.organizationId), eq(conversations.id, mission.conversationId), eq(projects.id, mission.projectId),
+    .where(and(eq(conversations.organizationId, mission.organizationId), eq(conversations.id, mission.conversationId), isNull(conversations.deletedAt), eq(projects.id, mission.projectId),
       or(eq(projects.ownerMemberId, mission.requestedByMemberId), eq(projectMembers.memberId, mission.requestedByMemberId)),
       or(eq(conversations.ownerMemberId, mission.requestedByMemberId), eq(conversationGrants.memberId, mission.requestedByMemberId))))
     .limit(1);

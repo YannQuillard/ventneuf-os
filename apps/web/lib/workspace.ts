@@ -43,6 +43,7 @@ export interface WorkspaceConversation {
   ownerMemberId: string;
   recipients: WorkspaceMember[];
   canManage: boolean;
+  canDelete?: boolean;
   isOwner: boolean;
   createdAt: string;
   updatedAt: string;

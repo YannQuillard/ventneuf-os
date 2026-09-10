@@ -101,6 +101,15 @@ export function registerWorkspaceRoutes(app: Express, authenticate: Authenticate
   app.get("/api/workspace/conversations/:conversationId", route(async (request, response, context, services) => {
     response.json({ conversation: await services.workspace!.getConversation(scope(context), id.parse(request.params.conversationId)) });
   }));
+  app.delete("/api/workspace/conversations/:conversationId", route(async (request, response, context, services) => {
+    const deleted = await services.workspace!.deleteMissionConversation(scope(context), id.parse(request.params.conversationId));
+    for (const run of deleted.hermesRuns) {
+      await hermes?.stop?.(run.runId, run.scopeId).catch(() => {
+        console.warn("Deleted mission Hermes stop failed; cancellation remains authoritative.");
+      });
+    }
+    response.json({ id: deleted.id, deleted: true });
+  }));
   app.patch("/api/workspace/conversations/:conversationId", route(async (request, response, context, services) => {
     const input = z.object({ title: z.string().trim().min(1).max(200) }).strict().parse(request.body);
     response.json({ conversation: await services.workspace!.updateConversation(scope(context), id.parse(request.params.conversationId), input) });
