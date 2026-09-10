@@ -1,3 +1,5 @@
+import { archiveMissionWorkspace, pruneMissionArchives } from "./mission-archive.js";
+import { ensureOrcaRuntime, OrcaRequestError, prepareOrcaRepository, requestOrca } from "./orca-runtime.js";
 import { execFile } from "node:child_process";
 import { publishExecution } from "./execution-activity.js";
 import { mkdir, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
@@ -116,6 +118,7 @@ export class AgentDevelopmentAdapter implements MissionAdapter {
     gitPath?: string;
     stateDirectory?: string;
     diagnosticRetentionMs?: number;
+    archiveRetentionMs?: number;
   }) {
     if (!isAbsolute(options.orcaPath) || !isAbsolute(options.agentPath)
       || (options.gitPath !== undefined && !isAbsolute(options.gitPath))) {
@@ -126,15 +129,12 @@ export class AgentDevelopmentAdapter implements MissionAdapter {
     this.retentionMs = options.diagnosticRetentionMs ?? 24 * 60 * 60_000;
   }
 
-  protected async orca(args: string[], timeout = developmentOrcaRequestTimeoutMs(args)) {
-    const { stdout } = await execute(this.options.orcaPath, [...args, "--json"], {
-      timeout,
-      maxBuffer: 256_000,
-      env: { HOME: homedir(), PATH: "/usr/bin:/bin", LANG: "en_US.UTF-8" },
-    });
-    const envelope = JSON.parse(stdout) as { ok?: boolean; result?: Record<string, unknown> };
-    if (!envelope.ok || !envelope.result) throw new Error("Orca request failed.");
-    return envelope.result;
+  protected async orca(args: string[], timeout = developmentOrcaRequestTimeoutMs(args), signal?: AbortSignal) {
+    return requestOrca(this.options.orcaPath, args, timeout, signal);
+  }
+
+  protected ready(signal: AbortSignal) {
+    return ensureOrcaRuntime(this.options.orcaPath, signal);
   }
 
   private async recoverCreatedWorktree(
@@ -220,14 +220,14 @@ export class AgentDevelopmentAdapter implements MissionAdapter {
     authorityExpiresAt: number,
     signal: AbortSignal,
   ) {
-    await mkdir(directory, { mode: 0o700 });
-    const registration = (await this.orca(["repo", "show", "--repo", `path:${repository.path}`])).repo as {
-      id?: string;
-      path?: string;
-    } | undefined;
-    if (!registration?.id || registration.path !== repository.path) throw new Error("Unexpected Orca repository response.");
+    const registration = await prepareOrcaRepository(this.orca.bind(this), repository.path, signal, () => this.ready(signal));
+    await mkdir(directory, { recursive: true, mode: 0o700 });
     const gitPath = await this.gitExecutable();
     const worktreeName = `ventneuf-mission-${mission.id}`;
+    await writeReviewState(join(directory, "preparation.json"), {
+      missionId: mission.id, repositoryId: repository.id, repositoryPath: repository.path,
+      worktreeName, createdAt: new Date().toISOString(),
+    });
     let created: Record<string, unknown> | undefined;
     try {
       created = await this.orca(["worktree", "create", "--repo", `path:${repository.path}`,
@@ -350,20 +350,34 @@ export class AgentDevelopmentAdapter implements MissionAdapter {
 
   private async clean(directory: string, state: DevelopmentOrcaState, requireClean: boolean) {
     if (state.terminalHandle) {
-      await this.orca(["terminal", "close", "--terminal", state.terminalHandle, "--tab"]).catch(() => undefined);
+      try { await this.orca(["terminal", "close", "--terminal", state.terminalHandle, "--tab"]); }
+      catch (error) {
+        if (!(error instanceof OrcaRequestError) || !["selector_not_found", "terminal_not_found"].includes(error.code)) return false;
+      }
     }
-    await rm(join(state.worktreePath, ".ventneuf-tmp"), { recursive: true, force: true }).catch(() => undefined);
-    const clean = await this.worktreeIsClean(state);
-    if (!clean) {
-      if (requireClean) throw new Error("The mission worktree contains uncommitted changes and was retained.");
-      return false;
+    const heartbeat = await readJsonIfPresent<SupervisorHeartbeat>(join(directory, "supervisor.json"));
+    if (heartbeat?.updatedAt && Date.parse(heartbeat.updatedAt) > Date.now() - 5_000) return false;
+    const exists = await stat(state.worktreePath).then(() => true, (error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return false;
+      throw error;
+    });
+    if (exists) {
+      await rm(join(state.worktreePath, ".ventneuf-tmp"), { recursive: true, force: true });
+      const clean = await this.worktreeIsClean(state);
+      if (!clean && requireClean) throw new Error("The mission worktree contains uncommitted changes and was retained.");
+      if (!clean) await archiveMissionWorkspace(state.worktreePath,
+        join(this.root, "archives", state.missionId), await this.gitExecutable());
+      await this.orca(["worktree", "rm", "--worktree", `id:${state.worktreeId}`, ...(!clean ? ["--force"] : [])]);
+    } else {
+      // Retry metadata removal after an acknowledged or ambiguous filesystem deletion.
+      await this.orca(["worktree", "rm", "--worktree", `id:${state.worktreeId}`]);
     }
-    await this.orca(["worktree", "rm", "--worktree", `id:${state.worktreeId}`]);
     await rm(directory, { recursive: true, force: true });
     return true;
   }
 
   async maintain(maintenance: MissionMaintenance) {
+    await pruneMissionArchives(join(this.root, "archives"), this.options.archiveRetentionMs ?? 30 * 24 * 60 * 60_000);
     await mkdir(this.root, { recursive: true, mode: 0o700 });
     const available = (await readdir(this.root, { withFileTypes: true }))
       .filter((entry) => entry.isDirectory() && /^[a-f0-9-]{36}$/.test(entry.name))
@@ -371,19 +385,40 @@ export class AgentDevelopmentAdapter implements MissionAdapter {
     const count = Math.min(20, available.length);
     const entries = Array.from({ length: count }, (_, index) => available[(this.maintenanceOffset + index) % available.length]!);
     this.maintenanceOffset = available.length ? (this.maintenanceOffset + count) % available.length : 0;
-    const candidates = (await Promise.all(entries.map(async (entry) => {
-      const directory = this.directory(entry.name);
-      const state = await readJsonIfPresent<DevelopmentOrcaState>(join(directory, "orca.json"));
-      return state?.missionId === entry.name ? { directory, state } : undefined;
-    }))).filter((candidate): candidate is { directory: string; state: DevelopmentOrcaState } => Boolean(candidate));
-    const statuses = await Promise.all(candidates.map(({ state }) => maintenance.status(state.missionId).catch(() => undefined)));
-    for (const [index, candidate] of candidates.entries()) {
-      const { directory, state } = candidate;
+    const statuses = await Promise.all(entries.map((entry) => maintenance.status(entry.name).catch(() => undefined)));
+    let runtimeReady = false;
+    for (const [index, entry] of entries.entries()) {
       const cloud = statuses[index];
+      if (!["cancelled", "completed", "failed"].includes(cloud ?? "")) continue;
+      const directory = this.directory(entry.name);
+      let state = await readJsonIfPresent<DevelopmentOrcaState>(join(directory, "orca.json"));
+      if (!runtimeReady) {
+        try { await this.ready(AbortSignal.timeout(60_000)); runtimeReady = true; }
+        catch { return; }
+      }
+      if (!state) {
+        const intent = await readJsonIfPresent<{ missionId: string; repositoryId: string; repositoryPath: string; worktreeName: string; createdAt: string }>(join(directory, "preparation.json"));
+        if (!intent || intent.missionId !== entry.name || intent.worktreeName !== `ventneuf-mission-${entry.name}`) continue;
+        try {
+          const worktree = (await this.orca(["worktree", "show", "--worktree", `name:${intent.worktreeName}`])).worktree as DevelopmentOrcaWorktree;
+          if (!worktree?.id || !worktree.path || !isAbsolute(worktree.path) || worktree.path === intent.repositoryPath
+            || worktree.isMainWorktree !== false || worktree.displayName !== intent.worktreeName) continue;
+          state = { missionId: entry.name, repositoryId: intent.repositoryId, worktreeId: worktree.id,
+            worktreePath: worktree.path, createdAt: intent.createdAt };
+          await writeReviewState(join(directory, "orca.json"), state);
+        } catch (error) {
+          if (error instanceof OrcaRequestError && error.code === "selector_not_found") {
+            await rm(directory, { recursive: true, force: true });
+          }
+          continue;
+        }
+      }
+      if (state.missionId !== entry.name) continue;
       if (cloud === "cancelled" || cloud === "completed" || cloud === "failed") {
         await writeReviewState(join(directory, "lease.json"), { mode: cloud, expiresAt: 0 });
       }
       if (cloud === "failed") {
+        if (state.terminalHandle) await this.orca(["terminal", "close", "--terminal", state.terminalHandle, "--tab"]).catch(() => undefined);
         const failurePath = join(directory, "cloud-failure.json");
         const failure = await readJsonIfPresent<{ observedAt?: string }>(failurePath);
         if (!failure?.observedAt) {
@@ -549,7 +584,7 @@ export class AgentDevelopmentAdapter implements MissionAdapter {
       await writing.catch(() => undefined);
       if (signal.aborted) {
         await writeReviewState(join(directory, "lease.json"), { mode: "stopped", expiresAt: 0 }).catch(() => undefined);
-        await this.clean(directory, state, false).catch(() => undefined);
+        // Lease loss can be temporary. Only cloud-confirmed terminal states authorize cleanup.
       }
     }
   }
@@ -562,6 +597,7 @@ export class CodexDevelopmentAdapter extends AgentDevelopmentAdapter {
     gitPath?: string;
     stateDirectory?: string;
     diagnosticRetentionMs?: number;
+    archiveRetentionMs?: number;
   }) {
     super({ ...options, agent: "codex", agentPath: options.codexPath });
   }

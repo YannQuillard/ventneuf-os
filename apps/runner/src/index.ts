@@ -56,6 +56,7 @@ if (command === "install") {
     controlPlaneUrl: controlPlaneUrl(),
     webOrigins: process.env.VENTNEUF_WEB_ORIGINS ?? defaultWebOrigins,
     repositoriesFile: process.env.VENTNEUF_REPOSITORIES_FILE,
+    archiveRetentionDays: process.env.VENTNEUF_MISSION_ARCHIVE_RETENTION_DAYS,
     orcaPath: process.env.VENTNEUF_ORCA_PATH,
     codexPath: process.env.VENTNEUF_CODEX_PATH,
     claudePath: process.env.VENTNEUF_CLAUDE_PATH,
@@ -100,12 +101,17 @@ if (command === "install") {
     updater: new RunnerUpdater(dirname(fileURLToPath(import.meta.url))),
   });
   await bridge.start(port);
+  const archiveRetentionDays = Number(process.env.VENTNEUF_MISSION_ARCHIVE_RETENTION_DAYS ?? "30");
+  if (!Number.isInteger(archiveRetentionDays) || archiveRetentionDays < 1 || archiveRetentionDays > 365) {
+    throw new Error("VENTNEUF_MISSION_ARCHIVE_RETENTION_DAYS must be between 1 and 365.");
+  }
+  const archiveRetentionMs = archiveRetentionDays * 24 * 60 * 60_000;
   const review = process.env.VENTNEUF_ORCA_PATH && process.env.VENTNEUF_CODEX_PATH
     ? new OrcaReviewAdapter({ orcaPath: process.env.VENTNEUF_ORCA_PATH, codexPath: process.env.VENTNEUF_CODEX_PATH }) : undefined;
   const development = process.env.VENTNEUF_ORCA_PATH && process.env.VENTNEUF_CODEX_PATH
-    ? new CodexDevelopmentAdapter({ orcaPath: process.env.VENTNEUF_ORCA_PATH, codexPath: process.env.VENTNEUF_CODEX_PATH }) : undefined;
+    ? new CodexDevelopmentAdapter({ archiveRetentionMs, orcaPath: process.env.VENTNEUF_ORCA_PATH, codexPath: process.env.VENTNEUF_CODEX_PATH }) : undefined;
   const claudeDevelopment = process.env.VENTNEUF_ORCA_PATH && process.env.VENTNEUF_CLAUDE_PATH
-    ? new ClaudeDevelopmentAdapter({ orcaPath: process.env.VENTNEUF_ORCA_PATH, claudePath: process.env.VENTNEUF_CLAUDE_PATH }) : undefined;
+    ? new ClaudeDevelopmentAdapter({ archiveRetentionMs, orcaPath: process.env.VENTNEUF_ORCA_PATH, claudePath: process.env.VENTNEUF_CLAUDE_PATH }) : undefined;
   new RunnerMissionWorker({ client, store, adapter: new RunnerAdapters(review, development, claudeDevelopment),
     repositories: async () => (await loadRepositories(repositoriesFile)).map((repository) => ({
       ...repository, orcaReview: Boolean(review && repository.orcaReview),
