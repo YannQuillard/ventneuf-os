@@ -12,6 +12,7 @@ test("review cleanup waits for cloud completion and closes only the owned termin
   const directory = join(root, `${id}-sample`);
   const calls: string[][] = [];
   class Adapter extends OrcaReviewAdapter {
+    protected override async ready(_signal: AbortSignal) {}
     protected override async orca(args: string[]) { calls.push(args); return {}; }
   }
   try {

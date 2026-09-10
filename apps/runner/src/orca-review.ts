@@ -20,6 +20,7 @@ export class OrcaReviewAdapter implements MissionAdapter {
   }
 
   protected orca(args: string[]) { return requestOrca(this.options.orcaPath, args); }
+  protected ready(signal: AbortSignal) { return ensureOrcaRuntime(this.options.orcaPath, signal); }
 
   async maintain(maintenance: MissionMaintenance) {
     await mkdir(this.root, { recursive: true, mode: 0o700 });
@@ -29,6 +30,7 @@ export class OrcaReviewAdapter implements MissionAdapter {
     const count = Math.min(20, available.length);
     const entries = Array.from({ length: count }, (_, index) => available[(this.maintenanceOffset + index) % available.length]!);
     this.maintenanceOffset = available.length ? (this.maintenanceOffset + count) % available.length : 0;
+    let runtimeReady = false;
     for (const entry of entries) {
       const missionId = entry.name.slice(0, 36);
       const cloud = await maintenance.status(missionId).catch(() => undefined);
@@ -40,6 +42,10 @@ export class OrcaReviewAdapter implements MissionAdapter {
       catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") continue; }
       if (state && state.missionId !== missionId) continue;
       try {
+        if (state?.worktreeId && !runtimeReady) {
+          await this.ready(AbortSignal.timeout(60_000));
+          runtimeReady = true;
+        }
         if (state?.terminalHandle) {
           try { await this.orca(["terminal", "close", "--terminal", state.terminalHandle, "--tab"]); }
           catch (error) {
