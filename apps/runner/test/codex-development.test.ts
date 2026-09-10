@@ -31,7 +31,9 @@ test("maintenance rotates through retained missions and stops cloud failures", a
       });
     }));
     const inspected = new Set<string>();
-    class MaintenanceAdapter extends CodexDevelopmentAdapter { protected override async ready(_signal: AbortSignal) {} }
+    class MaintenanceAdapter extends CodexDevelopmentAdapter {
+      protected override async runtimeIsReady(_signal: AbortSignal) { return true; }
+    }
     const adapter = new MaintenanceAdapter({
       orcaPath: "/usr/bin/false",
       codexPath: "/usr/bin/false",
@@ -51,6 +53,39 @@ test("maintenance rotates through retained missions and stops cloud failures", a
     });
     assert.equal(typeof JSON.parse(await readFile(join(lastDirectory, "cloud-failure.json"), "utf8")).observedAt,
       "string");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("development cleanup does not start Orca while it is stopped", async () => {
+  const root = await mkdtemp(join(tmpdir(), "codex-development-stopped-"));
+  const missionId = "00000000-0000-4000-8000-000000000099";
+  const directory = join(root, missionId);
+  let starts = 0;
+  let requests = 0;
+  class MaintenanceAdapter extends CodexDevelopmentAdapter {
+    protected override async ready(_signal: AbortSignal) { starts++; }
+    protected override async runtimeIsReady(_signal: AbortSignal) { return false; }
+    protected override async orca(_args: string[]) { requests++; return {}; }
+  }
+  try {
+    await mkdir(directory, { recursive: true });
+    await writeReviewState(join(directory, "orca.json"), {
+      missionId,
+      repositoryId: "sample",
+      worktreeId: "owned-worktree",
+      worktreePath: join(root, "owned-worktree"),
+      createdAt: new Date().toISOString(),
+    });
+    const adapter = new MaintenanceAdapter({
+      orcaPath: "/unused",
+      codexPath: "/unused",
+      stateDirectory: root,
+    });
+    await adapter.maintain({ status: async () => "completed" });
+    assert.equal(starts, 0);
+    assert.equal(requests, 0);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -77,6 +112,7 @@ test("recovers a worktree that Orca finishes after its client times out", async 
 
   class RecoveringAdapter extends AgentDevelopmentAdapter {
     protected override async ready(_signal: AbortSignal) {}
+    protected override async runtimeIsReady(_signal: AbortSignal) { return true; }
     protected override async orca(args: string[], _timeout?: number): Promise<Record<string, unknown>> {
       calls.push(args);
       if (args[0] === "open") return {};
