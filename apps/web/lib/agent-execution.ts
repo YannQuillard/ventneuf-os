@@ -1,5 +1,5 @@
 import type { AgentExecutionItem, AgentExecutionSnapshot, MissionHistoryEntry } from "@ventneuf/domain";
-import type { MissionState } from "./conversations";
+import type { MissionApproval, MissionState } from "./conversations";
 
 export interface AgentExecution {
   missionId: string;
@@ -82,4 +82,26 @@ export function hasFailure(node: ExecutionNode<TimelineItem>): boolean {
 
 export function countNodes(node: ExecutionNode<TimelineItem>): number {
   return node.children.reduce((total, child) => total + countNodes(child), node.children.length);
+}
+
+export type TimelineEntry =
+  | { kind: "node"; node: ExecutionNode<TimelineItem> }
+  | { kind: "approval"; approval: MissionApproval };
+
+/** Approvals slot in by time among dated activity; activity only known from the live snapshot stays last. */
+export function interleaveApprovals(nodes: ExecutionNode<TimelineItem>[], approvals: MissionApproval[]): TimelineEntry[] {
+  const dated = nodes.filter((node) => node.item.occurredAt);
+  const live = nodes.filter((node) => !node.item.occurredAt);
+  const sorted = [...approvals].sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt));
+  const slotOf = (approval: MissionApproval) => {
+    const index = dated.findIndex((node) => Date.parse(node.item.occurredAt!) >= Date.parse(approval.createdAt));
+    return index === -1 ? dated.length : index;
+  };
+  const slotted = sorted.map((approval) => ({ approval, slot: slotOf(approval) }));
+  const before = (slot: number): TimelineEntry[] => slotted.filter((entry) => entry.slot === slot).map(({ approval }) => ({ kind: "approval", approval }));
+  return [
+    ...dated.flatMap((node, index): TimelineEntry[] => [...before(index), { kind: "node", node }]),
+    ...before(dated.length),
+    ...live.map((node): TimelineEntry => ({ kind: "node", node })),
+  ];
 }

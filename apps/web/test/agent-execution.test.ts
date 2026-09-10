@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { AgentExecutionItem, AgentExecutionSnapshot, MissionHistoryEntry } from "@ventneuf/domain";
-import { countNodes, executionItemStatus, executionTree, hasFailure, mergeExecutionTimeline } from "../lib/agent-execution";
-import { approvalPresentation, pendingApprovalSummary } from "../lib/mission-presentation";
+import { countNodes, executionItemStatus, executionTree, hasFailure, interleaveApprovals, mergeExecutionTimeline } from "../lib/agent-execution";
+import { approvalPresentation, missionNow } from "../lib/mission-presentation";
 import type { MissionApproval } from "../lib/conversations";
 
 const item = (id: string, parentId?: string, extra: Partial<AgentExecutionItem> = {}): AgentExecutionItem => ({ id, parentId, threadId: "thread", kind: "tool",
@@ -71,6 +71,25 @@ test("approval presentation separates Hermes review, the member's decision and t
   assert.equal(approvalPresentation(approval({ status: "approved" })).heading, "Approved by Hermes");
   assert.equal(approvalPresentation(approval({ status: "rejected", route: "human" })).status, "error");
   assert.equal(approvalPresentation(approval({ status: "expired" })).isActionable, false);
-  assert.equal(pendingApprovalSummary([approval({}), approval({ route: "human", canDecide: true })]), "your decision");
-  assert.equal(pendingApprovalSummary([approval({ status: "approved" })]), undefined);
+});
+
+test("the now line names who must act before anything else", () => {
+  const base = { status: "running" as const, isStale: false, approvals: [] };
+  assert.equal(missionNow({ ...base, approvals: [approval({}), approval({ route: "human", canDecide: true })] }).label, "Needs your decision");
+  assert.equal(missionNow({ ...base, approvals: [approval({})] }).label, "Hermes is reviewing");
+  assert.equal(missionNow({ ...base, current: { label: "npm test" } }).detail, "npm test");
+  assert.equal(missionNow({ ...base, isStale: true }).label, "No recent activity");
+  assert.equal(missionNow({ ...base, status: "completed", result: "Opened PR #12\nDetails" }).detail, "Opened PR #12");
+  assert.equal(missionNow({ ...base, status: "failed", failure: "Lease lost" }).detail, "Lease lost");
+  assert.equal(missionNow({ ...base, status: "cancelled", approvals: [approval({ route: "human", canDecide: true })] }).label, "Cancelled");
+});
+
+test("approvals slot into the timeline by time and live-only activity stays last", () => {
+  const nodes = executionTree([
+    { ...item("a", undefined, { status: "completed" }), occurredAt: "2026-09-10T10:00:00.000Z" },
+    { ...item("b", undefined, { status: "completed" }), occurredAt: "2026-09-10T10:05:00.000Z" },
+    item("live"),
+  ]);
+  const entries = interleaveApprovals(nodes, [approval({ id: "late", createdAt: "2026-09-10T10:09:00.000Z" }), approval({ id: "early", createdAt: "2026-09-10T10:02:00.000Z" })]);
+  assert.deepEqual(entries.map((entry) => entry.kind === "node" ? entry.node.item.id : entry.approval.id), ["a", "early", "b", "late", "live"]);
 });

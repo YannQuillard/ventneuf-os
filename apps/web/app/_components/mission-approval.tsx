@@ -12,10 +12,11 @@ import { useState } from "react";
 import type { MissionApproval } from "../../lib/conversations";
 import { approvalPresentation } from "../../lib/mission-presentation";
 
-export function MissionApprovalRequest({ approval, onDecided, onAskHermes }: {
+export function MissionApprovalRequest({ approval, onDecided, onAskHermes, isDetailOpen = true }: {
   approval: MissionApproval;
   onDecided: () => Promise<void>;
   onAskHermes: () => void;
+  isDetailOpen?: boolean;
 }) {
   const [isDeciding, setDeciding] = useState(false);
   const [error, setError] = useState<string>();
@@ -44,7 +45,7 @@ export function MissionApprovalRequest({ approval, onDecided, onAskHermes }: {
   return <Banner status={error ? "error" : presentation.status} container="card"
     title={approval.action.summary || "Authority request"}
     description={<>{presentation.heading}{" · "}<Timestamp value={approval.createdAt} format="time" />{" · "}{approval.action.expectedEffect}</>}
-    endContent={endContent} collapsible={{ defaultIsOpen: presentation.isActionable }}>
+    endContent={endContent} collapsible={{ defaultIsOpen: isDetailOpen && presentation.isActionable }}>
     <VStack gap={3}>
       <Text>{approval.reason}</Text>
       {command ? <CodeBlock title="Proposed command" code={command} language="shell" size="sm" width="100%" isWrapped /> : null}

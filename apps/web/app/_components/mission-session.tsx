@@ -11,8 +11,8 @@ import { StatusDot } from "@astryxdesign/core/StatusDot";
 import { Text } from "@astryxdesign/core/Text";
 import { Timestamp } from "@astryxdesign/core/Timestamp";
 import { Fragment, useState, type ReactNode } from "react";
-import { countNodes, executionItemStatus, executionTree, hasFailure, type ExecutionNode, type TimelineItem } from "../../lib/agent-execution";
-import type { MissionState } from "../../lib/conversations";
+import { countNodes, executionItemStatus, executionTree, hasFailure, interleaveApprovals, type ExecutionNode, type TimelineEntry, type TimelineItem } from "../../lib/agent-execution";
+import type { MissionApproval, MissionState } from "../../lib/conversations";
 import styles from "./mission-session.module.css";
 import type { MissionHistoryState } from "./use-mission-history";
 
@@ -96,16 +96,22 @@ function MessageBlock({ item, provider }: { item: TimelineItem; provider: string
   </VStack>;
 }
 
-interface Group { id: string; message?: Node; actions: Node[] }
+interface Group { id: string; message?: Node; approval?: MissionApproval; actions: Node[] }
 
-/** Consecutive actions form one dense list; each agent message breaks the list so the narrative stays readable. */
-function groupTimeline(nodes: Node[]): Group[] {
-  return nodes.reduce<Group[]>((groups, node) => {
-    if (node.item.kind === "message") return [...groups, { id: node.item.id, message: node, actions: [] }];
+/** Consecutive actions form one dense list; messages and approvals break it so the narrative stays readable. */
+function groupTimeline(entries: TimelineEntry[]): Group[] {
+  return entries.reduce<Group[]>((groups, entry) => {
+    if (entry.kind === "approval") return [...groups, { id: entry.approval.id, approval: entry.approval, actions: [] }];
+    if (entry.node.item.kind === "message") return [...groups, { id: entry.node.item.id, message: entry.node, actions: [] }];
     const last = groups.at(-1);
-    if (!last || last.message) return [...groups, { id: node.item.id, actions: [node] }];
-    return [...groups.slice(0, -1), { ...last, actions: [...last.actions, node] }];
+    if (!last || last.message || last.approval) return [...groups, { id: entry.node.item.id, actions: [entry.node] }];
+    return [...groups.slice(0, -1), { ...last, actions: [...last.actions, entry.node] }];
   }, []);
+}
+
+function isIssue(entry: TimelineEntry) {
+  if (entry.kind === "approval") return ["rejected", "expired"].includes(entry.approval.status);
+  return entry.node.item.kind !== "message" && hasFailure(entry.node);
 }
 
 function HistoryNotice({ history }: { history: MissionHistoryState }) {
@@ -118,15 +124,18 @@ function HistoryNotice({ history }: { history: MissionHistoryState }) {
   return null;
 }
 
-export function MissionSession({ items, missionStatus, provider, history, footer }: {
-  items: TimelineItem[]; missionStatus: Status; provider: string; history: MissionHistoryState; footer?: ReactNode;
+/** On a phone the timeline scrolls like a chat, so pending decisions sit at its end, where the agent is blocked. */
+export function MissionSession({ items, approvals, renderApproval, missionStatus, provider, history, trailing, footer }: {
+  items: TimelineItem[]; approvals: MissionApproval[]; renderApproval(approval: MissionApproval): ReactNode;
+  missionStatus: Status; provider: string; history: MissionHistoryState; trailing?: ReactNode; footer?: ReactNode;
 }) {
   const [filter, setFilter] = useState<Filter>("all");
   const [expandedId, setExpandedId] = useState<string>();
   const toggle = (id: string) => setExpandedId((current) => current === id ? undefined : id);
   const roots = executionTree(items.filter((item) => item.kind !== "diff"));
-  const issues = roots.filter((node) => node.item.kind !== "message" && hasFailure(node));
-  const groups = groupTimeline(filter === "issues" ? issues : roots);
+  const entries = interleaveApprovals(roots, approvals);
+  const issues = entries.filter(isIssue);
+  const groups = groupTimeline(filter === "issues" ? issues : entries);
   const detail = (node: Node) => expandedId !== node.item.id ? null : <VStack gap={3}>
     {node.item.text || !node.children.length ? <Output item={node.item} /> : null}
     {node.children.length ? <NestedSteps nodes={node.children} missionStatus={missionStatus} /> : null}
@@ -134,16 +143,18 @@ export function MissionSession({ items, missionStatus, provider, history, footer
 
   return <VStack gap={4}>
     <HistoryNotice history={history} />
-    {roots.length ? <SegmentedControl value={filter} onChange={(value) => setFilter(value as Filter)} label="Filter the session" size="sm">
+    {entries.length ? <SegmentedControl value={filter} onChange={(value) => setFilter(value as Filter)} label="Filter the session" size="sm">
       <SegmentedControlItem value="all" label="All activity" />
       <SegmentedControlItem value="issues" label={issues.length ? `Issues · ${issues.length}` : "Issues"} />
     </SegmentedControl> : null}
     {groups.map((group) => <Fragment key={group.id}>
+      {group.approval ? renderApproval(group.approval) : null}
       {group.message ? <MessageBlock item={group.message.item} provider={provider} /> : null}
       {group.actions.length ? <Rows nodes={group.actions} missionStatus={missionStatus} detail={detail} expandedId={expandedId} onToggle={toggle} /> : null}
     </Fragment>)}
-    {!roots.length && history.status !== "loading" ? <Text type="supporting" color="secondary">Waiting for readable agent activity.</Text> : null}
-    {roots.length && filter === "issues" && !issues.length ? <Text type="supporting" color="secondary">No failed step in this session.</Text> : null}
+    {!entries.length && history.status !== "loading" ? <Text type="supporting" color="secondary">Waiting for readable agent activity.</Text> : null}
+    {entries.length && filter === "issues" && !issues.length ? <Text type="supporting" color="secondary">No failed step in this session.</Text> : null}
+    {trailing}
     {footer}
   </VStack>;
 }

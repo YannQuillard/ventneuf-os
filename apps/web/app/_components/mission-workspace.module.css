@@ -1,3 +1,5 @@
 .panel { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; }
 .panel .body { flex: 1; min-height: 0; overflow: auto; }
+.status { padding: var(--spacing-4) var(--spacing-4) var(--spacing-1); }
 .sheet { min-width: 0; }
+.sheet .status { position: sticky; top: 0; z-index: 1; padding-block: var(--spacing-2); background: var(--color-background-surface); }

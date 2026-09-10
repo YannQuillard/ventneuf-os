@@ -11,8 +11,8 @@ import styles from "./mission-workspace.module.css";
 export interface MissionWorkspaceTab { id: string; label: string; endContent?: ReactNode }
 
 /** Shared by the live workspace and the design preview; data and actions stay with their owners. */
-export function MissionWorkspaceFrame({ title, subtitle, status, actions, tabs, tab, onTabChange, onClose, presentation, children }: {
-  title: string; subtitle?: string; status: ReactNode; actions?: ReactNode;
+export function MissionWorkspaceFrame({ title, subtitle, status, actions, notice, tabs, tab, onTabChange, onClose, presentation, children }: {
+  title: string; subtitle?: string; status: ReactNode; actions?: ReactNode; notice?: ReactNode;
   tabs: MissionWorkspaceTab[]; tab: string; onTabChange(tab: string): void;
   onClose(): void; presentation: "panel" | "sheet"; children: ReactNode;
 }) {
@@ -20,11 +20,11 @@ export function MissionWorkspaceFrame({ title, subtitle, status, actions, tabs, 
   const panelId = (value: string) => `${id}-mission-panel-${value}`;
   return (
     <section className={presentation === "panel" ? styles.panel : styles.sheet} aria-label="Mission details">
-      <VStack gap={3} padding={4} paddingBlockEnd={2}>
+      <div className={styles.status}>{status}</div>
+      <VStack gap={3} paddingInline={4} paddingBlockEnd={2}>
         <HStack gap={3} vAlign="start">
           <StackItem size="fill">
             <VStack gap={1}>
-              {status}
               <Heading level={2} accessibilityLevel={2} maxLines={2}>{title}</Heading>
               {subtitle ? <Text type="supporting">{subtitle}</Text> : null}
             </VStack>
@@ -34,6 +34,7 @@ export function MissionWorkspaceFrame({ title, subtitle, status, actions, tabs, 
         </HStack>
         {actions ? <HStack gap={2} vAlign="center" wrap="wrap">{actions}</HStack> : null}
       </VStack>
+      {notice ? <VStack gap={3} paddingInline={4} paddingBlockEnd={3}>{notice}</VStack> : null}
       <HStack paddingInline={2}>
         <TabList value={tab} onChange={onTabChange} size="sm" hasDivider role="tablist" aria-label="Mission views">
           {tabs.map((entry) => <Tab key={entry.id} value={entry.id} label={entry.label} panelId={panelId(entry.id)} endContent={entry.endContent} />)}

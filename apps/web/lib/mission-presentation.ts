@@ -47,10 +47,26 @@ export function approvalPresentation(approval: Pick<MissionApproval, "status" | 
     isActionable: false, isReviewing: false, note: "The agent did not receive an authorization for this action." };
 }
 
-export function pendingApprovalSummary(approvals: MissionApproval[]) {
-  const pending = approvals.filter((approval) => approval.status === "pending");
-  if (pending.some((approval) => approval.route === "human" && approval.canDecide)) return "your decision" as const;
-  if (pending.some((approval) => approval.route === "human")) return "initiator decision" as const;
-  if (pending.length) return "Hermes reviewing" as const;
-  return undefined;
+export interface MissionNow { dot: "success" | "warning" | "error" | "accent" | "neutral"; isPulsing: boolean; label: string; detail?: string }
+
+/** One line that answers "what is happening now, and do I need to act" for a remote member. */
+export function missionNow(input: {
+  status: MissionState["status"]; approvals: MissionApproval[]; current?: { label: string }; isStale: boolean; result?: string; failure?: string;
+}): MissionNow {
+  const isTerminal = ["completed", "failed", "cancelled"].includes(input.status);
+  const pending = isTerminal ? [] : input.approvals.filter((approval) => approval.status === "pending");
+  const yours = pending.find((approval) => approval.route === "human" && approval.canDecide);
+  const initiator = pending.find((approval) => approval.route === "human");
+  if (yours) return { dot: "warning", isPulsing: true, label: "Needs your decision", detail: yours.action.summary };
+  if (initiator) return { dot: "warning", isPulsing: true, label: "Waiting for the mission initiator", detail: initiator.action.summary };
+  if (pending[0]) return { dot: "warning", isPulsing: true, label: "Hermes is reviewing", detail: `${pending[0].action.summary} · no action needed from you` };
+  if (input.status === "waiting_for_approval") return { dot: "warning", isPulsing: true, label: "Waiting for an approval decision" };
+  if (input.status === "queued") return { dot: "neutral", isPulsing: false, label: "Queued", detail: "Waiting for a runner to pick up the mission" };
+  if (input.status === "running" && input.isStale) {
+    return { dot: "neutral", isPulsing: false, label: "No recent activity", detail: input.current ? `Last step · ${input.current.label}` : "The runner has not reported for a while" };
+  }
+  if (input.status === "running") return { dot: "accent", isPulsing: true, label: "Working", detail: input.current?.label ?? "Waiting for readable agent activity" };
+  if (input.status === "completed") return { dot: "success", isPulsing: false, label: "Completed", detail: input.result?.split("\n")[0] ?? "The agent reported completion" };
+  if (input.status === "failed") return { dot: "error", isPulsing: false, label: "Failed", detail: input.failure ?? "The mission could not complete" };
+  return { dot: "neutral", isPulsing: false, label: "Cancelled" };
 }

@@ -1,9 +1,8 @@
 "use client";
 
-import { BottomSheet } from "@astryxdesign/core/BottomSheet";
 import { useMediaQuery } from "@astryxdesign/core/hooks";
 import { missionStatusPresentation } from "../lib/mission-presentation";
-import executionStyles from "./agent-execution.module.css";
+import layoutStyles from "./mission-layout.module.css";
 import { PageHeader } from "./_components/page-header";
 import { AssistantMessage } from "./_components/assistant-message";
 import { ConversationSurface } from "./_components/conversation-surface";
@@ -16,22 +15,21 @@ import {
 } from "@astryxdesign/core/Chat";
 import { ClickableCard } from "@astryxdesign/core/ClickableCard";
 import { Button } from "@astryxdesign/core/Button";
+import { SegmentedControl, SegmentedControlItem } from "@astryxdesign/core/SegmentedControl";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { Grid } from "@astryxdesign/core/Grid";
 import { HStack, VStack, Layout, LayoutContent } from "@astryxdesign/core/Layout";
 import { Spinner } from "@astryxdesign/core/Spinner";
 import { Heading, Text } from "@astryxdesign/core/Text";
 import { Timestamp } from "@astryxdesign/core/Timestamp";
-import { Fragment, useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { formatDuration, type Message, type MissionApproval, type MissionEvent, type MissionState, type MissionTiming } from "../lib/conversations";
 import { missionActivities } from "../lib/mission-activity";
 import { ConversationMessage } from "./conversation-message";
 import { MessageDetailsPanel } from "./message-details";
-import { AgentExecutionPanel } from "./agent-execution";
+import { MissionWorkspace } from "./mission-workspace";
 import type { AgentExecution } from "../lib/agent-execution";
 import { MissionApprovalRequest } from "./_components/mission-approval";
-
-const chatColumn: CSSProperties = { flex: 1, minWidth: 0, height: "100%" };
 
 const suggestions = [
   {
@@ -108,7 +106,8 @@ export function HermesConversation({ conversationId, title = "Hermes", subtitle 
   const [mission, setMission] = useState<MissionState | null>(null);
   const [missionEvents, setMissionEvents] = useState<MissionEvent[]>([]);
   const [approvals, setApprovals] = useState<MissionApproval[]>([]);
-  const [isAgentOpen, setIsAgentOpen] = useState(false);
+  const [isMissionClosed, setIsMissionClosed] = useState(false);
+  const [mobileView, setMobileView] = useState<"mission" | "hermes">("mission");
   const isCompact = useMediaQuery("(max-width: 1100px)");
   const [agentExecution, setAgentExecution] = useState<AgentExecution | null>(null);
   const executionActive = Boolean(agentExecution && ["queued", "running", "waiting_for_approval"].includes(agentExecution.status));
@@ -123,6 +122,8 @@ export function HermesConversation({ conversationId, title = "Hermes", subtitle 
   const activities = missionActivities(missionEvents);
   const visibleActivities = activities.slice(-6);
   const missionApprovals = approvals.filter((approval) => approval.missionId === (agentExecution?.missionId ?? mission?.id));
+  const isMissionOpen = Boolean(agentExecution) && !isMissionClosed;
+  const isMissionVisible = isMissionOpen && (!isCompact || mobileView === "mission");
 
   const messageEndpoint = conversationId
     ? `/api/workspace/conversations/${encodeURIComponent(conversationId)}/messages`
@@ -364,17 +365,31 @@ export function HermesConversation({ conversationId, title = "Hermes", subtitle 
     if (selectedMessageId !== undefined && selected === undefined) setSelectedMessageId(undefined);
   }, [selected, selectedMessageId]);
 
+  const askHermes = (approval: MissionApproval) => {
+    void submit(`Please explain approval request ${approval.id}, including why it is needed, its exact target, effect, and safer alternatives.`);
+  };
+  const missionWorkspace = (presentation: "panel" | "sheet") => agentExecution ? <MissionWorkspace key={agentExecution.missionId}
+    execution={agentExecution} conversationId={conversationId} approvals={missionApprovals} failure={mission?.failure} presentation={presentation}
+    onClose={() => setIsMissionClosed(true)} onStop={() => void stopMission(agentExecution.missionId)} isStopping={isStopping}
+    onDecided={refresh} onAskHermes={askHermes} /> : null;
+
   return (
     <>
       <Layout height="fill" header={
         <PageHeader title={title} subtitle={subtitle} icon={ChatBubbleLeftRightIcon}
           onOpenNavigation={isMobile ? openNavigation : undefined}
-          actions={<HStack gap={2}>{headerActions}{agentExecution ? <Button
-            label={isMobile ? "Mission" : `Mission · ${missionStatusPresentation[agentExecution.status].label}`}
-            variant="ghost" size="sm" clickAction={() => setIsAgentOpen(true)} /> : null}</HStack>} />
+          actions={<HStack gap={2}>{headerActions}{agentExecution && isCompact ? <SegmentedControl label="Mission or conversation" size="sm"
+            value={isMissionVisible ? "mission" : "hermes"}
+            onChange={(value) => { setMobileView(value as "mission" | "hermes"); setIsMissionClosed(false); }}>
+            <SegmentedControlItem value="mission" label="Mission" />
+            <SegmentedControlItem value="hermes" label="Hermes" />
+          </SegmentedControl> : agentExecution && !isMissionOpen ? <Button
+            label={`Mission · ${missionStatusPresentation[agentExecution.status].label}`}
+            variant="ghost" size="sm" clickAction={() => setIsMissionClosed(false)} /> : null}</HStack>} />
       } content={<LayoutContent padding={0} isScrollable={false}>
       <HStack height="100%">
-        <VStack style={chatColumn}>
+        {isMissionOpen && !isCompact ? <div className={layoutStyles.mission}>{missionWorkspace("panel")}</div> : null}
+        <div className={layoutStyles.chat}>
           <ConversationSurface value={content} onChange={setContent} inputRef={composerInput} error={error}
             isDisabled={accessRevoked || !isLoaded}
             placeholder={collaborative ? "Message the project · mention @hermes for help" : "Message Hermes"}
@@ -413,7 +428,7 @@ export function HermesConversation({ conversationId, title = "Hermes", subtitle 
               <Spinner aria-label="Loading the conversation" />
             )}
           >
-            {timeline.length > 0 || awaitingReply ? (
+            {isMissionVisible && isCompact ? missionWorkspace("sheet") : timeline.length > 0 || awaitingReply ? (
               <>
               <ChatMessageList isStreaming={awaitingReply || revealingId !== undefined}>
                 {timeline.map((message, index) => {
@@ -508,29 +523,18 @@ export function HermesConversation({ conversationId, title = "Hermes", subtitle 
                   </AssistantMessage>
                 ) : null}
               </ChatMessageList>
-              {missionApprovals.map((approval) => (
+              {isMissionVisible ? null : missionApprovals.map((approval) => (
                 <VStack key={approval.id} padding={4} paddingBlockStart={0}>
-                  <MissionApprovalRequest approval={approval} onDecided={refresh}
-                    onAskHermes={() => void submit(`Please explain approval request ${approval.id}, including why it is needed, its exact target, effect, and safer alternatives.`)} />
+                  <MissionApprovalRequest approval={approval} onDecided={refresh} onAskHermes={() => askHermes(approval)} />
                 </VStack>
               ))}
               </>
             ) : null}
           </ConversationSurface>
-        </VStack>
-        {agentExecution && isAgentOpen && !isCompact ? <aside className={executionStyles.panel}>
-          <AgentExecutionPanel key={agentExecution.missionId} conversationId={conversationId} execution={agentExecution} presentation="panel"
-            approvals={missionApprovals}
-            onClose={() => setIsAgentOpen(false)} onStop={() => void stopMission(agentExecution.missionId)} isStopping={isStopping} />
-        </aside> : null}
+        </div>
         {selected ? <MessageDetailsPanel message={selected} onClose={closeDetails} /> : null}
       </HStack>
       </LayoutContent>} />
-      {agentExecution && isCompact ? <BottomSheet isOpen={isAgentOpen} onOpenChange={setIsAgentOpen} label="Mission details" height="tall">
-        <AgentExecutionPanel key={agentExecution.missionId} conversationId={conversationId} execution={agentExecution} presentation="sheet"
-          approvals={missionApprovals}
-          onClose={() => setIsAgentOpen(false)} onStop={() => void stopMission(agentExecution.missionId)} isStopping={isStopping} />
-      </BottomSheet> : null}
     </>
   );
 }
