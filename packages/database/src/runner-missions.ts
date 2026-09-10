@@ -1,8 +1,8 @@
 import { hasWorkspaceMissionAuthority } from "./workspace-access.js";
 import { and, asc, eq, gt, inArray, isNull, lte, or, sql } from "drizzle-orm";
-import { claudeModelAliases, evaluateApprovalPolicy, isAgentExecutionSnapshot, reasoningEfforts, type AgentExecutionSnapshot, type ClaudeModel, type MissionExecutionPreferences, type ReasoningEffort, type RunnerExecutionHarnesses } from "@ventneuf/domain";
+import { claudeModelAliases, evaluateApprovalPolicy, isAgentExecutionSnapshot, reasoningEfforts, type AgentExecutionSnapshot, type MissionHistoryEntry, isMissionHistoryBatch, type ClaudeModel, type MissionExecutionPreferences, type ReasoningEffort, type RunnerExecutionHarnesses } from "@ventneuf/domain";
 import type { Database, DatabaseTransaction } from "./client.js";
-import { deviceCredentials, devices, messages, missionApprovals, missionEvents, missions } from "./schema.js";
+import { deviceCredentials, devices, conversations, messages, missionApprovals, missionEvents, missionHistory, missions } from "./schema.js";
 
 export interface DeviceScope {
   organizationId: string;
@@ -243,6 +243,40 @@ export class RunnerMissionRepository {
         return { status: "cancelled" };
       }
       return mission ? { status: mission.status } : undefined;
+    });
+  }
+
+  /** Assigned devices may finish uploading diagnostics after execution ends. This grants no execution authority. */
+  history(scope: DeviceScope, missionId: string, entries: MissionHistoryEntry[]) {
+    if (!isMissionHistoryBatch(entries)) throw new RunnerLeaseError("Invalid history batch.");
+    return this.database.withOrganization(scope.organizationId, async transaction => {
+      await this.authenticate(transaction, scope);
+      const [mission] = await transaction.select().from(missions).where(and(
+        eq(missions.organizationId, scope.organizationId), eq(missions.id, missionId),
+        eq(missions.assignedDeviceId, scope.deviceId), gt(missions.attempts, 0),
+      )).for("update").limit(1);
+      const [conversation] = mission ? await transaction.select({ id: conversations.id }).from(conversations).where(and(
+        eq(conversations.organizationId, scope.organizationId), eq(conversations.id, mission.conversationId), isNull(conversations.deletedAt),
+      )).limit(1) : [];
+      if (!mission || !conversation || !await hasWorkspaceMissionAuthority(transaction, mission)
+        || entries.some(entry => mission.context.type !== `runner.${entry.provider}-development`)) {
+        throw new RunnerLeaseError("History is outside the assigned mission.");
+      }
+      for (const entry of entries) {
+        const [existing] = await transaction.select().from(missionHistory).where(and(
+          eq(missionHistory.organizationId, scope.organizationId), eq(missionHistory.missionId, missionId),
+          eq(missionHistory.eventId, entry.id),
+        )).limit(1);
+        if (existing) {
+          // JSONB key order is not stable; compare canonically in PostgreSQL.
+          const [same] = await transaction.select({ cursor: missionHistory.cursor }).from(missionHistory).where(and(
+            eq(missionHistory.cursor, existing.cursor), sql`${missionHistory.entry} = ${JSON.stringify(entry)}::jsonb`,
+          ));
+          if (!same) throw new RunnerLeaseError("A recorded history event cannot be changed.");
+        } else await transaction.insert(missionHistory).values({ organizationId: scope.organizationId,
+          missionId, eventId: entry.id, entry });
+      }
+      return { accepted: entries.map(entry => entry.id) };
     });
   }
 

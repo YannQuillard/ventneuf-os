@@ -42,3 +42,27 @@ export function isAgentExecutionSnapshot(value: unknown): value is AgentExecutio
       && (item.truncated === undefined || typeof item.truncated === "boolean"))
     && new TextEncoder().encode(JSON.stringify(v)).length <= executionSnapshotMaxBytes;
 }
+
+/** Durable observable activity. Provider reasoning and configuration are never recorded. */
+export interface MissionHistoryEntry {
+  id: string;
+  provider: "codex" | "claude";
+  sessionId: string;
+  occurredAt: string;
+  item: AgentExecutionItem;
+}
+export const historyBatchMaxBytes = 90_000;
+export const historyTextLimit = 32_000;
+export function isMissionHistoryBatch(value: unknown): value is MissionHistoryEntry[] {
+  if (!Array.isArray(value) || !value.length || value.length > 50) return false;
+  if (new TextEncoder().encode(JSON.stringify(value)).length > historyBatchMaxBytes) return false;
+  return new Set(value.map(entry => entry?.id)).size === value.length && value.every(entry => {
+    if (!entry || typeof entry !== "object"
+      || Object.keys(entry).some(key => !["id", "provider", "sessionId", "occurredAt", "item"].includes(key))
+      || (entry.item && Object.keys(entry.item).some(key => !["id", "threadId", "parentId", "kind", "label", "status", "text", "truncated"].includes(key)))
+      || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(entry.id)
+      || typeof entry.item?.text !== "string" || entry.item.text.length > historyTextLimit) return false;
+    return isAgentExecutionSnapshot({ version: 1, provider: entry.provider, rootThreadId: entry.sessionId,
+      revision: 1, omittedItems: 0, updatedAt: entry.occurredAt, items: [{ ...entry.item, text: entry.item.text.slice(0, 4_000) }] });
+  });
+}

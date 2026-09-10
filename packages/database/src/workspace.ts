@@ -1,6 +1,6 @@
 import { cancelMissionInTransaction } from "./mission-cancellation.js";
 import { createHash } from "node:crypto";
-import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
 import type { DatabaseTransaction, Database } from "./client.js";
 import {
   conversationGrants,
@@ -11,6 +11,7 @@ import {
   messages,
   missions,
   missionApprovals,
+  missionHistory,
   projectMembers,
   projectRepositories,
   projects,
@@ -1101,6 +1102,22 @@ export class WorkspaceRepository {
       )).returning();
       if (!notification) throw new WorkspaceAccessError("Notification not found or access denied.");
       return notification;
+    });
+  }
+
+  listMissionHistory(scope: WorkspaceScope, conversationId: string, missionId: string, after = 0) {
+    if (!Number.isSafeInteger(after) || after < 0) throw new WorkspaceAccessError("Invalid history cursor.");
+    return this.database.withOrganization(scope.organizationId, async transaction => {
+      await requireConversationAccess(transaction, scope, conversationId);
+      const [mission] = await transaction.select({ id: missions.id }).from(missions).where(and(
+        eq(missions.organizationId, scope.organizationId), eq(missions.conversationId, conversationId), eq(missions.id, missionId),
+      )).limit(1);
+      if (!mission) throw new WorkspaceAccessError("Mission not found or access denied.");
+      const rows = await transaction.select({ cursor: missionHistory.cursor, entry: missionHistory.entry }).from(missionHistory)
+        .where(and(eq(missionHistory.organizationId, scope.organizationId), eq(missionHistory.missionId, missionId), gt(missionHistory.cursor, after)))
+        .orderBy(asc(missionHistory.cursor)).limit(51);
+      const items = rows.slice(0, 50);
+      return { items, nextCursor: items.at(-1)?.cursor ?? after, hasMore: rows.length > 50 };
     });
   }
 

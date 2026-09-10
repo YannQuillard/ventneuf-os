@@ -1,6 +1,6 @@
 import { MissionPreparationError } from "./orca-runtime.js";
 import { randomUUID } from "node:crypto";
-import type { AgentExecutionSnapshot, RunnerExecutionHarnesses } from "@ventneuf/domain";
+import type { MissionHistoryEntry, AgentExecutionSnapshot, RunnerExecutionHarnesses } from "@ventneuf/domain";
 import type { CredentialStore, StoredDevice } from "./credential-store.js";
 import {
   MissionPausedError,
@@ -31,6 +31,7 @@ export interface MissionReport {
   snapshot?: AgentExecutionSnapshot;
 }
 export interface MissionClient {
+  reportHistory?(device: StoredDevice, missionId: string, entries: MissionHistoryEntry[]): Promise<void>;
   registerRepositories(device: StoredDevice, repositories: Array<{
     id: string;
     name: string;
@@ -69,6 +70,7 @@ export class RunnerMissionWorker {
       const harnesses = await this.options.harnesses?.() ?? {};
       if (this.options.adapter.maintain && this.options.client.getMissionStatus) {
         await this.options.adapter.maintain({
+          history: this.options.client.reportHistory ? (missionId, entries) => this.options.client.reportHistory!(device, missionId, entries) : undefined,
           status: (missionId) => this.options.client.getMissionStatus!(device, missionId),
         });
       }
@@ -156,6 +158,7 @@ export class RunnerMissionWorker {
         }
         controller.signal.throwIfAborted();
         result = await this.options.adapter.execute(mission, repository, controller.signal, {
+          history: this.options.client.reportHistory ? entries => this.options.client.reportHistory!(device, mission.id, entries) : undefined,
           leaseExpiresAt: () => Math.min(deadline, leaseExpiresAt),
           progress: (content) => report("progress", content),
           execution: this.options.client.reportExecution ? async (snapshot) => {

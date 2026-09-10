@@ -1,3 +1,4 @@
+import { isMissionHistoryBatch, type MissionHistoryEntry } from "@ventneuf/domain";
 import { randomBytes } from "node:crypto";
 import type { Express } from "express";
 import { approvalActionCategories, assertAuthorized, claudeModelAliases, isAgentExecutionSnapshot, type AgentExecutionSnapshot } from "@ventneuf/domain";
@@ -124,8 +125,8 @@ export function registerRunnerRoutes(app: Express, verifier: TokenVerifier, runt
     }
   });
 
-  for (const operation of ["repositories", "claim", "report", "renew", "inspect", "execution"] as const) {
-    const path = operation === "report" || operation === "renew" || operation === "inspect" || operation === "execution" ? `/api/runner/missions/:missionId/${operation}`
+  for (const operation of ["repositories", "claim", "report", "renew", "inspect", "execution", "history"] as const) {
+    const path = operation === "report" || operation === "renew" || operation === "inspect" || operation === "execution" || operation === "history" ? `/api/runner/missions/:missionId/${operation}`
       : operation === "claim" ? "/api/runner/missions/claim" : "/api/runner/repositories";
     app.post(path, async (request, response, next) => {
       try {
@@ -159,6 +160,10 @@ export function registerRunnerRoutes(app: Express, verifier: TokenVerifier, runt
         } else if (operation === "inspect") {
           const missionId = z.string().uuid().parse(("missionId" in request.params ? request.params.missionId : undefined));
           response.json(await runtime.runnerMissions.inspect(scope, missionId) ?? {});
+        } else if (operation === "history") {
+          const input = z.object({ entries: z.custom<MissionHistoryEntry[]>(isMissionHistoryBatch) }).strict().parse(request.body);
+          const missionId = z.string().uuid().parse(request.params.missionId);
+          response.json(await runtime.runnerMissions.history(scope, missionId, input.entries));
         } else if (operation === "execution") {
           const input = lease.extend({ snapshot: z.custom<AgentExecutionSnapshot>(isAgentExecutionSnapshot) }).parse(request.body);
           const missionId = z.string().uuid().parse(("missionId" in request.params ? request.params.missionId : undefined));
