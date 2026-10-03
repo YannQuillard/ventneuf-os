@@ -10,6 +10,7 @@ import {
   claudeProcessEnvironment,
   classifyClaudeTool,
   handleClaudeHook,
+  missionBranch,
   renderClaudeStreamEvent,
   superviseClaudeDevelopment,
 } from "../src/claude-supervisor.js";
@@ -67,6 +68,18 @@ function hook(job: DevelopmentJob, toolName: string, input: Record<string, unkno
     tool_use_id: toolUseId,
   };
 }
+
+test("names the mission branch for pull request creation, not its ref file path", () => {
+  const gitCommonDirectory = join(tmpdir(), "repository", ".git");
+  assert.equal(missionBranch({
+    gitCommonDirectory,
+    gitBranchRef: join(gitCommonDirectory, "refs", "heads", "owner", "ventneuf-mission-1"),
+  }), "owner/ventneuf-mission-1");
+  assert.throws(() => missionBranch({
+    gitCommonDirectory,
+    gitBranchRef: join(gitCommonDirectory, "refs", "tags", "release"),
+  }), /outside refs\/heads/);
+});
 
 test("confines Claude tools and exposes only bounded approval evidence", async () => {
   const state = await fixture();
