@@ -3,7 +3,7 @@ import test from "node:test";
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { LeaseRejectedError, RunnerMissionWorker, type MissionClient, type MissionReport } from "../src/mission-worker.js";
+import { describePollingFailure, LeaseRejectedError, RunnerMissionWorker, type MissionClient, type MissionReport } from "../src/mission-worker.js";
 import { addRegisteredRepository, loadRepositories, MissionPausedError, removeLegacyExecutionSettings, RepositoryCheckAdapter } from "../src/repositories.js";
 import { initializeExecutionHarnesses } from "../src/execution-harnesses.js";
 
@@ -135,6 +135,30 @@ test("lost or cancelled lease prevents adapter execution", async () => {
   const state = setup({ reportMission: async () => { throw new LeaseRejectedError(); } });
   await assert.rejects(state.worker.tick(), LeaseRejectedError);
   assert.equal(state.executions(), 0);
+});
+
+test("polling failures log a timestamped cause without credentials or lease tokens", async (t) => {
+  const logged = t.mock.method(console, "error", () => {});
+  const state = setup({ reportMission: async () => {
+    throw new Error(`Rejected Bearer ${device.credential} for lease ${mission.leaseToken}`, {
+      cause: new Error("connect ECONNREFUSED\n127.0.0.1:443 token=other-secret"),
+    });
+  } });
+  const stop = state.worker.start(60_000);
+  try {
+    while (!logged.mock.callCount()) await new Promise((resolve) => setImmediate(resolve));
+  } finally { stop(); }
+  assert.equal(logged.mock.callCount(), 1);
+  const line = String(logged.mock.calls[0]?.arguments[0]);
+  assert.match(line, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z Runner mission polling failed: /);
+  assert.ok(line.endsWith("Rejected Bearer [redacted] for lease [redacted]; cause: connect ECONNREFUSED 127.0.0.1:443 token=[redacted]"));
+  assert.equal(state.executions(), 0);
+
+  const now = new Date("2026-01-02T03:04:05.678Z");
+  assert.equal(describePollingFailure(new SyntaxError(`Unexpected token, "${device.credential}" is not valid JSON`), [], now),
+    "2026-01-02T03:04:05.678Z Runner mission polling failed: Malformed data could not be parsed.");
+  assert.equal(describePollingFailure(device.credential, [""], now),
+    "2026-01-02T03:04:05.678Z Runner mission polling failed: Unknown error.");
 });
 
 test("unregistered repository fails without executing an adapter", async () => {
