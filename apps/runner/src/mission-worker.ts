@@ -2,6 +2,7 @@ import { MissionPreparationError } from "./orca-runtime.js";
 import { randomUUID } from "node:crypto";
 import type { AgentExecutionSnapshot, RunnerExecutionHarnesses } from "@ventneuf/domain";
 import type { CredentialStore, StoredDevice } from "./credential-store.js";
+import { scrubSensitiveText } from "./execution-activity.js";
 import {
   MissionPausedError,
   type AgentApprovalRequest,
@@ -47,9 +48,27 @@ export interface MissionClient {
   getMissionStatus?(device: StoredDevice, missionId: string): Promise<MissionStatus | undefined>;
 }
 
+/**
+ * Describe a polling failure for the runner error log without credentials or lease tokens.
+ * Parser errors quote their input, which may be the stored credential or a leased response.
+ */
+export function describePollingFailure(error: unknown, secrets: readonly string[] = [], now = new Date()) {
+  const [message, cause] = [error, error instanceof Error ? error.cause : undefined]
+    .filter((value): value is Error => value instanceof Error)
+    .map(value => value instanceof SyntaxError ? "Malformed data could not be parsed."
+      : value.message.trim() || (value as NodeJS.ErrnoException).code || value.name);
+  const detail = secrets.filter(Boolean).reduce(
+    (text, secret) => text.replaceAll(secret, "[redacted]"),
+    message ? `${message}${cause ? `; cause: ${cause}` : ""}` : "Unknown error.",
+  );
+  return `${now.toISOString()} Runner mission polling failed: ${scrubSensitiveText(detail).text
+    .replace(/[\u0000-\u001f\u007f]+/g, " ").slice(0, 1_000)}`;
+}
+
 export class RunnerMissionWorker {
   private readonly owner = randomUUID();
   private busy = false;
+  private secrets: string[] = [];
   constructor(private readonly options: {
     client: MissionClient;
     store: CredentialStore;
@@ -65,6 +84,7 @@ export class RunnerMissionWorker {
     try {
       const device = await this.options.store.load();
       if (!device) return;
+      this.secrets = [device.credential];
       const repositories = await this.options.repositories();
       const harnesses = await this.options.harnesses?.() ?? {};
       if (this.options.adapter.maintain && this.options.client.getMissionStatus) {
@@ -77,6 +97,7 @@ export class RunnerMissionWorker {
       }) => ({ id, name, ...(orcaReview ? { orcaReview } : {}), ...(github ? { github } : {}) })), harnesses);
       const mission = await this.options.client.claimMission(device, this.owner);
       if (!mission) return;
+      this.secrets = [device.credential, mission.leaseToken];
       let latestExecution: AgentExecutionSnapshot | undefined;
       const report = async (kind: MissionReport["kind"], content: string) => {
         content = content.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, "");
@@ -197,7 +218,7 @@ export class RunnerMissionWorker {
   }
 
   start(intervalMs = 5_000) {
-    const tick = () => { void this.tick().catch(() => console.error("Runner mission polling failed.")); };
+    const tick = () => { void this.tick().catch((error: unknown) => console.error(describePollingFailure(error, this.secrets))); };
     tick();
     const timer = setInterval(tick, intervalMs);
     timer.unref();
