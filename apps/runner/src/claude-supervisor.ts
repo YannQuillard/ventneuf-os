@@ -174,6 +174,12 @@ async function readMissionRemote(job: DevelopmentJob, signal: AbortSignal) {
   return fetch;
 }
 
+export function missionBranch(job: Pick<DevelopmentJob, "gitCommonDirectory" | "gitBranchRef">) {
+  const reference = relative(job.gitCommonDirectory, job.gitBranchRef).split(sep).join("/");
+  if (!reference.startsWith("refs/heads/")) throw new Error("The mission branch reference is outside refs/heads.");
+  return reference.slice("refs/heads/".length);
+}
+
 async function ghExecutable() {
   for (const candidate of ["/opt/homebrew/bin/gh", "/usr/local/bin/gh", "/usr/bin/gh"]) {
     try { return await realpath(candidate); } catch { /* Try the next trusted installation path. */ }
@@ -302,7 +308,7 @@ async function prepareApprovedOperation(
       return succeeded;
     }
     const ghPath = await ghExecutable();
-    const branch = job.gitBranchRef.replace(/^refs\/heads\//, "");
+    const branch = missionBranch(job);
     const draft = /\s+--draft$/i.test(command);
     const { stdout } = await execute(ghPath, ["pr", "create", "--fill", ...(draft ? ["--draft"] : []),
       "--repo", `${remote.host}/${remote.repository}`, "--head", branch], {
