@@ -48,13 +48,10 @@ export interface MissionClient {
   getMissionStatus?(device: StoredDevice, missionId: string): Promise<MissionStatus | undefined>;
 }
 
-/**
- * Describe a polling failure for the runner error log without credentials or lease tokens.
- * Parser errors quote their input, which may be the stored credential or a leased response.
- */
 export function describePollingFailure(error: unknown, secrets: readonly string[] = [], now = new Date()) {
   const [message, cause] = [error, error instanceof Error ? error.cause : undefined]
     .filter((value): value is Error => value instanceof Error)
+    // A parser error quotes its input, which may be the stored credential or a claim response.
     .map(value => value instanceof SyntaxError ? "Malformed data could not be parsed."
       : value.message.trim() || (value as NodeJS.ErrnoException).code || value.name);
   const detail = secrets.filter(Boolean).reduce(
