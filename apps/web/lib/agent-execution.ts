@@ -14,7 +14,6 @@ export interface AgentExecution {
   canManage?: boolean;
 }
 
-/** A snapshot item enriched with the time its saved history first observed it. */
 export interface TimelineItem extends AgentExecutionItem { occurredAt?: string }
 
 export interface ExecutionNode<Item extends AgentExecutionItem = AgentExecutionItem> { item: Item; children: ExecutionNode<Item>[] }
@@ -67,7 +66,7 @@ function reconcile(item: AgentExecutionItem, record: SavedItem | undefined, snap
     : { ...item, occurredAt: saved.occurredAt };
 }
 
-/** Saved history supplies evicted activity; the live snapshot stays authoritative for what it still holds. */
+// Saved history supplies evicted activity; the live snapshot stays authoritative for what it still holds.
 export function mergeExecutionTimeline(history: MissionHistoryEntry[], snapshot: AgentExecutionSnapshot | null): TimelineItem[] {
   const saved = savedItems(history);
   const live = snapshot?.items ?? [];
@@ -88,7 +87,7 @@ export type TimelineEntry =
   | { kind: "node"; node: ExecutionNode<TimelineItem> }
   | { kind: "approval"; approval: MissionApproval };
 
-/** Approvals slot in by time among dated activity; activity only known from the live snapshot stays last. */
+// Approvals slot in by time among dated activity; activity only known from the live snapshot stays last.
 export function interleaveApprovals(nodes: ExecutionNode<TimelineItem>[], approvals: MissionApproval[]): TimelineEntry[] {
   const dated = nodes.filter((node) => node.item.occurredAt);
   const live = nodes.filter((node) => !node.item.occurredAt);
@@ -128,7 +127,6 @@ export function actionCategory(item: AgentExecutionItem): ActionCategory {
   return toolCategories[item.label.split(/\s/)[0]?.toLowerCase() ?? ""] ?? "ran";
 }
 
-/** One readable line for a run of actions, in the spirit of "Read 3 files, ran 2 commands". */
 export function summarizeActions(items: AgentExecutionItem[]): string {
   const counts = items.reduce<Partial<Record<ActionCategory, number>>>((totals, item) => {
     const category = actionCategory(item);
@@ -140,7 +138,6 @@ export function summarizeActions(items: AgentExecutionItem[]): string {
     .join(", ");
 }
 
-/** Bare tool names read better with their argument: "Read" becomes "Read apps/web/app/page.tsx". */
 export function actionTitle(item: AgentExecutionItem): string {
   const label = item.label || item.kind;
   if (/\s/.test(label)) return label;

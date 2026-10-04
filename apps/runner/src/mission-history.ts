@@ -15,7 +15,7 @@ function isMissionHistoryBatch(value: unknown): value is MissionHistoryEntry[] {
       && entry.item.text.length <= historyTextLimit);
 }
 
-/** Immutable local batches survive supervisor restarts and ambiguous upload responses. */
+// Immutable local batches survive supervisor restarts and ambiguous upload responses.
 export function historySpool(directory: string) {
   const root = join(directory, "history-pending");
   let writing = Promise.resolve();

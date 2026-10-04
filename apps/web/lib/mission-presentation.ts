@@ -20,7 +20,6 @@ export interface ApprovalPresentation {
 
 const outcomeNote = "This records the authority decision. Whether the action then succeeded is visible in the mission session.";
 
-/** Hermes review, the member's decision and the outcome of the action are separate states. */
 export function approvalPresentation(approval: Pick<MissionApproval, "status" | "route" | "canDecide">): ApprovalPresentation {
   const decider = approval.route === "hermes" ? "Hermes" : approval.route === "automatic" ? "policy" : "the mission initiator";
   const route = approval.route === "human" ? "Escalated by Hermes to the mission initiator"
@@ -49,7 +48,6 @@ export function approvalPresentation(approval: Pick<MissionApproval, "status" | 
 
 export interface MissionNow { dot: "success" | "warning" | "error" | "accent" | "neutral"; isPulsing: boolean; label: string; detail?: string }
 
-/** One line that answers "what is happening now, and do I need to act" for a remote member. */
 export function missionNow(input: {
   status: MissionState["status"]; approvals: MissionApproval[]; current?: { label: string }; isStale: boolean; result?: string; failure?: string;
 }): MissionNow {

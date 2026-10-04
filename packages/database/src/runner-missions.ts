@@ -246,7 +246,7 @@ export class RunnerMissionRepository {
     });
   }
 
-  /** Assigned devices may finish uploading diagnostics after execution ends. This grants no execution authority. */
+  // Assigned devices may finish uploading diagnostics after execution ends. This grants no execution authority.
   history(scope: DeviceScope, missionId: string, entries: MissionHistoryEntry[]) {
     if (!isMissionHistoryBatch(entries)) throw new RunnerLeaseError("Invalid history batch.");
     return this.database.withOrganization(scope.organizationId, async transaction => {

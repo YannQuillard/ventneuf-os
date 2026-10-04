@@ -43,7 +43,7 @@ export function isAgentExecutionSnapshot(value: unknown): value is AgentExecutio
     && new TextEncoder().encode(JSON.stringify(v)).length <= executionSnapshotMaxBytes;
 }
 
-/** Durable observable activity. Provider reasoning and configuration are never recorded. */
+// Durable observable activity. Provider reasoning and configuration are never recorded.
 export interface MissionHistoryEntry {
   id: string;
   provider: "codex" | "claude";

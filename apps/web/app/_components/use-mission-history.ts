@@ -13,7 +13,6 @@ export interface MissionHistoryState {
   retry(): void;
 }
 
-/** Saved activity is read forward from the first record so the timeline starts at the beginning of the mission. */
 export function useMissionHistory(conversationId: string | undefined, missionId: string, isActive: boolean): MissionHistoryState {
   const [entries, setEntries] = useState<MissionHistoryEntry[]>([]);
   const [status, setStatus] = useState<MissionHistoryState["status"]>(conversationId ? "loading" : "ready");

@@ -32,7 +32,6 @@ function Details({ approval, onAskHermes, isPending, trigger }: { approval: Miss
   </Collapsible>;
 }
 
-/** Hermes review and recorded decisions are one line each; only a decision that waits for a member gets a card. */
 export function MissionApprovalRequest({ approval, onDecided, onAskHermes }: {
   approval: MissionApproval;
   onDecided: () => Promise<void>;

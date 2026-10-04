@@ -49,7 +49,6 @@ function Row({ node, missionStatus, onToggle, isSelected }: { node: Node; missio
 
 interface Segment { key: string; rows: Node[]; detail?: ReactNode }
 
-/** Details render after their row rather than inside it, so the row itself stays one line. */
 function Rows({ nodes, missionStatus, detail, expandedId, onToggle }: {
   nodes: Node[]; missionStatus: Status; detail(node: Node): ReactNode; expandedId?: string; onToggle?(id: string): void;
 }) {
@@ -70,14 +69,12 @@ function Rows({ nodes, missionStatus, detail, expandedId, onToggle }: {
   </VStack>;
 }
 
-/** Subagent steps are read-only; failed steps show their output because they explain the parent outcome. */
 function NestedSteps({ nodes, missionStatus }: { nodes: Node[]; missionStatus: Status }) {
   return <Rows nodes={nodes} missionStatus={missionStatus} detail={(node) => node.item.status === "failed" && node.item.text
     ? <VStack gap={2}><Output item={node.item} />{node.children.length ? <NestedSteps nodes={node.children} missionStatus={missionStatus} /> : null}</VStack>
     : node.children.length ? <NestedSteps nodes={node.children} missionStatus={missionStatus} /> : null} />;
 }
 
-/** Failed and running steps stay visible; everything else folds into one summary line. */
 function ActionGroup({ nodes, missionStatus }: { nodes: Node[]; missionStatus: Status }) {
   const [expandedId, setExpandedId] = useState<string>();
   const toggle = (id: string) => setExpandedId((current) => current === id ? undefined : id);
@@ -104,7 +101,6 @@ function MessageBlock({ item }: { item: TimelineItem }) {
 
 interface Group { id: string; message?: Node; approval?: MissionApproval; actions: Node[] }
 
-/** Consecutive actions form one group; messages and approvals break it so the narrative stays readable. */
 function groupTimeline(entries: TimelineEntry[]): Group[] {
   return entries.reduce<Group[]>((groups, entry) => {
     if (entry.kind === "approval") return [...groups, { id: entry.approval.id, approval: entry.approval, actions: [] }];
@@ -125,7 +121,6 @@ function HistoryNotice({ history }: { history: MissionHistoryState }) {
   return null;
 }
 
-/** On a phone the timeline scrolls like a chat, so pending decisions sit at its end, where the agent is blocked. */
 export function MissionSession({ items, approvals, renderApproval, missionStatus, history, trailing, footer }: {
   items: TimelineItem[]; approvals: MissionApproval[]; renderApproval(approval: MissionApproval): ReactNode;
   missionStatus: Status; history: MissionHistoryState; trailing?: ReactNode; footer?: ReactNode;
