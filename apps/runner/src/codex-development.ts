@@ -369,15 +369,31 @@ export class AgentDevelopmentAdapter implements MissionAdapter {
     console.error(`${new Date().toISOString()} ${failure}`);
   }
 
+  private async closeTerminal(handle: string) {
+    try { await this.orca(["terminal", "close", "--terminal", handle, "--tab"]); }
+    catch (error) {
+      if (!(error instanceof OrcaRequestError) || !["selector_not_found", "terminal_not_found"].includes(error.code)) throw error;
+    }
+  }
+
+  private async closeMissionTerminals(state: DevelopmentOrcaState) {
+    if (!state.terminalHandle) return;
+    try { return await this.closeTerminal(state.terminalHandle); }
+    catch (error) {
+      if (!(error instanceof OrcaRequestError) || error.code !== "terminal_handle_stale") throw error;
+    }
+    // Orca reissues terminal handles when its runtime restarts, so the recorded one no longer closes anything.
+    const { terminals } = await this.orca(["terminal", "list", "--worktree", `id:${state.worktreeId}`]) as { terminals?: { handle?: unknown }[] };
+    for (const terminal of terminals ?? []) {
+      if (typeof terminal.handle === "string") await this.closeTerminal(terminal.handle);
+    }
+  }
+
   private async clean(directory: string, state: DevelopmentOrcaState, requireClean: boolean) {
-    if (state.terminalHandle) {
-      try { await this.orca(["terminal", "close", "--terminal", state.terminalHandle, "--tab"]); }
-      catch (error) {
-        if (!(error instanceof OrcaRequestError) || !["selector_not_found", "terminal_not_found"].includes(error.code)) {
-          this.reportCleanupFailure(state.missionId, error);
-          return false;
-        }
-      }
+    try { await this.closeMissionTerminals(state); }
+    catch (error) {
+      this.reportCleanupFailure(state.missionId, error);
+      return false;
     }
     const heartbeat = await readJsonIfPresent<SupervisorHeartbeat>(join(directory, "supervisor.json"));
     if (heartbeat?.updatedAt && Date.parse(heartbeat.updatedAt) > Date.now() - 5_000) return false;
