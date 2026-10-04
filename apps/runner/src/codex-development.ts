@@ -1,7 +1,7 @@
 import { archiveMissionWorkspace, pruneMissionArchives } from "./mission-archive.js";
 import { ensureOrcaRuntime, orcaRuntimeIsReady, OrcaRequestError, prepareOrcaRepository, requestOrca } from "./orca-runtime.js";
 import { execFile } from "node:child_process";
-import { publishExecution } from "./execution-activity.js";
+import { publishExecution, scrubSensitiveText } from "./execution-activity.js";
 import { mkdir, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -106,9 +106,18 @@ async function readJsonIfPresent<T>(path: string): Promise<T | undefined> {
   }
 }
 
+function describeCleanupFailure(missionId: string, error: unknown, privatePaths: readonly string[] = []) {
+  const detail = error instanceof Error
+    ? error.message.trim() || (error as NodeJS.ErrnoException).code || error.name
+    : "Unknown error.";
+  return `Runner mission ${missionId} cleanup failed: ${scrubSensitiveText(detail, privatePaths).text
+    .replace(/[\u0000-\u001f\u007f]+/g, " ").slice(0, 1_000)}`;
+}
+
 export class AgentDevelopmentAdapter implements MissionAdapter {
   private readonly root: string;
   private readonly retentionMs: number;
+  private readonly cleanupFailures = new Map<string, string>();
   private maintenanceOffset = 0;
 
   constructor(private readonly options: {
@@ -352,11 +361,22 @@ export class AgentDevelopmentAdapter implements MissionAdapter {
     } catch { return false; }
   }
 
+  private reportCleanupFailure(missionId: string, error: unknown) {
+    const failure = describeCleanupFailure(missionId, error, [homedir()]);
+    // Maintenance retries every poll, so a repeated failure is logged once.
+    if (this.cleanupFailures.get(missionId) === failure) return;
+    this.cleanupFailures.set(missionId, failure);
+    console.error(`${new Date().toISOString()} ${failure}`);
+  }
+
   private async clean(directory: string, state: DevelopmentOrcaState, requireClean: boolean) {
     if (state.terminalHandle) {
       try { await this.orca(["terminal", "close", "--terminal", state.terminalHandle, "--tab"]); }
       catch (error) {
-        if (!(error instanceof OrcaRequestError) || !["selector_not_found", "terminal_not_found"].includes(error.code)) return false;
+        if (!(error instanceof OrcaRequestError) || !["selector_not_found", "terminal_not_found"].includes(error.code)) {
+          this.reportCleanupFailure(state.missionId, error);
+          return false;
+        }
       }
     }
     const heartbeat = await readJsonIfPresent<SupervisorHeartbeat>(join(directory, "supervisor.json"));
@@ -377,6 +397,7 @@ export class AgentDevelopmentAdapter implements MissionAdapter {
       await this.orca(["worktree", "rm", "--worktree", `id:${state.worktreeId}`]);
     }
     await rm(directory, { recursive: true, force: true });
+    this.cleanupFailures.delete(state.missionId);
     return true;
   }
 
@@ -432,10 +453,10 @@ export class AgentDevelopmentAdapter implements MissionAdapter {
         if (!failure?.observedAt) {
           await writeReviewState(failurePath, { observedAt: new Date().toISOString() });
         } else if (Date.parse(failure.observedAt) + this.retentionMs <= Date.now()) {
-          await this.clean(directory, state, false).catch(() => undefined);
+          await this.clean(directory, state, false).catch((error: unknown) => this.reportCleanupFailure(entry.name, error));
         }
       } else if (cloud === "cancelled" || cloud === "completed") {
-        await this.clean(directory, state, false).catch(() => undefined);
+        await this.clean(directory, state, false).catch((error: unknown) => this.reportCleanupFailure(entry.name, error));
       }
     }
   }

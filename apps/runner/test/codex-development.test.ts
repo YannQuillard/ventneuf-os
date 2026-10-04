@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
@@ -10,6 +10,7 @@ import {
   CodexDevelopmentAdapter,
   developmentOrcaRequestTimeoutMs,
 } from "../src/codex-development.js";
+import { OrcaRequestError } from "../src/orca-runtime.js";
 import { writeReviewState } from "../src/review-supervisor.js";
 
 const execute = promisify(execFile);
@@ -86,6 +87,52 @@ test("development cleanup does not start Orca while it is stopped", async () => 
     await adapter.maintain({ status: async () => "completed" });
     assert.equal(starts, 0);
     assert.equal(requests, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("failed development cleanup is logged once per reason and retains the mission", async (context) => {
+  const root = await mkdtemp(join(tmpdir(), "codex-development-cleanup-"));
+  const missionId = "00000000-0000-4000-8000-000000000099";
+  const directory = join(root, missionId);
+  const logged = context.mock.method(console, "error", () => undefined);
+  let terminalFails = true;
+  class MaintenanceAdapter extends CodexDevelopmentAdapter {
+    protected override async runtimeIsReady(_signal: AbortSignal) { return true; }
+    protected override async orca(args: string[]): Promise<Record<string, unknown>> {
+      if (args[0] === "terminal" && terminalFails) {
+        throw new Error(`Terminal close failed in ${join(homedir(), "workspace")} with token=private-value\nretrying`);
+      }
+      if (args[0] === "worktree") throw new OrcaRequestError("runtime_unavailable");
+      return {};
+    }
+  }
+  try {
+    await mkdir(directory, { recursive: true });
+    await writeReviewState(join(directory, "orca.json"), {
+      missionId,
+      repositoryId: "sample",
+      worktreeId: "owned-worktree",
+      worktreePath: join(root, "owned-worktree"),
+      terminalHandle: "term_00000000-0000-4000-8000-000000000001",
+      createdAt: new Date().toISOString(),
+    });
+    const adapter = new MaintenanceAdapter({
+      orcaPath: "/unused",
+      codexPath: "/unused",
+      stateDirectory: root,
+    });
+    await adapter.maintain({ status: async () => "cancelled" });
+    await adapter.maintain({ status: async () => "cancelled" });
+    terminalFails = false;
+    await adapter.maintain({ status: async () => "completed" });
+    const lines = logged.mock.calls.map((call) => String(call.arguments[0]));
+    assert.equal(lines.length, 2);
+    assert.match(lines[0]!, new RegExp(`^\\d{4}-\\d{2}-\\d{2}T[\\d:.]+Z Runner mission ${missionId} cleanup failed: `
+      + "Terminal close failed in \\[private path\\]/workspace with token=\\[redacted\\] retrying$"));
+    assert.match(lines[1]!, new RegExp(`Z Runner mission ${missionId} cleanup failed: Orca request failed \\(runtime_unavailable\\)\\.$`));
+    assert.equal(JSON.parse(await readFile(join(directory, "orca.json"), "utf8")).missionId, missionId);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
