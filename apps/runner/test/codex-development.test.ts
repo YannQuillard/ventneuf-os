@@ -183,6 +183,40 @@ test("development cleanup closes the reissued terminals when the recorded handle
   }
 });
 
+test("development cleanup finishes when Orca no longer knows a worktree that is already gone", async (context) => {
+  const root = await mkdtemp(join(tmpdir(), "codex-development-forgotten-worktree-"));
+  const missionId = "00000000-0000-4000-8000-000000000099";
+  const directory = join(root, missionId);
+  const logged = context.mock.method(console, "error", () => undefined);
+  class MaintenanceAdapter extends CodexDevelopmentAdapter {
+    protected override async runtimeIsReady(_signal: AbortSignal) { return true; }
+    protected override async orca(args: string[]): Promise<Record<string, unknown>> {
+      if (args[0] === "worktree") throw new OrcaRequestError("selector_not_found");
+      return {};
+    }
+  }
+  try {
+    await mkdir(directory, { recursive: true });
+    await writeReviewState(join(directory, "orca.json"), {
+      missionId,
+      repositoryId: "sample",
+      worktreeId: "owned-worktree",
+      worktreePath: join(root, "owned-worktree"),
+      createdAt: new Date().toISOString(),
+    });
+    const adapter = new MaintenanceAdapter({
+      orcaPath: "/unused",
+      codexPath: "/unused",
+      stateDirectory: root,
+    });
+    await adapter.maintain({ status: async () => "completed" });
+    assert.equal(logged.mock.calls.length, 0);
+    await assert.rejects(stat(directory), { code: "ENOENT" });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("worktree creation outlives the ordinary Orca request timeout", () => {
   assert.equal(developmentOrcaRequestTimeoutMs(["repo", "show"]), 20_000);
   assert.equal(developmentOrcaRequestTimeoutMs(["terminal", "create"]), 20_000);
