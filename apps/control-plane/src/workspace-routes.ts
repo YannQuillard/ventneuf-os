@@ -59,6 +59,10 @@ export function registerWorkspaceRoutes(app: Express, authenticate: Authenticate
     ]);
     response.json({ projects, conversations, members, notifications, currentMember });
   }));
+  app.get("/api/workspace/conversations/:conversationId/missions/:missionId/history", route(async (request, response, context, services) => {
+    const after = z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(0).parse(request.query.after);
+    response.json(await services.workspace!.listMissionHistory(scope(context), id.parse(request.params.conversationId), id.parse(request.params.missionId), after));
+  }));
   app.get("/api/workspace/memory", route(async (request, response, context, services) => {
     if (!services.memory?.listMemory) return void response.status(503).json({ error: "memory_unavailable" });
     const conversationId = request.query.conversationId === undefined ? undefined : id.parse(request.query.conversationId);

@@ -7,6 +7,7 @@ type Method = "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
 const allowedRoutes: Array<{ method: Method; pattern: RegExp }> = [
   { method: "GET", pattern: /^$/ },
   { method: "GET", pattern: /^members$/ },
+  { method: "GET", pattern: /^conversations\/[^/]+\/missions\/[^/]+\/history$/ },
   { method: "PATCH", pattern: /^me$/ },
   { method: "GET", pattern: /^memory$/ },
   { method: "GET", pattern: /^memory\/[^/]+$/ },
@@ -46,6 +47,10 @@ async function forward(request: NextRequest, context: { params: Promise<{ path?:
     ? request.nextUrl.searchParams.get("conversationId")
     : null;
   const upstreamPath = `/api/workspace${path ? `/${path}` : ""}${scopeConversationId ? `?conversationId=${encodeURIComponent(scopeConversationId)}` : ""}`;
+  if (method === "GET" && /\/history$/.test(path)) {
+    const after = request.nextUrl.searchParams.get("after") ?? "0";
+    return proxyControlPlane(`${upstreamPath}?after=${encodeURIComponent(after)}`, "GET");
+  }
   if (method === "GET" && /\/events$/.test(path)) return streamControlPlane(upstreamPath);
   return proxyControlPlane(upstreamPath, method, method === "GET" ? undefined : request);
 }

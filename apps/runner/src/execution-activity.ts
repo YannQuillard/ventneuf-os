@@ -1,4 +1,6 @@
-import type { AgentExecutionItem, AgentExecutionSnapshot } from "@ventneuf/domain";
+import { randomUUID } from "node:crypto";
+import { historySpool, uploadHistory, historyTextLimit } from "./mission-history.js";
+import type { MissionHistoryEntry, AgentExecutionItem, AgentExecutionSnapshot } from "@ventneuf/domain";
 import { readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -35,7 +37,7 @@ export function scrubSensitiveText(value: string, privatePaths: readonly string[
     redacted = true;
     return `${prefix}[redacted]`;
   });
-  text = text.replace(/(https?:\/\/[^/\s:@]+:)[^@\s]+@/gi, (_match, prefix: string) => {
+  text = text.replace(/((?:https?|postgres(?:ql)?|mysql|redis(?:s)?):\/\/[^/\s:@]+:)[^@\s]+@/gi, (_match, prefix: string) => {
     redacted = true;
     return `${prefix}[redacted]@`;
   });
@@ -67,6 +69,14 @@ export function scrubSensitiveText(value: string, privatePaths: readonly string[
       return `${prefix}[redacted]`;
     },
   );
+  text = text.replace(/-----BEGIN (?:[A-Z ]*PRIVATE KEY)-----[\s\S]*?-----END (?:[A-Z ]*PRIVATE KEY)-----/g, () => {
+    redacted = true;
+    return "[redacted private key]";
+  });
+  text = text.replace(/\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-ant-[A-Za-z0-9_-]{20,})\b/g, () => {
+    redacted = true;
+    return "[redacted credential]";
+  });
   return { text, redacted };
 }
 
@@ -79,6 +89,28 @@ function content(value: unknown): string {
 /** Only displayable fields are projected; provider configuration and auth events are excluded. */
 export class ExecutionActivity {
   private readonly items = new Map<string, AgentExecutionItem>();
+  private readonly streamedHistory = new Map<string, AgentExecutionItem>();
+  private readonly dirtyHistory = new Set<string>();
+  private lastHistoryCheckpoint = 0;
+  private history?: (entry: MissionHistoryEntry) => void;
+  checkpointHistory(force = false) {
+    if (!force && Date.now() - this.lastHistoryCheckpoint < 10_000) return;
+    for (const id of this.dirtyHistory) {
+      const item = this.streamedHistory.get(id);
+      if (item) this.saveHistory(item);
+    }
+    this.dirtyHistory.clear();
+    this.lastHistoryCheckpoint = Date.now();
+  }
+  private saveHistory(item: AgentExecutionItem) {
+    const text = this.display(item.text);
+    this.history?.({ id: randomUUID(), provider: this.provider, sessionId: this.rootThreadId,
+      occurredAt: new Date().toISOString(), item: { ...item, id: item.id.slice(0, 400), threadId: item.threadId.slice(0, 200),
+        label: this.display(item.label).slice(0, 200), text: Buffer.from(text).subarray(0, historyTextLimit).toString("utf8"),
+        ...(Buffer.byteLength(text) > historyTextLimit ? { truncated: true } : {}),
+      } });
+  }
+  recordHistory(send: (entry: MissionHistoryEntry) => void) { this.history = send; }
   private revision = 0;
   private omittedItems = 0;
   private updatedAt = new Date().toISOString();
@@ -110,6 +142,20 @@ export class ExecutionActivity {
       label: this.display(item.label).slice(0, 200), text: text.slice(-4_000),
       ...((text.length > 4_000 || (append && previous?.truncated)) ? { truncated: true } : {}),
     });
+    if (append) {
+      const previousStream = this.streamedHistory.get(item.id);
+      const accumulated = (previousStream?.text ?? "") + item.text;
+      const streamed = { ...item, text: accumulated.slice(0, historyTextLimit),
+        ...(accumulated.length > historyTextLimit || previousStream?.truncated ? { truncated: true } : {}) };
+      this.streamedHistory.set(item.id, streamed);
+      // The first chunk is saved at once so streamed items keep their observed position in the history.
+      if (previousStream) this.dirtyHistory.add(item.id);
+      else this.saveHistory(streamed);
+    } else {
+      this.streamedHistory.delete(item.id);
+      this.dirtyHistory.delete(item.id);
+      this.saveHistory({ ...item, text });
+    }
     this.revision += 1;
     this.updatedAt = new Date().toISOString();
   }
@@ -250,10 +296,14 @@ export async function executionRecorder(directory: string, activity: ExecutionAc
   const path = join(directory, "execution.json");
   try { activity.restore(JSON.parse(await readFile(path, "utf8")) as AgentExecutionSnapshot); }
   catch { /* A new mission has no previous snapshot. */ }
+  const spool = historySpool(directory);
+  activity.recordHistory(entry => spool.append(entry));
   let written = activity.snapshot().revision;
   let writing = Promise.resolve();
   const flush = () => {
     writing = writing.catch(() => undefined).then(async () => {
+      activity.checkpointHistory();
+      await spool.flush();
       const snapshot = activity.snapshot();
       if (snapshot.revision <= written) return;
       await writeReviewState(path, snapshot);
@@ -263,24 +313,28 @@ export async function executionRecorder(directory: string, activity: ExecutionAc
   };
   const timer = setInterval(() => { void flush().catch(() => undefined); }, 500);
   timer.unref();
-  return { flush, close: async () => { clearInterval(timer); await flush().catch(() => undefined); } };
+  return { flush, close: async () => { clearInterval(timer); activity.checkpointHistory(true); await flush().catch(() => undefined); } };
 }
 
-export function publishExecution(directory: string, send?: (snapshot: AgentExecutionSnapshot) => Promise<void>) {
+export function publishExecution(directory: string, send?: (snapshot: AgentExecutionSnapshot) => Promise<void>, history?: (entries: MissionHistoryEntry[]) => Promise<void>) {
   let revision = 0;
   let inFlight: Promise<void> | undefined;
   const flush = async (): Promise<void> => {
     await inFlight;
-    if (!send) return;
+    if (!send && !history) return;
     if (inFlight) return inFlight;
-    inFlight = (async () => {
+    inFlight = Promise.all([
+      history ? uploadHistory(directory, history).catch(() => undefined) : Promise.resolve(),
+      (async () => {
+      if (!send) return;
       const path = join(directory, "execution.json");
       if ((await stat(path)).size > 48_000) return;
       const snapshot = JSON.parse(await readFile(path, "utf8")) as AgentExecutionSnapshot;
       if (snapshot.revision <= revision) return;
       await send(snapshot);
       revision = snapshot.revision;
-    })().catch(() => { /* Retry the latest snapshot; telemetry must not interrupt native execution. */ })
+    })(),
+    ]).then(() => undefined).catch(() => { /* Retry the latest snapshot; telemetry must not interrupt native execution. */ })
       .finally(() => { inFlight = undefined; });
     return inFlight;
   };

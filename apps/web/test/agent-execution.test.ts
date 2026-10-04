@@ -1,19 +1,105 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { AgentExecutionItem } from "@ventneuf/domain";
-import { executionItemStatus, executionTree } from "../lib/agent-execution";
+import type { AgentExecutionItem, AgentExecutionSnapshot, MissionHistoryEntry } from "@ventneuf/domain";
+import { actionTitle, countNodes, executionItemStatus, executionTree, hasFailure, interleaveApprovals, mergeExecutionTimeline, summarizeActions } from "../lib/agent-execution";
+import { approvalPresentation, missionNow } from "../lib/mission-presentation";
+import type { MissionApproval } from "../lib/conversations";
 
-const item = (id: string, parentId?: string): AgentExecutionItem => ({ id, parentId, threadId: "thread", kind: "tool",
-  label: id, status: "running", text: "Output" });
+const item = (id: string, parentId?: string, extra: Partial<AgentExecutionItem> = {}): AgentExecutionItem => ({ id, parentId, threadId: "thread", kind: "tool",
+  label: id, status: "running", text: "Output", ...extra });
+
+const entry = (occurredAt: string, value: AgentExecutionItem): MissionHistoryEntry => ({
+  id: `${value.id}-${occurredAt}`, provider: "claude", sessionId: "thread", occurredAt, item: value,
+});
+
+const snapshot = (items: AgentExecutionItem[], updatedAt = "2026-09-10T10:00:30.000Z"): AgentExecutionSnapshot => ({
+  version: 1, provider: "claude", revision: 3, updatedAt, rootThreadId: "thread", omittedItems: 0, items,
+});
 
 test("execution tree retains child order and exposes missing or cyclic parents", () => {
   const tree = executionTree([item("root"), item("first", "root"), item("second", "root"), item("orphan", "missing"), item("a", "b"), item("b", "a")]);
   assert.deepEqual(tree.map(({ item }) => item.id), ["root", "orphan", "a", "b"]);
   assert.deepEqual(tree[0]?.children.map(({ item }) => item.id), ["first", "second"]);
+  assert.equal(countNodes(tree[0]!), 2);
 });
 
 test("terminal mission states never present unfinished native tools as still running or successfully completed", () => {
   assert.equal(executionItemStatus(item("tool"), "cancelled"), "Interrupted");
   assert.equal(executionItemStatus(item("tool"), "waiting_for_approval"), "Waiting");
   assert.equal(executionItemStatus(item("tool"), "completed"), "No completion event");
+});
+
+test("the timeline places evicted history before the live snapshot and keeps the first observation time", () => {
+  const history = [
+    entry("2026-09-10T10:00:00.000Z", item("old", undefined, { status: "completed" })),
+    entry("2026-09-10T10:00:05.000Z", item("stream", undefined, { text: "Read" })),
+    entry("2026-09-10T10:00:15.000Z", item("stream", undefined, { text: "Reading the tests", status: "completed" })),
+  ];
+  const timeline = mergeExecutionTimeline(history, snapshot([item("stream", undefined, { text: "the tests", status: "completed", truncated: true }), item("new")]));
+  assert.deepEqual(timeline.map(({ id }) => id), ["old", "stream", "new"]);
+  assert.equal(timeline[1]?.occurredAt, "2026-09-10T10:00:05.000Z");
+  assert.equal(timeline[1]?.text, "Reading the tests");
+  assert.equal(timeline[1]?.truncated, undefined);
+  assert.equal(timeline[2]?.occurredAt, undefined);
+});
+
+test("a running snapshot item shows its live tail, and history newer than the snapshot wins", () => {
+  const live = mergeExecutionTimeline([entry("2026-09-10T10:00:00.000Z", item("stream", undefined, { text: "Old long saved text" }))],
+    snapshot([item("stream", undefined, { text: "tail" })]));
+  assert.equal(live[0]?.text, "tail");
+  const newer = mergeExecutionTimeline([entry("2026-09-10T10:01:00.000Z", item("tool", undefined, { status: "failed", text: "exit 1" }))],
+    snapshot([item("tool")]));
+  assert.equal(newer[0]?.status, "failed");
+  assert.equal(newer[0]?.text, "exit 1");
+});
+
+test("issues cover failed steps nested under a subagent", () => {
+  const [agent] = executionTree([item("agent", undefined, { kind: "agent", status: "completed" }), item("step", "agent", { status: "failed" })]);
+  assert.equal(hasFailure(agent!), true);
+  assert.equal(hasFailure(executionTree([item("ok", undefined, { status: "completed" })])[0]!), false);
+});
+
+const approval = (overrides: Partial<MissionApproval>): MissionApproval => ({
+  id: "approval", missionId: "mission", action: { category: "git", target: "main", argumentsDigest: "d", summary: "Push", expectedEffect: "Pushes" },
+  reason: "Needed", evidence: {}, route: "hermes", status: "pending", expiresAt: "2026-09-10T11:00:00.000Z", createdAt: "2026-09-10T10:00:00.000Z", ...overrides,
+});
+
+test("approval presentation separates Hermes review, the member's decision and the recorded outcome", () => {
+  assert.equal(approvalPresentation(approval({})).isReviewing, true);
+  assert.equal(approvalPresentation(approval({ route: "human", canDecide: true })).isActionable, true);
+  assert.equal(approvalPresentation(approval({ route: "human", canDecide: false })).heading, "Waiting for the mission initiator");
+  assert.equal(approvalPresentation(approval({ status: "approved" })).heading, "Approved by Hermes");
+  assert.equal(approvalPresentation(approval({ status: "rejected", route: "human" })).status, "error");
+  assert.equal(approvalPresentation(approval({ status: "expired" })).isActionable, false);
+});
+
+test("the now line names who must act before anything else", () => {
+  const base = { status: "running" as const, isStale: false, approvals: [] };
+  assert.equal(missionNow({ ...base, approvals: [approval({}), approval({ route: "human", canDecide: true })] }).label, "Needs your decision");
+  assert.equal(missionNow({ ...base, approvals: [approval({})] }).label, "Hermes is reviewing");
+  assert.equal(missionNow({ ...base, current: { label: "npm test" } }).detail, "npm test");
+  assert.equal(missionNow({ ...base, isStale: true }).label, "No recent activity");
+  assert.equal(missionNow({ ...base, status: "completed", result: "Opened PR #12\nDetails" }).detail, "Opened PR #12");
+  assert.equal(missionNow({ ...base, status: "failed", failure: "Lease lost" }).detail, "Lease lost");
+  assert.equal(missionNow({ ...base, status: "cancelled", approvals: [approval({ route: "human", canDecide: true })] }).label, "Cancelled");
+});
+
+test("approvals slot into the timeline by time and live-only activity stays last", () => {
+  const nodes = executionTree([
+    { ...item("a", undefined, { status: "completed" }), occurredAt: "2026-09-10T10:00:00.000Z" },
+    { ...item("b", undefined, { status: "completed" }), occurredAt: "2026-09-10T10:05:00.000Z" },
+    item("live"),
+  ]);
+  const entries = interleaveApprovals(nodes, [approval({ id: "late", createdAt: "2026-09-10T10:09:00.000Z" }), approval({ id: "early", createdAt: "2026-09-10T10:02:00.000Z" })]);
+  assert.deepEqual(entries.map((entry) => entry.kind === "node" ? entry.node.item.id : entry.approval.id), ["a", "early", "b", "late", "live"]);
+});
+
+test("action runs fold into one readable line and bare tool names carry their argument", () => {
+  const run = [item("r1", undefined, { label: "Read", text: "apps/web/app/page.tsx\n\nexport default …" }), item("r2", undefined, { label: "Read", text: "lib/a.ts" }),
+    item("g", undefined, { label: "Grep", text: "revalidate" }), item("e", undefined, { label: "Edit", text: "lib/a.ts" }),
+    item("b", undefined, { label: "Run the unit tests", text: "npm test" }), item("c", undefined, { label: "npm run build", text: "npm run build\n\nexit 1" }),
+    item("a", undefined, { kind: "agent", label: "Review agent" })];
+  assert.equal(summarizeActions(run), "Read 2 files, searched the code, edited 1 file, ran 2 commands, delegated 1 task");
+  assert.equal(actionTitle(run[0]!), "Read apps/web/app/page.tsx");
+  assert.equal(actionTitle(run[5]!), "npm run build");
 });
