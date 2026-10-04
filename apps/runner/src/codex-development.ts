@@ -410,7 +410,9 @@ export class AgentDevelopmentAdapter implements MissionAdapter {
       await this.orca(["worktree", "rm", "--worktree", `id:${state.worktreeId}`, ...(!clean ? ["--force"] : [])]);
     } else {
       // Retry metadata removal after an acknowledged or ambiguous filesystem deletion.
-      await this.orca(["worktree", "rm", "--worktree", `id:${state.worktreeId}`]);
+      await this.orca(["worktree", "rm", "--worktree", `id:${state.worktreeId}`]).catch((error: unknown) => {
+        if (!(error instanceof OrcaRequestError) || error.code !== "selector_not_found") throw error;
+      });
     }
     await rm(directory, { recursive: true, force: true });
     this.cleanupFailures.delete(state.missionId);
