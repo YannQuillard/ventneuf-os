@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -133,6 +133,51 @@ test("failed development cleanup is logged once per reason and retains the missi
       + "Terminal close failed in \\[private path\\]/workspace with token=\\[redacted\\] retrying$"));
     assert.match(lines[1]!, new RegExp(`Z Runner mission ${missionId} cleanup failed: Orca request failed \\(runtime_unavailable\\)\\.$`));
     assert.equal(JSON.parse(await readFile(join(directory, "orca.json"), "utf8")).missionId, missionId);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("development cleanup closes the reissued terminals when the recorded handle is stale", async (context) => {
+  const root = await mkdtemp(join(tmpdir(), "codex-development-stale-terminal-"));
+  const missionId = "00000000-0000-4000-8000-000000000099";
+  const directory = join(root, missionId);
+  const logged = context.mock.method(console, "error", () => undefined);
+  const recorded = "term_00000000-0000-4000-8000-000000000001";
+  const reissued = "term_00000000-0000-4000-8000-000000000002";
+  const requests: string[] = [];
+  class MaintenanceAdapter extends CodexDevelopmentAdapter {
+    protected override async runtimeIsReady(_signal: AbortSignal) { return true; }
+    protected override async orca(args: string[]): Promise<Record<string, unknown>> {
+      requests.push(args.join(" "));
+      if (args[1] === "close" && args[3] === recorded) throw new OrcaRequestError("terminal_handle_stale");
+      return args[1] === "list" ? { terminals: [{ handle: reissued }] } : {};
+    }
+  }
+  try {
+    await mkdir(directory, { recursive: true });
+    await writeReviewState(join(directory, "orca.json"), {
+      missionId,
+      repositoryId: "sample",
+      worktreeId: "owned-worktree",
+      worktreePath: join(root, "owned-worktree"),
+      terminalHandle: recorded,
+      createdAt: new Date().toISOString(),
+    });
+    const adapter = new MaintenanceAdapter({
+      orcaPath: "/unused",
+      codexPath: "/unused",
+      stateDirectory: root,
+    });
+    await adapter.maintain({ status: async () => "cancelled" });
+    assert.deepEqual(requests, [
+      `terminal close --terminal ${recorded} --tab`,
+      "terminal list --worktree id:owned-worktree",
+      `terminal close --terminal ${reissued} --tab`,
+      "worktree rm --worktree id:owned-worktree",
+    ]);
+    assert.equal(logged.mock.calls.length, 0);
+    await assert.rejects(stat(directory), { code: "ENOENT" });
   } finally {
     await rm(root, { recursive: true, force: true });
   }
