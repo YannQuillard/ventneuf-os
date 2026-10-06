@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@astryxdesign/core": "0.5.2",
-    "@astryxdesign/theme-neutral": "0.5.2",
+    "@astryxdesign/theme-neutral": "0.6.5",
     "@aws-sdk/client-cognito-identity-provider": "^3.1127.0",
     "@aws-sdk/client-ssm": "^3.1127.0",
     "@heroicons/react": "2.2.0",
